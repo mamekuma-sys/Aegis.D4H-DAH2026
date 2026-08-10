@@ -19,6 +19,10 @@
 - Use PowerShell scripts that accept explicit paths; never commit a developer-specific absolute path.
 - This plan creates no attacker or defender runtime behavior. Those require separate approved designs and implementation plans.
 
+## Execution Addendum
+
+The user requested the complete designed directory tree to be present in Git before switching to this repository for future work. Empty runtime directories are therefore tracked with `.gitkeep`, and attacker/defender boundary README files are added now. Dockerfiles, dependency manifests, and runtime modules remain excluded until their separate designs are approved; creating non-functional placeholders for those files would misrepresent implementation status.
+
 ---
 
 ### Task 1: Repository guardrails and ownership map
@@ -731,4 +735,3 @@ Defense design: packet visibility, parser boundary, 300ms synchronous policy, on
 ```
 
 Expected: the repository foundation is complete without prematurely coupling the attacker and defender implementations.
-
