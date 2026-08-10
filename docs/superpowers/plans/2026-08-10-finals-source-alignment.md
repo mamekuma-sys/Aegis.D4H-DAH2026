@@ -366,11 +366,10 @@ Run:
 ```powershell
 git ls-files -- 'DAH 예선_안내서.pdf' 'DAH2026_예선보고서_Aegis.0xD4H.pdf' 'DAH2026_본선운영세칙.pdf' 'DAH2026_본선_당일_진행_안내.md' 'DAH2026_스켈레톤코드_상세_설명.md'
 git status --short --branch
-rg -n "[A-Za-z]:\\Users\\|/Users/|/home/" .gitignore docs contracts integration
 rg -n -i "(api[_-]?key|token|password)[[:space:]]*[:=][[:space:]]*[^<{[:space:]]" .gitignore docs contracts integration
 ```
 
-Expected: `git ls-files`는 출력이 없고, status에는 원본 5개가 나타나지 않으며, 절대경로와 실제 비밀값 검색 결과가 없다.
+Expected: `git ls-files`는 출력이 없고, status에는 원본 5개가 나타나지 않으며, 실제 비밀값 검색 결과가 없다. 개인 절대경로 검사는 Step 7의 `scripts/check-layout.ps1`이 수행한다.
 
 - [ ] **Step 7: 필수 저장소 검사와 스켈레톤 가용성 확인**
 
