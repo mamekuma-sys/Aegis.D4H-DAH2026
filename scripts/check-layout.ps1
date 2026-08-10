@@ -28,6 +28,7 @@ $requiredFiles = @(
     'research/attack-scenarios.md'
     'research/defense-mapping.md'
     'scripts/validate-skeleton.ps1'
+    'scripts/tests/test-validate-skeleton.ps1'
 )
 
 $missing = @()
