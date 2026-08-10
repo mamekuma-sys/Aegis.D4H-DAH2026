@@ -24,6 +24,10 @@ $requiredFiles = @(
     'docs/decisions/0001-external-skeleton.md'
     'docs/meeting-notes/.gitkeep'
     'docs/ownership.md'
+    'docs/references/README.md'
+    'docs/references/source-inventory.md'
+    'docs/references/rules-checklist.md'
+    'docs/references/preliminary-code-map.md'
     'integration/README.md'
     'research/preliminary-strategy.md'
     'research/attack-scenarios.md'
@@ -65,6 +69,20 @@ $forbiddenHomePatterns = @(
 
 $pathLeaks = @()
 $trackedFiles = git -C $repoRoot ls-files
+$forbiddenTrackedExtensions = @('.pdf', '.zip', '.tar', '.gz', '.pcap', '.pcapng')
+$trackedArtifacts = @()
+foreach ($relativePath in $trackedFiles) {
+    $extension = [System.IO.Path]::GetExtension($relativePath).ToLowerInvariant()
+    if ($forbiddenTrackedExtensions -contains $extension) {
+        $trackedArtifacts += $relativePath
+    }
+}
+
+if ($trackedArtifacts.Count -gt 0) {
+    Write-Error ("Raw or generated artifacts are tracked:`n- " + (($trackedArtifacts | Sort-Object -Unique) -join "`n- "))
+    exit 1
+}
+
 foreach ($relativePath in $trackedFiles) {
     $extension = [System.IO.Path]::GetExtension($relativePath)
     if ($portableTextExtensions -notcontains $extension) {
