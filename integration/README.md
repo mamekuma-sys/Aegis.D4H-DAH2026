@@ -10,11 +10,13 @@ pwsh -NoProfile -File scripts/validate-skeleton.ps1 -SkeletonPath <스켈레톤-
 
 검사 대상은 Compose 파일, 공식 에이전트 가이드, Team 1 Dockerfile, Broker 바이너리입니다.
 
-현재 로컬 배치에서는 저장소의 부모 폴더가 스켈레톤 루트이므로 다음 명령을 사용할 수 있습니다.
+스켈레톤 루트 바로 아래에 이 저장소를 배치한 경우에는 다음 명령을 사용할 수 있습니다.
 
 ```powershell
 pwsh -NoProfile -File scripts/validate-skeleton.ps1 -SkeletonPath ..
 ```
+
+다른 배치에서는 `..`를 사용하지 말고 각 팀원의 실제 스켈레톤 루트를 인자로 전달합니다. 저장소 파일에는 팀원 개인의 절대경로를 기록하지 않습니다.
 
 ## 후속 단계
 

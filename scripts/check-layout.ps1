@@ -54,4 +54,36 @@ foreach ($relativePath in $forbiddenDirectories) {
     }
 }
 
+$portableTextExtensions = @('.md', '.ps1', '.py', '.yml', '.yaml', '.json', '.toml', '.txt', '.example')
+$escapedBackslash = [regex]::Escape([string][char]92)
+$escapedSlash = [regex]::Escape([string][char]47)
+$forbiddenHomePatterns = @(
+    "(?i)[A-Z]:${escapedBackslash}Users${escapedBackslash}[^${escapedBackslash}\r\n]+${escapedBackslash}"
+    "${escapedSlash}Users${escapedSlash}[^${escapedSlash}\s]+${escapedSlash}"
+    "${escapedSlash}home${escapedSlash}[^${escapedSlash}\s]+${escapedSlash}"
+)
+
+$pathLeaks = @()
+$trackedFiles = git -C $repoRoot ls-files
+foreach ($relativePath in $trackedFiles) {
+    $extension = [System.IO.Path]::GetExtension($relativePath)
+    if ($portableTextExtensions -notcontains $extension) {
+        continue
+    }
+
+    $fullPath = Join-Path $repoRoot $relativePath
+    $content = [System.IO.File]::ReadAllText($fullPath)
+    foreach ($pattern in $forbiddenHomePatterns) {
+        if ($content -match $pattern) {
+            $pathLeaks += $relativePath
+            break
+        }
+    }
+}
+
+if ($pathLeaks.Count -gt 0) {
+    Write-Error ("User-specific absolute paths found:`n- " + (($pathLeaks | Sort-Object -Unique) -join "`n- "))
+    exit 1
+}
+
 Write-Output 'Repository layout check passed.'
