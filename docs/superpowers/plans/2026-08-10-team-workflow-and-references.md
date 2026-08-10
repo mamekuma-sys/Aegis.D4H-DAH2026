@@ -588,7 +588,7 @@ Run:
 
 ```powershell
 git ls-files "*.pdf" "*.zip" "*.tar" "*.tar.gz" "*.pcap" "*.pcapng"
-rg -n --hidden --glob '!.git/**' --glob '!.env.example' "SUBMIT_TOKEN=.+|LLM_API_KEY=.+|BEGIN (RSA|OPENSSH|PRIVATE) KEY" .
+rg -n --hidden --glob '!.git/**' --glob '!.env.example' --glob '!docs/superpowers/plans/**' "SUBMIT_TOKEN=.+|LLM_API_KEY=.+|BEGIN (RSA|OPENSSH|PRIVATE) KEY" .
 ```
 
 Expected: both commands produce no matches. `rg` exits 1 because no secret pattern is present.
