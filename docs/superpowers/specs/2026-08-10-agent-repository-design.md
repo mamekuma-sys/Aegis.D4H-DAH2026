@@ -88,7 +88,6 @@ aegis-dah2026-agents/
 │  ├─ decisions/
 │  └─ superpowers/
 ├─ .github/
-│  ├─ CODEOWNERS
 │  └─ workflows/ci.yml
 ├─ .env.example
 ├─ .gitignore
@@ -187,6 +186,7 @@ aegis-dah2026-agents/
 - 팀장 이경준: `contracts/**`, `integration/**`, 공통 문서, 전체 최종 리뷰
 - 공격과 방어 Dockerfile, 계약 또는 CI 변경은 팀장 리뷰를 필수로 한다.
 - 전략 문서와 구현의 연결을 PR 본문에 기록한다.
+- 실제 GitHub 사용자 또는 팀 이름을 확인하기 전에는 유효하지 않은 계정을 추측해 `CODEOWNERS`를 만들지 않는다. 계정 확인 후 위 소유권 경계를 그대로 자동 리뷰 규칙에 옮긴다.
 
 ## 증빙과 보안
 
@@ -202,7 +202,7 @@ aegis-dah2026-agents/
 - 공격·방어의 본선 계약 테스트가 통과한다.
 - 외부 스켈레톤 경로를 받아 Team 1에 두 이미지를 연결할 수 있다.
 - 예선 전략과 본선 구현의 재사용·재구현 경계가 문서에 명시된다.
-- 공격 담당자, 방어 담당자, 팀장의 소유권 경계가 CODEOWNERS에 반영된다.
+- 공격 담당자, 방어 담당자, 팀장의 소유권 경계가 문서화된다. GitHub 계정 확인 후 같은 경계를 CODEOWNERS에 반영한다.
 
 ## 후속 설계
 
@@ -210,4 +210,3 @@ aegis-dah2026-agents/
 
 1. 공격 에이전트의 관측-계획-실행 루프와 S1~S5 플레이북
 2. 방어 에이전트의 패킷 특징, 실시간 정책, 상관분석 및 오탐 제어
-
