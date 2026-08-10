@@ -47,3 +47,14 @@ pwsh -NoProfile -File scripts/check-layout.ps1
 1. 공격 담당자와 S1~S5 기반 관측-계획-실행 구조를 확정합니다.
 2. 방어 담당자와 300ms hot path 및 비동기 상관분석 경계를 확정합니다.
 3. 두 Dockerfile이 준비되면 외부 스켈레톤 Compose override를 추가합니다.
+
+## 팀 작업 방식
+
+| 역할 | 작업 영역 |
+|---|---|
+| 공격 담당자 | 공격 설계, Python 구현과 테스트 |
+| 방어 담당자 | 방어 설계, Python 구현과 테스트 |
+| Docker 담당자 | 공격·방어 Dockerfile, 이미지 빌드, CI와 스켈레톤 연동 |
+| 팀장 이경준 | 계약, 자료 추적, PR 검증과 최종 병합 |
+
+사람별 장기 브랜치를 만들지 않습니다. 최신 `main`에서 작업 하나당 짧은 브랜치를 만들고, 필수 검토를 거친 PR만 병합합니다. 원본 대회 자료는 Git에 넣지 않으며 [`docs/references/`](docs/references/)에서 해시와 구현 매핑을 확인합니다.

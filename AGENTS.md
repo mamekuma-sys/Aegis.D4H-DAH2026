@@ -24,6 +24,7 @@ When facts conflict, use this order:
 - Keep interface definitions and fixtures under `contracts`.
 - Keep the official skeleton outside this repository.
 - Never copy `deploy/router`, `deploy/backend`, `deploy/challenges`, `deploy/litellm-gw`, or the Broker binary here.
+- Keep raw competition documents and preliminary source in private team storage; track only hashes and mappings under `docs/references`.
 - Never commit `.env`, credentials, tokens, flags, PDFs, PCAPs, logs, caches, or generated output.
 
 ## Design gates
@@ -35,9 +36,14 @@ When facts conflict, use this order:
 
 ## Ownership
 
-- Attacker owner: `agents/attacker/**`
-- Defender owner: `agents/defender/**`
-- Team lead Lee Gyeong-jun: `contracts/**`, `integration/**`, CI, shared documents, and final review
+- Attacker owner: attacker Python, tests, and `research/attack-scenarios.md`
+- Defender owner: defender Python, tests, and `research/defense-mapping.md`
+- Docker owner: both Dockerfiles, `integration/**`, image scripts, image CI, and Registry procedures
+- Team lead Lee Gyeong-jun: `contracts/**`, shared architecture and decisions, `docs/references/**`, PR verification, and final merge
+
+Docker changes require the affected agent owner and team lead to review. Docker owner must not change strategy code unilaterally. Agent owners must not finalize Dockerfiles or shared contracts alone.
+
+Use a short-lived branch for one task and delete it after merge. Never create permanent person branches or push directly to `main`.
 
 ## Required checks
 
