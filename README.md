@@ -37,3 +37,13 @@ pwsh -NoProfile -File scripts/check-layout.ps1
 ```
 
 외부 스켈레톤 검증 방법은 [`integration/README.md`](integration/README.md)를 따릅니다.
+
+## CI
+
+모든 push와 pull request에서 저장소 경계와 스켈레톤 검증기 테스트를 실행합니다. 공격·방어 구현이 시작되면 각 이미지의 단위 테스트, 계약 테스트, 독립 Docker 빌드를 같은 CI에 추가합니다.
+
+## 다음 설계 게이트
+
+1. 공격 담당자와 S1~S5 기반 관측-계획-실행 구조를 확정합니다.
+2. 방어 담당자와 300ms hot path 및 비동기 상관분석 경계를 확정합니다.
+3. 두 Dockerfile이 준비되면 외부 스켈레톤 Compose override를 추가합니다.

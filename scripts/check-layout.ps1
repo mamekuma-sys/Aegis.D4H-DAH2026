@@ -5,6 +5,7 @@ $requiredFiles = @(
     '.gitattributes'
     '.gitignore'
     '.env.example'
+    '.github/workflows/ci.yml'
     'AGENTS.md'
     'README.md'
     'agents/README.md'

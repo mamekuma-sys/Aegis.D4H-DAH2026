@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-foundation:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate repository layout
+        shell: pwsh
+        run: ./scripts/check-layout.ps1
+
+      - name: Test external skeleton validator
+        shell: pwsh
+        run: ./scripts/tests/test-validate-skeleton.ps1
