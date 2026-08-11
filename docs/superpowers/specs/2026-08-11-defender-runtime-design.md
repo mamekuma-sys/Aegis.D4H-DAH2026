@@ -36,11 +36,11 @@ SLA       = 100 − 실패 카운트   (Round당 SLA check 100회)      제20조
 | 자기 flag 1개 더 탈취당함 | `(9 + 0) × 100 = 900` | **1,000** |
 | SLA 1회 실패 | `19 × 99 = 1,881` | **19** |
 
-**flag 1개 ≈ SLA 53회다.** 일반화하면 기본 점수 `S = 공격 + 방어`일 때 flag 1개 손실은 SLA `10 × SLA / S` 회 실패와 등가다. 공격 0점·`N=2`·무실점(`S=20`)이면 손익분기는 SLA 33회 실패, 즉 **오탐률 33%**다.
+공식 예시에서는 **flag 1개 ≈ SLA 53회**다. 일반화하면 기본 점수 `S = 공격 + 방어`일 때 flag 1개 손실은 SLA `10 × SLA / S` 회 실패와 등가다. 공격 0점·`N=2`·무실점(`S=20`, SLA 100)이면 `1,000 / 20 = 50`이므로 손익분기는 **SLA 50회 실패**다. 공격 점수와 남은 방어 점수가 바뀌면 `S`도 바뀌므로 고정된 오탐률 하나를 전 Round에 적용하지 않는다.
 
 이로부터 세 가지 결론이 나온다.
 
-1. **오탐률이 30%대 아래인 구간에서는 flag 방어가 압도적으로 무겁다.** 고신뢰 rule을 오탐 우려로 주저하는 것은 산식상 손해다.
+1. **고신뢰 rule에는 상당한 SLA 손실을 감수할 점수상 여지가 있다.** 다만 손익분기는 매 Round의 `S`와 SLA에 따라 다시 계산한다.
 2. **그러나 SLA는 곱수다.** 100회 전부 실패하면 계수가 0이 되어 공격 점수까지 함께 소멸한다. blanket DROP은 여전히 자살이다.
 3. 따라서 안전장치는 **"소수의 오탐을 억제"하는 방향이 아니라 "SLA 붕괴를 차단"하는 방향**으로 설계한다. §10.3의 서킷 브레이커 임계는 이 기준으로 정한다.
 
@@ -133,8 +133,9 @@ SLA       = 100 − 실패 카운트   (Round당 SLA check 100회)      제20조
 | 레이어 식별에 dst 3옥텟 후보 사용 | 제5조 2항 `10.{N}.{L}.0/24` | 4, 13–14 | 포워딩 전·후 여부 미확인 | 비동기 우선 | 미확인 시 profile 미부여 | `test_packet.py` |
 | 원격 LLM을 동기 경로에서 배제 | `contracts/defender/README.md`, 제9조 | 13, 30–32, 48 | 레퍼런스도 호출 안 함 | 비동기 | LLM 장애가 verdict·HEARTBEAT에 무영향 | `test_advisory.py` |
 | 서드파티 의존성 0개 유지 | 제16조 실행 옵션, 레퍼런스 Dockerfile | 해당 없음 | `python:3.12-slim`, `USER 65534` | 해당 없음 | 표준 라이브러리로 대체 | `test_policy.py` |
+| rule·임계는 별도 policy file | Break 10분, 제15조 이미지 재생성 | 35 | 다음 이미지에 포함된 versioned JSON | 기동 시 검증·고정 | active 실패 시 검증된 fallback, 둘 다 실패 시 DROP rule 0개 | `test_policy.py` |
 | 세션 행위 누적 점수(축 B) | 예선 Correlation Engine 원칙 | 15–16, 27–29 | 인바운드 요청 field parser | 비동기 계산 + 동기 조회 | state 없으면 `ACCEPT` | `test_correlation.py` |
-| SLA 붕괴 차단형 서킷 브레이커 | 제17·20조 산식(§0.2), 예선 Availability-Aware Response | 35 | `baseline_violation_rate` 증분 추적 | 동기 | 위험 임계 지속 시 관찰 모드, 자동 복귀 | `test_breaker.py` |
+| 범위 제한형 서킷 브레이커 | 제17·20조 산식(§0.2), 예선 Availability-Aware Response | 35 | profile별 `promotion_cohort_conflict` 추적 | 동기 | 최근 승격 cohort·profile만 SHADOW rollback | `test_breaker.py` |
 | **raw DROP율을 자동 전환 트리거에서 제외** | §0.2 산식과 조작 가능성 분석 | 35 | 공격자가 시그니처 자극으로 상승시킬 수 있음 | 경보 전용 | 경보 metric만 기록, 방어 유지 | `test_breaker.py` |
 | 송신 timeout과 VERDICT 우선 송신 | 제13조 2·3항, 레퍼런스 무기한 blocking send | 해당 없음 | 소켓 버퍼 포화 시 fail-open 위험 | 동기 | timeout 반환 후 재연결 | `test_session.py` |
 | Round 간 상태 소실 허용 | 제15조 4항 | 해당 없음 | 컨테이너 매 Round 재생성 | 해당 없음 | disk persistence 미요구 | `test_round_lifecycle.py` |
@@ -176,7 +177,7 @@ startup validation
 │         명시적 스캔 플래그 조합만 DROP 후보              │
 ├────────────────────────────────────────────────────────┤
 │  Sig    payload 시그니처 매칭             p99 300μs 이하 │
-│         rule set은 이미지 빌드 시 고정                   │
+│         versioned policy를 기동 시 검증·고정             │
 ├────────────────────────────────────────────────────────┤
 │  Score  flow 누적 위험도 조회 (읽기 전용)  p99 50μs 이하  │
 └────────────────────────────────────────────────────────┘
@@ -189,6 +190,8 @@ startup validation
   Corr      상관분석 worker — flow risk 갱신 → Score가 읽음
   Advisory  LLM 조언 worker — redacted feature → rule 후보 → 사람 검토
 ```
+
+이 구조는 전략 D의 **지연 집행**을 제한적으로 채택한 것이다. 현재 PACKET의 verdict를 나중에 보내는 것이 아니라, 현재 PACKET은 여전히 300ms 안에 `ACCEPT`/`DROP`하고 무거운 분석 결과만 이후 packet의 bounded `Score` 조회에 반영한다. 따라서 300ms 의무를 없애지는 않지만 원격 호출·상관 계산·대규모 parsing을 hot path에서 제거한다. 첫 packet 하나로 끝나는 공격은 이 경로가 막지 못하므로 검증된 exact signature인 `Sig`가 보완한다.
 
 ### 4.2 동시성 경계
 
@@ -339,6 +342,16 @@ parser exception 또는 지원하지 않는 protocol / source IP 값만으로 �
 
 header가 유효해 `pkt_id`를 알지만 `raw_ip`가 잘렸거나 비정상이면 `ACCEPT`와 비민감 reason code를 반환한다. header 자체가 짧아 `pkt_id`를 알 수 없으면 **존재하지 않는 ID로 verdict를 만들지 않고** session 오류로 기록한 뒤 재연결한다. 레퍼런스는 이 경우 프레임을 폐기하고 루프를 계속한다.
 
+### 6.4 애매한 구간의 중간 대응
+
+본선 verdict는 `ACCEPT`와 `DROP`뿐이므로 별도의 "의심" 출력은 없다. 확신은 없지만 의심스러운 packet은 기본적으로 `ACCEPT`하고 비동기 event와 `SHADOW` match를 남긴다. 부분 집행이 필요하면 무작위 packet DROP 대신 **flow/profile 단위의 결정론적 `CANARY`**만 사용한다.
+
+- `CANARY`는 §6.1의 조건을 충족했지만 전체 profile에 적용하기 전 오탐 예산을 확인하는 rule에만 허용한다. LLM confidence나 profile 이탈 하나만으로 만들지 않는다.
+- 같은 `rule_id`와 `FlowKey`는 같은 bucket에 들어가 Round 안에서 verdict가 흔들리지 않아야 한다. 선택 비율과 seed는 versioned policy file에 고정하고 Python의 process-randomized `hash()` 대신 표준 라이브러리 `hashlib.blake2s`로 bucket을 계산한다.
+- canary 범위는 rule·profile·만료 시각으로 제한하고, 정상 negative 및 100회 SLA fixture 회귀를 먼저 통과한다.
+- random number generator로 packet마다 DROP 여부를 다시 뽑지 않는다. 무작위 DROP은 재현성과 장애 분석을 해치고 SLA 손실 분포를 불필요하게 넓힌다.
+- canary가 공격을 완전히 차단한다고 주장하지 않는다. 목적은 제한된 blast radius로 rule의 실제 충돌을 검증하는 것이다.
+
 ---
 
 ## 7. 구성요소 경계
@@ -351,8 +364,9 @@ header가 유효해 `pkt_id`를 알지만 `raw_ip`가 잘렸거나 비정상이�
 | `SocketWriter` | 송신 lock 소유 | lock 안에서 send만 수행 |
 | `HeartbeatScheduler` | 약 1초 cadence와 지연 감시 | 판정 로직과 완전 분리. 무거운 작업 금지 |
 | `PacketParser` | bounded IP/L4 및 증명된 application parser dispatch | 예외를 밖으로 던지지 않음 |
+| `PolicyLoader` | 이미지 내 versioned policy file 검증·컴파일 | active 실패 시 fallback, 둘 다 실패 시 DROP rule 0개. HEARTBEAT와 ACCEPT 경로는 기동 |
 | `HotPolicy` | 사전 승인 rule과 bounded read-only state 조회 | 예외 시 `ACCEPT` |
-| `CircuitBreaker` | `baseline_violation_rate` 추적과 관찰 모드 전환 | O(1) 갱신, hot path 차단 금지. raw DROP율로 전환하지 않음 |
+| `CircuitBreaker` | 최근 승격 cohort의 baseline 충돌 추적과 범위 제한 rollback | O(1) 갱신, hot path 차단 금지. 전체 정책 자동 해제 금지 |
 | `VerdictSender` | cutoff 인식 송신과 latency 측정 | 송신 timeout 필수, 실패를 metric으로 기록 |
 | `EventAdapter` | verdict 이후 관측 field를 최소 event로 변환 | 변환 실패 시 event 폐기 |
 | `CorrelationStore` | TTL·capacity가 있는 flow/event state | 용량 초과 시 eviction |
@@ -379,6 +393,8 @@ header가 유효해 `pkt_id`를 알지만 `raw_ip`가 잘렸거나 비정상이�
 | `CorrelationEvent` | redacted field, timestamp, flow key, event type, evidence source | 원본 payload 미포함 |
 | `CorrelationState` | TTL, last update, bounded counters, matched stages | per-key cap 필수 |
 | `AsyncAdvisory` | input feature IDs, recommendation, model ID, token usage, expiration | **runtime authority 없음** |
+| `PolicyBundle` | schema version, bundle ID, rules, profile thresholds, review metadata | 기동 후 immutable. runtime self-modification 금지 |
+| `RuntimePolicyState` | effective state by `rule_id + profile`, rollback reason, sample count | PolicyBundle 위의 bounded in-memory overlay. Round 종료 시 소실 |
 
 ### 8.1 용량 상한
 
@@ -478,6 +494,27 @@ SQL 인젝션      ' OR   UNION SELECT   ; DROP   sleep(   benchmark(
 
 immutable `rule_id`와 설명, source PCAP/log 논리 ID와 관측 시각, protocol·field parser version, 적용 profile·레이어 범위, 공격 positive fixture, 정상 negative와 SLA fixture, 기대 verdict와 reason code, 활성화 근거와 만료, rollback 조건과 직전 안전 버전, 방어 담당자와 팀장 review 상태.
 
+rule과 운영 임계값을 Python 분기문에 하드코딩하지 않는다. 다음 항목을 **이미지에 포함된 별도 versioned policy file**로 관리한다.
+
+```text
+schema_version, bundle_id, generated_at
+rules[]:
+  rule_id, parser_version, profile_scope, match specification
+  promotion_state(SHADOW/CANARY/ACTIVE), canary_fraction, canary_seed
+  promotion_cohort, promoted_in_bundle
+  evidence_id, positive_fixture_id, negative_fixture_id, sla_fixture_id
+  expires_at, rollback_condition, owner_review, lead_review
+breaker_profiles[]:
+  profile_id, minimum_samples, sustain_window
+  canary_revert_threshold, cooldown
+```
+
+- 구현 형식은 Python 3.12 표준 라이브러리 `json`으로 읽는 JSON으로 고정한다. host volume이나 runtime 다운로드에 의존하지 않고 이미지 build context에 포함한다.
+- startup에서 schema version, 필수 field, 중복 `rule_id`, parser/profile 참조, 만료, 승격 상태, canary 범위, 정규식 크기·금지 패턴을 검증하고 정규식을 미리 컴파일한다.
+- `active.json` 검증에 실패하면 이미지에 함께 넣은 직전 검증본 `fallback.json`을 검증해 사용한다. 둘 다 유효하지 않을 때만 **DROP rule 0개**로 시작해 HEARTBEAT와 `ACCEPT` 경로를 유지한다. 오류와 선택된 bundle ID는 비민감 reason code로 기록한다.
+- 실행 중 파일 변경, LLM 출력의 자동 병합, self-modification을 금지한다. Break에서 사람이 파일과 fixture를 수정·검토하고 새 이미지를 build/push해야 다음 Round에 반영된다.
+- `owner_review`와 `lead_review`가 모두 승인 상태가 아닌 `ACTIVE` rule은 기동 시 `SHADOW`로 강등한다.
+
 ### 10.3 자멸 방지 3단 안전장치
 
 **① Deadline Guard** — §5.2. `pkt_id` 확보 직후부터 monotonic 경과를 감시하고 soft cutoff 5ms 초과 시 판단을 포기하고 `ACCEPT`.
@@ -486,43 +523,40 @@ immutable `rule_id`와 설명, source PCAP/log 논리 ID와 관측 시각, proto
 
 **③ SLA 붕괴 차단 서킷 브레이커**
 
-§0.2에 따라 임계는 **붕괴 차단 기준**으로 잡는다. 다만 **자동 전환의 트리거 신호 선택이 임계값보다 중요하다.**
+§0.2에 따라 임계는 **SLA 붕괴보다 먼저 반응하는 보수적 기준**으로 잡는다. 다만 Broker 입력에는 SLA checker 식별자나 application 성공 결과가 없다. 따라서 packet에서 계산한 어떤 지표도 실제 SLA의 ground truth가 아니며, 공격자가 전혀 조작할 수 없다고 표현하지 않는다.
 
-**raw DROP율을 자동 전환 트리거로 쓰지 않는다.** raw DROP율은 공격자가 직접 조작할 수 있는 신호다. 공격자가 우리 시그니처에 걸리는 패킷을 반복 전송하면 DROP율이 상승하고, 서킷 브레이커가 정상 작동 중인 방어를 스스로 해제한다. 제12조 3항의 초당 10회 제한 안에서도 정상 트래픽이 적은 구간이면 충분히 달성 가능하다. §0.2의 산식이 이 공격을 더 매력적으로 만든다 — 공격자는 SLA 약간을 손해 보고 방어 전체를 끈 뒤 flag를 가져가면 되고, flag 1개가 SLA 53회와 맞먹으므로 거래가 압도적으로 유리하다. **서킷 브레이커가 방어 해제 스위치가 되어서는 안 된다.**
+**raw DROP율은 자동 전환 트리거로 쓰지 않는다.** 공격자가 활성 시그니처에 맞는 packet을 반복 전송하면 DROP율을 직접 올릴 수 있다. `baseline_violation_rate`도 정상 profile과 일치하는 입력 중 DROP된 비율이라는 점에서 raw DROP율보다 목적에 가깝지만, 공격자가 정상 형태를 replay하거나 profile 경계를 탐색할 수 있으므로 **조작 저항성이 더 높은 proxy일 뿐**이다.
 
-**대신 공격자가 조작할 수 없는 신호를 트리거로 쓴다.**
+| 신호 | 정의 | 공격자 영향 | 용도 |
+|---|---|---|---|
+| `raw_drop_rate` | 전체 packet 중 DROP 비율 | **높음** | 경보·사후 분석만 |
+| `baseline_violation_rate` | 정상 profile과 일치하는 packet 중 DROP 비율 | **중간** — profile replay·경계 탐색 가능 | 최근 승격 cohort의 범위 제한 rollback 후보 |
+| `parser_failure_rate` | parsing을 포기한 packet 비율 | **높음** — malformed 입력으로 상승 가능 | parser health 경보만. verdict는 `ACCEPT` |
+| `rule_concentration` | 단일 `rule_id`에 DROP이 집중된 정도 | **높음** | 공격 집중 또는 rule 결함 조사 신호 |
+| `promotion_cohort_conflict` | 최근 이미지에서 승격한 rule과 baseline profile의 충돌 비율 | **중간** | 해당 cohort·profile만 rollback |
 
-| 신호 | 정의 | 조작 가능성 |
-|---|---|---|
-| `raw_drop_rate` | 전체 패킷 중 DROP 비율 | **높음** — 공격자가 시그니처를 자극해 임의로 상승시킬 수 있음 |
-| **`baseline_violation_rate`** | **`FinalsPhase 1`에서 수집한 정상 트래픽 프로파일과 일치하는 패킷이 DROP된 비율** | **낮음** — 아래 참조 |
-| `parser_failure_rate` | 파싱 실패 비율 | 낮음 — 실패는 `ACCEPT`이므로 차단으로 이어지지 않음 |
-| `rule_concentration` | 단일 `rule_id`에 DROP이 집중된 정도 | 높음 — 단, 공격 징후 지표로 사용 |
-
-`baseline_violation_rate`가 조작에 강한 이유는 자기모순 구조 때문이다. 모든 `DROP` rule은 §6.1 4항에 따라 **정상 negative fixture를 통과해야만 활성화**된다. 따라서 공격자가 이 지표를 올리려면 정상 프로파일과 일치하는 패킷을 보내야 하는데, 그런 패킷은 정의상 어떤 rule에도 걸리지 않아 `DROP`되지 않는다. 이 지표가 올라간다는 것은 **우리 rule이 실제로 정상 트래픽을 때리고 있다는 뜻**이며, 그것이 바로 서킷 브레이커가 존재하는 이유다.
+서킷 브레이커의 blast radius를 다음처럼 제한한다.
 
 ```text
-자동 전환 트리거   baseline_violation_rate 단독
-                  + 최소 지속 시간 조건 (일시적 스파이크로 전환되지 않도록)
-                  + 최소 표본 수 조건
+낮은 임계          profile별 baseline + 최소 표본 수 + 지속 시간으로 확정
+                  숫자는 policy file에 기록하고 새 layer에 복사하지 않는다.
 
-raw_drop_rate     경보·로그·metric 전용. 자동 전환에 관여하지 않는다.
-                  rule_concentration과 함께 오르면 공격자의 브레이커 유도로 해석하고
-                  경보 코드를 분리해 기록한다.
+1단계 rollback     최근 승격 CANARY cohort가 낮은 임계를 넘으면
+                  해당 rule + 해당 profile만 SHADOW로 전환한다.
 
-관찰 모드 전환     baseline_violation_rate가 위험 임계를 지속 시간 이상 유지할 때만
-                  전체 정책을 관찰 모드로 전환하여 전부 ACCEPT
+2단계 rollback     같은 cohort가 더 높은 임계를 지속해서 넘으면
+                  이번 이미지에서 새로 ACTIVE가 된 rule만 해당 profile에서 SHADOW로 전환한다.
 
-자동 복귀          관찰 모드는 최대 지속 시간을 두고 그 후 자동으로 차단 모드에 복귀한다.
-                  공격자가 한 번 트리거해도 Round 전체가 무방비로 남지 않는다.
+보존               이전 Round부터 안정화된 ACTIVE exact signature와 다른 profile의 rule은 유지한다.
 
-rule 자동 비활성화  없음. 어떤 지표로도 런타임이 rule을 스스로 끄지 않는다.
-                  rule 조정은 Break 때 사람이 PCAP·로그 근거로 판단한다.
+전체 관찰 모드     자동 전환하지 않는다. 현재 계약에는 공격 트래픽과 구분되는
+                  인증된 SLA 신호가 없으므로 packet-derived proxy로 전부 ACCEPT를 만들지 않는다.
+
+복귀               같은 Round에서 자동 재활성화하지 않는다. Break에서 PCAP·로그·SLA 결과를
+                  사람이 검토하고 다음 policy bundle에서 유지·수정·제거한다.
 ```
 
-**운영자 승인 결합.** 관찰 모드 전환은 즉시 구조화 로그로 남기고, Break 때 방어 담당자가 근거를 검토해 다음 이미지에서 rule을 유지·수정·제거할지 결정한다. 런타임은 판단하지 않고 **되돌릴 수 있는 임시 조치만** 수행한다.
-
-임계값·지속 시간·최대 관찰 모드 시간은 `FinalsPhase 1`에서 정상 트래픽 baseline과 프로파일 집합을 확보한 뒤 확정한다. 정상 프로파일이 없는 `FinalsPhase 1` 초반에는 `baseline_violation_rate`를 계산할 수 없으므로, 이 구간에서는 애초에 `DROP` rule을 활성화하지 않는다(§16.2).
+즉 "임계 하향"은 전체 방어를 빨리 끄는 의미가 아니라 **새로 승격한 좁은 cohort를 더 일찍 Shadow로 되돌리는 의미**다. 전환은 immutable PolicyBundle을 수정하지 않고 `RuntimePolicyState` overlay에만 기록한다. `rule_id`, profile, bundle ID, 표본 수, 관측률과 reason code를 구조화 로그에 남긴다. 정상 profile이 없는 `FinalsPhase 1` 초반과 새 레이어 첫 Round에는 임계를 계산할 수 없으므로 DROP rule을 활성화하지 않는다(§16.2).
 
 ### 10.4 rule 승격 단계
 
@@ -531,6 +565,8 @@ SHADOW (로그만) → CANARY (제한 범위만 차단) → ACTIVE (전면 차�
 ```
 
 신규 rule은 `SHADOW`로 투입해 정상 트래픽 충돌 여부를 확인한 뒤 승격한다. 다만 §0.2에 따라 **고신뢰 rule을 여러 Round에 걸쳐 SHADOW에 묶어두는 것은 손해**이므로, 정상 negative fixture를 통과하고 한 Round 관찰에서 충돌이 없으면 즉시 승격한다. LLM이 제안한 rule은 예외 없이 `SHADOW`부터 시작한다. 승격은 사람이 판단하며 런타임이 자동으로 수행하지 않는다.
+
+`CANARY`의 제한 범위는 무작위 packet이 아니라 `hashlib.blake2s(rule_id + FlowKey + canary_seed)`의 결정론적 bucket, 명시된 profile, 만료 시각으로 정의한다. 같은 flow의 packet을 매번 다시 추첨하지 않는다. canary 비율을 바꾸거나 `ACTIVE`로 승격하려면 policy file 변경, fixture 회귀, 방어 담당자와 팀장 review를 거쳐 다음 이미지에 포함한다. §10.3의 서킷 브레이커는 승격이 아니라 최근 cohort의 **범위 제한 rollback**만 `RuntimePolicyState`에서 자동 수행할 수 있다.
 
 ---
 
@@ -562,7 +598,7 @@ LLM은 선택적 비동기 조언자다. 환경변수는 `LLM_BASE_URL`과 `LLM_
 - parser가 만든 redacted feature, aggregate metric, `rule_id`, 비민감 reason만 입력 후보로 쓴다.
 - LLM 출력은 현재 또는 이후 packet을 직접 `ACCEPT`/`DROP`하지 않는다.
 - LLM이 작성한 signature나 코드를 실행 중 이미지에 자동 반영하지 않는다.
-- 조언은 사람이 PCAP·정상 fixture와 대조해 **다음 Round rule 후보로만** 사용한다.
+- 조언은 사람이 공식 PCAP·정상 fixture와 대조해 **다음 Round policy file의 `SHADOW` 후보로만** 사용한다. raw PCAP, 전체 payload, flag, credential은 prompt에 직접 넣지 않고 redacted evidence와 논리 ID만 전달한다.
 
 ### 12.1 model 선택과 증빙
 
@@ -604,6 +640,10 @@ LLM은 선택적 비동기 조언자다. 환경변수는 `LLM_BASE_URL`과 `LLM_
 
 ```text
 agents/defender/
+├── policy/
+│   ├── active.json        다음 이미지에 고정할 versioned PolicyBundle
+│   ├── fallback.json      직전 Round의 검증된 PolicyBundle
+│   └── README.md          field 의미, review·승격·rollback 절차
 ├── src/aegis_defender/
 │   ├── __init__.py
 │   ├── main.py            entrypoint와 lifecycle
@@ -614,7 +654,7 @@ agents/defender/
 │   ├── packet.py          PacketParser
 │   ├── policy.py          HotPolicy (Gate·Sig·Score)
 │   ├── breaker.py         CircuitBreaker
-│   ├── rules.py           rule 정의·로딩·승격 상태
+│   ├── rules.py           PolicyLoader, schema 검증, matcher 사전 컴파일
 │   ├── state.py           FlowTable, CorrelationStore
 │   ├── events.py          EventAdapter, bounded queue
 │   ├── correlation/
@@ -659,6 +699,8 @@ PACKET fixture에서 type, `pkt_id`, `pkt_len`, `raw_ip`를 big-endian으로 정
 
 IPv4·관측된 protocol positive fixture / 정상 traffic negative fixture / truncated·fragment·unknown protocol·unsupported version에서 빠른 `ACCEPT` / **NAT source IP만 바뀌어도 verdict가 달라지지 않음** / 각 DROP rule의 positive·negative·boundary fixture / rule conflict에서 `ACCEPT`와 metric / 정규식 최악 입력에서 backtracking 폭발 없음.
 
+PolicyBundle 검증: 지원하지 않는 schema version / 중복 `rule_id` / 존재하지 않는 parser·profile 참조 / 잘못된 승격 상태·canary 비율 / 누락되거나 모순된 promotion cohort / 만료된 rule / review 미승인 ACTIVE / 과도한 정규식과 금지 패턴. `active.json`이 유효하지 않으면 검증된 `fallback.json`을 선택하고, 둘 다 유효하지 않을 때만 DROP rule 0개로 기동하며 HEARTBEAT·ACCEPT 경로는 정상이어야 한다. `hashlib.blake2s(rule_id + FlowKey + canary_seed)`는 프로세스를 재시작해도 같은 bucket을 선택하고 packet별 random DROP을 사용하지 않는다. RuntimePolicyState rollback은 원본 PolicyBundle과 policy file을 변경하지 않는다.
+
 ### 15.4 timing과 load
 
 monotonic timing 사용 / **1, 100, 550, 1100 packet/s 부하 프로파일 측정**(§5.1 추정 부하 기준) / hot path p50·p95·p99·max 기록 / **목표: p50 150μs 이하, p99 500μs 이하, 300ms 초과 verdict 0건** / 큐가 가득 차거나 LLM이 30초 멈춰도 latency 기준 유지 / 1100 pkt/s에서 처리 지연이 누적되지 않음.
@@ -685,12 +727,14 @@ TTL expiry, max key eviction, per-key cap / duplicate·late·out-of-order event 
 
 서킷 브레이커 조작 저항 검증(§10.3) — **가장 중요한 회귀 테스트다**:
 
-- **공격 시뮬레이션**: 활성 시그니처에 일치하는 패킷을 고율로 주입해 `raw_drop_rate`를 위험 수준까지 올린다. **관찰 모드로 전환되지 않아야 한다.** 방어가 계속 동작하고 경보 metric만 올라간다
+- **공격 시뮬레이션**: 활성 시그니처에 일치하는 패킷을 고율로 주입해 `raw_drop_rate`를 위험 수준까지 올린다. 어떤 rule도 rollback되지 않고 경보 metric만 올라간다
 - `raw_drop_rate`와 `rule_concentration`이 동시에 상승하면 브레이커 유도 의심 경보 코드가 기록된다
-- **오탐 시뮬레이션**: 정상 프로파일 fixture와 일치하는 트래픽이 실제로 차단되도록 잘못된 rule을 주입하면, `baseline_violation_rate`가 상승해 지속 시간 조건 충족 후 관찰 모드로 전환된다
-- 일시적 스파이크(지속 시간 미달, 표본 부족)에서는 전환되지 않는다
-- 관찰 모드가 최대 지속 시간 후 자동으로 차단 모드에 복귀한다
-- **런타임이 어떤 지표로도 `rule_id`를 자동 비활성화하지 않는다**
+- **오탐 시뮬레이션**: 최근 승격 CANARY가 정상 profile fixture를 차단하면 최소 표본·지속 시간 충족 후 해당 `rule_id + profile`만 SHADOW로 rollback된다
+- 같은 이미지에서 새로 ACTIVE가 된 cohort가 더 높은 임계를 지속해서 넘으면 해당 cohort·profile만 SHADOW로 rollback된다
+- 이전 Round부터 안정화된 ACTIVE exact signature와 다른 profile의 rule은 위 rollback에도 계속 동작한다
+- 일시적 스파이크, 표본 부족, 새 profile의 baseline 부재에서는 rollback되지 않는다
+- packet-derived 지표만으로 전체 정책이 관찰 모드로 전환되지 않는다
+- rollback된 cohort는 같은 Round에서 자동 재활성화되지 않는다
 - 정상 프로파일이 비어 있는 상태에서는 `DROP` rule이 활성화되지 않는다
 
 ### 15.7 비동기·로그·보안
@@ -733,6 +777,8 @@ LLM disabled·timeout·429·malformed response에서 verdict와 HEARTBEAT 정상
 
 초기 운영 가설이며, 실제 로그·PCAP·flag 탈취 결과·SLA 결과가 다르면 관측 증거를 우선해 순서를 바꾼다.
 
+승격 상태는 Round 전체가 아니라 **rule + observed profile + layer evidence**의 조합에 붙는다. 새 `FinalsPhase`에서 레이어가 누적 개방되면 이전 레이어의 검증된 ACTIVE rule은 유지할 수 있지만, 새 레이어와 새 protocol은 같은 이름의 rule이 있어도 `SHADOW`부터 시작한다. 절대 Round 기준의 세부 투입안과 A~H 전략 판정은 `research/defense-mapping.md`의 「A~H 전략 대안 검토」를 따른다.
+
 | `FinalsPhase` | Round 1 | Round 2 | Round 3 | Round 4 |
 |---|---|---|---|---|
 | 1 | L1 정상 packet inventory, 포트 인벤토리, latency 기준선, 전량 로깅 | 고신뢰 rule 후보 검증, 정상 SLA fixture 회귀, parser 오류 제거 | 해당 없음 | 해당 없음 |
@@ -770,6 +816,7 @@ Round는 20분, Round 사이 Break는 10분이다(제6조 1·2항). 컨테이너
 이미지 빌드·태그·push는 Docker 담당자 소유다(제14조). 방어 담당자는 Break마다 다음을 즉시 전달한다.
 
 - 변경한 parser와 `rule_id` 목록, 각 rule의 승격 상태(`SHADOW`/`CANARY`/`ACTIVE`)
+- policy `bundle_id`, schema version, profile별 breaker 임계와 이전 bundle 대비 diff
 - 측정된 verdict latency 분포와 HEARTBEAT cadence
 - 추가·변경된 정상 fixture와 회귀 결과
 - rollback 조건과 직전 안전 이미지
@@ -780,7 +827,7 @@ Round는 20분, Round 사이 Break는 10분이다(제6조 1·2항). 컨테이너
 
 ### 17.2 다음 Round로 가져갈 수 있는 것
 
-protocol·field parser 개선, 고신뢰 rule과 reason code, 민감 내용을 제거한 최소 fixture, false-positive 재현 regression fixture, bounded state의 TTL·capacity 조정, latency·cadence 측정 결과, 실패한 가설과 rollback 기준.
+protocol·field parser 개선, 검토된 versioned policy file, 고신뢰 rule과 reason code, 민감 내용을 제거한 최소 fixture, false-positive 재현 regression fixture, bounded state의 TTL·capacity 조정, latency·cadence 측정 결과, 실패한 가설과 rollback 기준.
 
 **PCAP 원본, 전체 payload, 자격증명, 토큰, `FLAG{...}` 값, 상대 팀 정보를 이미지나 저장소에 넣지 않는다.** Round 간 상관은 숨은 영속 상태가 아니라 코드·테스트·검토된 설정의 새 버전으로 구현한다.
 
@@ -839,8 +886,8 @@ protocol·field parser 개선, 고신뢰 rule과 reason code, 민감 내용을 �
 ```text
 1순위  절대 안 죽는 골격 — connect·재연결, HEARTBEAT 분리, Deadline Guard, 예외 시 ACCEPT
 2순위  전량 로깅과 latency 측정 — 모든 rule의 원재료
-3순위  SLA 붕괴 차단 서킷 브레이커
-4순위  Gate 구조 검증 + Sig 기본 시그니처
+3순위  PolicyLoader + 범위 제한형 서킷 브레이커
+4순위  Gate 구조 검증 + Sig 기본 시그니처 + 결정론적 CANARY
 5순위  Break 운영 루프와 Docker 담당자 인계 절차
 6순위  Score 세션 행위 + 비동기 Corr
 7순위  Advisory LLM rule 후보 생성 (SHADOW 전제)
