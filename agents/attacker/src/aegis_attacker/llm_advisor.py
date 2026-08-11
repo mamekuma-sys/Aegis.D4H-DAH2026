@@ -1,0 +1,101 @@
+"""LLM 조언 경계와 라운드 예산.
+
+설계 §9.12. LLM은 관측 요약·exploit 우선순위 조언에만 쓴다. 출력은 도구를 직접 실행하지
+못하고 planner→범위·예산 검사를 다시 통과한다. 프롬프트·로그에 SUBMIT_TOKEN·LLM_API_KEY·
+flag 원문을 넣지 않는다(Redactor로 강제). 라운드별 호출·토큰 예산을 기록하고 초과 시 조언을
+중단해 결정론 경로로 넘어간다. 서버 호스팅 tools는 프록시가 차단한다.
+"""
+
+from __future__ import annotations
+
+import json
+
+from .audit import Redactor
+from .models import RoundBudget
+from .planner import parse_exploit
+
+MAX_LLM_CALLS_PER_ROUND = 200
+LLM_TIMEOUT = 20.0
+
+SYSTEM_PROMPT = (
+    "You are an offensive web-security agent in an authorized CTF attack-defense match. Each target is an "
+    "unknown web service that hides a flag of the form FLAG{...} behind a web vulnerability. You receive the "
+    "service's HTTP banner (GET /) and, after each attempt, the previous response (status, notable headers, "
+    "body). Exploit every leaked detail: banner text, example URLs, error messages, response headers/cookies, "
+    "and SQL/stack errors all disclose how to craft the next request.\n"
+    "Playbook — pick the one that fits the banner/hints, then refine using feedback:\n"
+    "- LFI / path traversal (file/view/read/download/path param): read a flag file directly. Try /flag, "
+    "/flags/, ./flag, ../flag, flag.txt and any filename an error reveals.\n"
+    "- SSRF (url/fetch/proxy/callback param): the banner may disclose an internal host:port or a loopback-only "
+    "endpoint (e.g. /registry) reachable through the SSRF itself (fetch http://127.0.0.1:<same port>/<endpoint>). "
+    "Such an index may return an internal URL, sometimes base64 — decode it, then SSRF that URL for the flag.\n"
+    "- Broken auth / privilege escalation (admin/account/private area): the app may trust a client-supplied "
+    "header or cookie. If a plain header, resend it high (admin/true/1). If the session cookie is base64/JWT, "
+    "decode it, raise the privilege field (role -> admin), re-encode the same way, resend.\n"
+    "- SQL injection (id/search/product param concatenated into SQL): use UNION SELECT. Read the SQL error to "
+    "learn engine and column count. Enumerate schema (sqlite: UNION SELECT sql FROM sqlite_master), find the "
+    "column holding the secret/flag, then UNION SELECT it. Match column count.\n"
+    "Filter/WAF evasion — if a request that should reach the app gets NO response (dropped/timeout) while GET / "
+    "worked, an inline content filter is DROPPING it by payload signature. Do NOT resend the same bytes: "
+    "re-encode to evade while preserving intent — URL/double-encode suspicious tokens (../ -> %2e%2e%2f or "
+    "%252e%252e%252f ; ' -> %27 ; space -> + ), vary keyword case (UnIoN), insert inline comments (UN/**/ION), "
+    "or move the payload to an alternate parameter/header. Keep the same exploit class and target path.\n"
+    'Reply with ONLY a JSON object, no prose, no markdown fences, keys: '
+    '"vuln" (LFI|SSRF|AUTH|SQLI|OTHER), "method" (GET|POST), '
+    '"path" (request path incl. query string, url-encoded as needed), '
+    '"headers" (object of extra request headers, may be empty), '
+    '"body" (request body string, empty if none), '
+    '"reason" (one short sentence). Do not include the host; path only.'
+)
+
+
+class LLMAdvisor:
+    """LiteLLM 프록시에 조언을 요청한다. 실행 권한 없음."""
+
+    def __init__(self, http, config, budget: RoundBudget, redactor: Redactor = None,
+                 max_calls: int = MAX_LLM_CALLS_PER_ROUND):
+        self._http = http
+        self._config = config
+        self._budget = budget
+        self._max_calls = max_calls
+        # api_key·submit_token을 프롬프트에서 절대 노출하지 않도록 redactor에 등록.
+        secrets = {config.llm_api_key, config.submit_token}
+        self._redactor = redactor or Redactor(secrets)
+
+    def advise_exploit(self, banner: str, feedback: str, hints):
+        if not self._config.llm_api_key:
+            return None
+        if self._budget.llm_calls >= self._max_calls:
+            return None  # 예산 소진 → 결정론 경로로
+
+        hint_line = "Priority hints: " + ", ".join(h.value for h in hints) if hints else ""
+        observed = feedback or banner
+        user_content = self._redactor.scrub("\n".join(x for x in (hint_line, observed) if x))
+
+        payload = json.dumps({
+            "model": self._config.llm_model,
+            "temperature": 0,
+            "max_tokens": 300,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        })
+        resp = self._http.request(
+            "POST", self._config.llm_base_url + "/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self._config.llm_api_key}",
+                "Content-Type": "application/json",
+            },
+            body=payload, timeout=LLM_TIMEOUT,
+        )
+        self._budget.llm_calls += 1
+        if resp.status != 200:
+            return None
+        try:
+            obj = json.loads(resp.body)
+            content = obj["choices"][0]["message"]["content"]
+            self._budget.llm_tokens += int(obj.get("usage", {}).get("total_tokens", 0) or 0)
+        except Exception:
+            return None
+        return parse_exploit(content)

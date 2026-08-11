@@ -1,0 +1,72 @@
+import unittest
+
+from aegis_attacker.models import Endpoint
+from aegis_attacker.phase_policy import (
+    FairScheduler,
+    allocate_budget,
+    layer_of_port,
+)
+
+L1 = Endpoint("team2.lig.internal", 8082)
+L2 = Endpoint("team2.lig.internal", 8083)
+L3 = Endpoint("team2.lig.internal", 8084)
+
+
+class TestLayerOfPort(unittest.TestCase):
+    def test_demo_ports(self):
+        self.assertEqual(layer_of_port(8082), 1)
+        self.assertEqual(layer_of_port(8084), 3)
+
+    def test_unknown_port(self):
+        self.assertEqual(layer_of_port(443), 0)
+
+
+class TestAllocateBudget(unittest.TestCase):
+    def test_even_split_min_one(self):
+        b = allocate_budget([L1, L2, L3], 30)
+        self.assertEqual(set(b.values()), {10})
+        b2 = allocate_budget([L1, L2, L3], 2)  # 부족해도 최소 1
+        self.assertEqual(set(b2.values()), {1})
+
+    def test_empty(self):
+        self.assertEqual(allocate_budget([], 10), {})
+
+
+class TestFairScheduler(unittest.TestCase):
+    def test_round_robin(self):
+        s = FairScheduler([L1, L2, L3], per_target_budget=2)
+        picks = [s.next() for _ in range(3)]
+        self.assertEqual(set(picks), {L1, L2, L3})  # 한 바퀴에 모두 등장
+
+    def test_budget_exhaustion(self):
+        s = FairScheduler([L1, L2], per_target_budget=1)
+        seen = []
+        for _ in range(10):
+            e = s.next()
+            if e is None:
+                break
+            seen.append(e)
+            s.charge(e)
+        self.assertEqual(sorted(e.key() for e in seen), [L1.key(), L2.key()])
+        self.assertTrue(s.all_exhausted())
+
+    def test_new_layer_does_not_starve_old(self):
+        # L1만 있다가 L2 개방 → L1 예산 유지, L2도 예산 받음
+        s = FairScheduler([L1], per_target_budget=3)
+        s.charge(L1)  # L1 남은 2
+        s.add_endpoints([L2, L3], per_target_budget=3)
+        self.assertEqual(s.remaining(L1), 2)  # 기존 예산 유지(굶지 않음)
+        self.assertEqual(s.remaining(L2), 3)
+        self.assertEqual(s.remaining(L3), 3)
+        picks = {s.next() for _ in range(3)}
+        self.assertIn(L1, picks)  # 이전 레이어도 계속 순회 대상
+
+    def test_boost_promising_target(self):
+        s = FairScheduler([L1, L2], per_target_budget=2, boost_extra=5)
+        s.boost(L1)
+        self.assertEqual(s.remaining(L1), 7)
+        self.assertEqual(s.remaining(L2), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
