@@ -9,6 +9,7 @@ __pycache__/
 htmlcov/
 
 tmp/
+.worktrees/
 output/
 captures/
 archives/
