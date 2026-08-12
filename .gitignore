@@ -20,8 +20,8 @@ archives/
 *.tar.gz
 *.zip
 *.pdf
-/DAH2026_본선_당일_진행_안내.md
-/DAH2026_스켈레톤코드_상세_설명.md
+DAH2026_본선_당일_진행_안내.md
+DAH2026_스켈레톤코드_상세_설명.md
 
 .idea/
 .vscode/
