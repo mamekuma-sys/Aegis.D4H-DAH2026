@@ -138,7 +138,7 @@ SLA       = 100 − 실패 카운트   (Round당 SLA check 100회)      제20조
 | packet-derived anomaly 지표는 alert-only | 제17·20조 산식(§0.2), 현재 `raw_ip` 입력 계약 | 35 | organizer-guaranteed SLA·정상-health 신호 없음 | 비동기 경보 전용 | Round 중 정책 불변, Break에서 사람 검토 | `test_anomaly.py` |
 | 단일 deadline-aware socket writer | 제13조 2·3항, 레퍼런스 무기한 blocking send | 해당 없음 | 동일 socket에 VERDICT·HEARTBEAT 송신 | 동기 | 200ms 내부 만료 또는 send fault 시 폐기·재연결 | `test_session.py` |
 | immutable correlation snapshot publication | `raw_ip` 관측 경계와 300ms hot path | 15–16, 27–29 | 비동기 worker 산출 bounded score | 비동기 생성 + 동기 단일 read | missing·stale snapshot이면 `ACCEPT` | `test_correlation.py` |
-| 송신 timeout과 VERDICT 우선 송신 | 제13조 2·3항, 레퍼런스 무기한 blocking send | 해당 없음 | 소켓 버퍼 포화 시 fail-open 위험 | 동기 | timeout 반환 후 재연결 | `test_session.py` |
+| writer-owned timeout과 VERDICT 우선 송신 | 제13조 2·3항, 레퍼런스 무기한 blocking send | 해당 없음 | 소켓 버퍼 포화 시 fail-open 위험 | 동기 | `SocketWriter` timeout 후 재연결 | `test_session.py` |
 | Round 간 상태 소실 허용 | 제15조 4항 | 해당 없음 | 컨테이너 매 Round 재생성 | 해당 없음 | disk persistence 미요구 | `test_round_lifecycle.py` |
 | `MissionState`(임무 단계) 제외 | `contracts/defender/README.md` 입력 경계 | 17–19 | Mission Plan·Vehicle State·Mission Phase 미관측 | **제외** | 판정 입력 미사용 | 해당 없음 |
 | 파라미터 해시(Golden Profile) 제외 | 위와 동일 | 20–23 | `PARAM_SET` 메시지·파라미터 세트 미관측 | **제외** | 판정 입력 미사용 | 해당 없음 |
@@ -161,7 +161,7 @@ startup validation
   → 사전 승인된 결정론적 policy (Gate → Sig → Score)
   → ACCEPT/DROP VERDICT를 deadline priority queue에 enqueue
   → SocketWriter가 VERDICT/HEARTBEAT를 단독 송신
-  → latency 기록
+  → VerdictSender enqueue/result latency 계측
   → bounded 비동기 event enqueue
   → Corr / Advisory / 로그 분석
   → 연결 끊김 시 재연결하고 위 흐름 재개
@@ -174,14 +174,15 @@ startup validation
                         │ 0x01 PACKET (raw_ip, 인바운드 전용)
                         ▼
 ┌────────────────────────────────────────────────────────┐
-│  Gate   IP/L4 구조 sanity                p99 100μs 이하 │
+│  Gate   parsed field 구조 constraint       p99 25μs 이하 │
 │         파싱 실패·malformed → 즉시 ACCEPT (판정 포기)    │
 │         명시적 스캔 플래그 조합만 DROP 후보              │
 ├────────────────────────────────────────────────────────┤
-│  Sig    payload 시그니처 매칭             p99 300μs 이하 │
+│  Sig    payload 시그니처 매칭             p99 100μs 이하 │
 │         versioned policy를 기동 시 검증·고정             │
 ├────────────────────────────────────────────────────────┤
-│  Score  flow 누적 위험도 조회 (읽기 전용)  p99 50μs 이하  │
+│  Score  immutable snapshot 단일 조회       p99 25μs 이하 │
+│         Gate + Sig + Score 합계           p99 150μs 이하 │
 └────────────────────────────────────────────────────────┘
                         │ 0x02 VERDICT
                         ▼
@@ -199,7 +200,8 @@ startup validation
 
 - PACKET 수신, 판정, HEARTBEAT 스케줄링, 소켓 송신, 비동기 분석의 책임을 분리한다.
 - **소켓에 쓰는 주체는 `SocketWriter` 단일 스레드 하나뿐이다.** 판정 스레드와 HEARTBEAT 스케줄러는 불변 outbound item을 만들고 우선순위 큐에 `put_nowait`할 뿐 `socket.send`를 직접 호출하지 않는다. 따라서 send lock과 lock 경합 자체가 없고, 한 item당 한 번의 `SOCK_SEQPACKET` send로 message boundary를 보존한다.
-- frame packing은 producer에서 끝낸다. writer 스레드는 deadline 확인, socket timeout 설정, send, 결과 publication만 수행하며 parsing, logging, correlation, LLM 호출을 실행하지 않는다.
+- `VerdictSender`는 `VerdictDecision`을 frame으로 pack하고 `received_at_monotonic`, `broker_deadline`, sequence를 붙여 `OutboundVerdict`를 `put_nowait`하며 enqueue 성공·실패와 writer가 돌려준 `SendResult`만 계측한다. socket, send timeout, deadline 만료, priority dequeue, reconnect 판단을 소유하지 않는다.
+- **`SocketWriter`만 write와 deadline을 소유한다.** writer 스레드는 남은 deadline 계산, priority dequeue, socket timeout 설정, send, `SendResult` publication과 session fault 신호만 수행하며 parsing, policy, correlation, LLM을 실행하지 않는다.
 - HEARTBEAT 주기 대기는 `sleep`이 아니라 shutdown 이벤트 대기로 구현해 종료 신호에 즉시 반응한다.
 - shutdown과 재연결 중 중복 writer·HEARTBEAT 스레드, orphan queue, stale socket이 남지 않게 한다.
 
@@ -215,7 +217,7 @@ startup validation
 | `FAULT` | socket을 닫고 현재 item과 같은 session의 대기 item을 폐기한다. verdict를 새 session에 재전송하지 않는다 | 즉시 `DISCONNECTED` |
 | `STOPPED` | 새 item을 받지 않고 queue와 socket을 정리한다 | 종료 상태 |
 
-priority queue는 고정 용량 512이고 producer는 기다리지 않는다. VERDICT `put_nowait` 실패는 그 session이 deadline을 지킬 수 없는 fault이므로 metric을 남기고 재연결한다. HEARTBEAT는 미송신 item을 최대 1개만 유지해 중복 tick을 합친다. HEARTBEAT가 마지막 성공 후 2초까지 전송되지 못하면 session-unhealthy 경보와 재연결을 트리거하지, VERDICT보다 앞으로 priority를 뒤집지 않는다.
+outbound in-flight 상한은 **현재 `SENDING` 1건과 pending item을 합쳐 session당 256건**이다. pending priority queue는 VERDICT deadline min-heap과 HEARTBEAT 단일 slot으로 구현하며 HEARTBEAT tick은 slot에서 coalesce한다. producer는 `put_nowait`만 사용하고 물리 send를 기다리지 않는다. VERDICT enqueue 성공 후 packet 참조를 해제하고 다음 `recv`로 진행한다. enqueue 실패는 verdict를 조용히 버리는 backpressure가 아니라 session fault다. producer는 즉시 현재 session의 `recv`를 중단하고 writer/BrokerSession에 reconnect를 요청하며, writer는 같은 session의 queued item을 모두 폐기한다. HEARTBEAT가 마지막 성공 후 2초까지 전송되지 못해도 session-unhealthy 경보와 재연결을 트리거할 뿐 VERDICT보다 앞으로 priority를 뒤집지 않는다.
 
 VERDICT item은 `received_at_monotonic`, `broker_deadline = received_at + 300ms`, `internal_send_by = received_at + 200ms`를 함께 가진다. writer가 dequeue한 직후와 send 직전에 각각 다음 값을 다시 계산한다.
 
@@ -230,17 +232,18 @@ send_wait = min(50ms, broker_remaining - 100ms)
 
 | 항목 | 규칙 |
 |---|---|
-| 기본 실행 모델 | 단일 스레드 직렬 루프. in-flight 패킷은 항상 1건 |
-| 확장 시 상한 | 수신 큐 256, 판정 worker는 GIL 특성상 1개를 기본으로 하고 늘리려면 §15.4 측정 근거를 첨부한다 |
+| receive/decision producer | 단일 스레드, inbound queue 없음. 한 번에 packet 1건만 parse·판정·enqueue |
+| producer 진행 | VERDICT enqueue 성공 후 physical send를 기다리지 않고 다음 `recv` 진행. enqueue 실패 시 같은 session 수신 중단·재연결 |
+| outbound in-flight | `SENDING`과 pending VERDICT·HEARTBEAT를 합쳐 session당 최대 256건. HEARTBEAT pending은 최대 1건 |
 | **deadline 기준** | 경과 시간은 큐 진입 시각이 아니라 **PACKET 수신 시각(`received_at_monotonic`)**부터 잰다. 큐 대기시간이 예산에 포함된다 |
-| overload | 큐 대기시간이 soft cutoff를 넘겼거나 큐가 가득 차면 판정 없이 즉시 `ACCEPT`한다. **`DROP`으로 처리하지 않는다** |
+| outbound backpressure | VERDICT queue full이면 기다리거나 verdict를 drop하지 않는다. session fault로 전환해 같은 session item을 폐기하고 재연결 |
 | 비동기 경로 | 고정 길이 FIFO에 `put_nowait`한다. 가득 차면 들어오려는 최신 event를 O(1)로 폐기(drop-newest)하고 기존 순서를 보존한다. verdict를 지연시키지 않는다 |
 
 #### 재연결 규칙
 
 - 재연결은 bounded backoff로 무한 재시도한다. **재시도 포기는 곧 fail-open이다.**
-- 재연결 시 in-flight 패킷과 수신 큐를 비우고, 이전 session에서 받은 `pkt_id`의 verdict를 새 session으로 보내지 않는다.
-- 새 session에서 HEARTBEAT 스레드를 하나만 기동하고 이전 스레드의 종료를 확인한다.
+- 재연결 시 producer의 현재 packet과 outbound in-flight item을 비우고, 이전 session에서 받은 `pkt_id`의 verdict를 새 session으로 보내지 않는다.
+- 새 session에서 `SocketWriter`와 HEARTBEAT scheduler가 각각 하나만 존재하게 하고 이전 session thread의 종료를 확인한다.
 - 재연결 중에도 비동기 상관 state는 유지한다. Round 경계에서만 초기화된다.
 
 ---
@@ -249,10 +252,11 @@ send_wait = min(50ms, broker_remaining - 100ms)
 
 ### 5.1 처리량이 예산을 결정한다
 
-레퍼런스 구현의 메인 루프는 `recv → verdict → send`를 **단일 스레드에서 직렬로** 수행한다. 이 구조에서는 판정 지연이 곧 처리량 한계다.
+레퍼런스 구현의 메인 루프는 `recv → verdict → send`를 **한 스레드에서 직렬로** 수행한다. 본 설계는 그 구조를 그대로 사용하지 않는다. 단일 receive/decision producer가 `recv → parse → decide → enqueue`를 수행하고, 단일 `SocketWriter`가 별도 스레드에서 `dequeue → deadline guard → send`를 수행한다. producer는 enqueue 성공까지만 기다리고 physical send와 겹쳐 다음 packet을 처리한다.
 
 ```
-처리량 ≈ 1 / 패킷당 판정 지연
+steady-state 처리량 ≈ 1 / max(producer 처리시간, writer 정상 send 시간)
+packet end-to-end latency = producer + outbound queue wait + writer send
 ```
 
 부하 추정:
@@ -286,24 +290,16 @@ SLA check는 Round 20분에 100회이므로 초당 0.1회 미만으로 부하에
 
 - **모든 시간은 벽시계가 아니라 monotonic clock으로 측정한다.** NTP 보정 시 벽시계 기반 예산 계산이 깨진다.
 - 다섯 정상-path 구성요소의 p99 상한 합은 `50+150+150+50+100=500μs`로 선언한 end-to-end p99 목표를 넘지 않는다.
+- policy 150μs는 §4.1의 `Gate 25μs + Sig 100μs + Score 25μs` 전체이며 이 세 stage를 500μs 표에 다시 더하지 않는다. 구현 benchmark와 테스트 assertion은 이 decomposition과 end-to-end 500μs를 동시에 사용한다.
 - `pkt_id`를 읽은 직후부터 경과를 감시하고, 5ms soft cutoff 도달 시 즉시 `ACCEPT`를 enqueue한다. 이 cutoff는 200ms 내부 send hard cutoff, 300ms Broker deadline, 50ms socket fault timeout과 서로 다른 목적의 값이다.
 - parsing failure, unknown protocol, 비동기 queue full, LLM 장애를 이유로 300ms timeout DROP을 유발하지 않는다.
 - 실측이 목표를 충족하지 못하면 rule 또는 parser를 hot path 밖으로 옮긴다. 문서의 숫자를 조용히 완화하지 않는다.
 
-### 5.3 수신·판정 분리는 조건부 확장
+### 5.3 승인된 실행 모델과 확장 금지선
 
-기본 구조는 레퍼런스와 같은 단일 스레드 직렬 루프다. Python의 GIL 때문에 CPU 바운드 판정을 워커 스레드로 나눠도 총 처리량은 크게 늘지 않으므로, **먼저 판정을 빠르게 만드는 것이 정답이다.**
+승인된 모델은 **단일 receive/decision producer + 단일 SocketWriter + inbound queue 없음 + outbound in-flight 최대 256건**이다. 이 차이는 HEARTBEAT와 VERDICT를 같은 socket에 안전하게 직렬화하고 각 verdict deadline을 writer 한 곳에서 집행하기 위해 reference skeleton의 serial loop에서 의도적으로 벗어난 것이다.
 
-실측에서 버스트 흡수가 부족할 때만 다음 구조로 확장한다.
-
-```text
-수신 스레드   recv → (pkt_id, raw_ip, t_recv) → bounded queue (용량 256)
-판정 스레드   dequeue → 큐 대기시간이 soft cutoff 초과면 즉시 ACCEPT
-                     → 아니면 Gate·Sig·Score 수행
-큐 가득 참    판정 없이 즉시 ACCEPT (DROP 아님)
-```
-
-큐잉은 지연을 흡수하는 대신 오래된 패킷이 300ms를 넘길 위험을 만든다. 그래서 **대기 시간 기반 즉시 ACCEPT를 반드시 함께 둔다.** 확장 여부는 §15.4 부하 측정 결과로 결정하며 측정 없이 도입하지 않는다.
+producer worker를 늘리거나 inbound queue를 추가하면 packet ordering, memory 상한, deadline backpressure가 달라진다. 따라서 이를 단순 최적화로 구현하지 않는다. §15.4 실측에서 필요성이 확인되면 새 설계 승인과 별도 테스트를 거친다. 현재 구현 기준에서 overload는 inbound ACCEPT queue로 흡수하지 않고, outbound cap 도달 시 session fault·reconnect로 fail-open recovery를 선택한다.
 
 ---
 
@@ -353,7 +349,7 @@ header가 유효해 `pkt_id`를 알지만 `raw_ip`가 잘렸거나 비정상이�
 | `PolicyLoader` | 이미지 내 versioned policy file 검증·컴파일 | active 실패 시 fallback, 둘 다 실패 시 DROP rule 0개. HEARTBEAT와 ACCEPT 경로는 기동 |
 | `HotPolicy` | 사전 승인 rule과 immutable correlation snapshot의 bounded 조회 | snapshot 부재·stale·예외 시 `ACCEPT` |
 | `AnomalyMonitor` | packet-derived 지표 집계와 alert publication | runtime policy state를 변경하지 않음. Break 사람 검토 전용 |
-| `VerdictSender` | cutoff 인식 송신과 latency 측정 | 송신 timeout 필수, 실패를 metric으로 기록 |
+| `VerdictSender` | verdict frame 생성, deadline metadata 부착, `put_nowait`, enqueue·`SendResult` 계측 | socket·timeout·deadline 판단 없음. enqueue 실패 시 session fault 요청 |
 | `EventAdapter` | verdict 이후 관측 field를 최소 event로 변환 | 변환 실패 시 event 폐기 |
 | `CorrelationBuilder` | worker 전용 mutable TTL·capacity state와 snapshot 생성 | hot path와 공유하지 않음. 용량 초과 시 eviction |
 | `CorrelationSnapshotRef` | 현재 immutable snapshot 참조 하나 publication | worker만 원자적으로 교체, hot path는 lock 없이 한 번 읽음 |
@@ -390,7 +386,7 @@ header가 유효해 `pkt_id`를 알지만 `raw_ip`가 잘렸거나 비정상이�
 | flow당 재조립 버퍼 | 16KB 링버퍼 | 오래된 앞부분 폐기 |
 | 전체 flow 수 | 5,000 | 신규 flow 상태추적 포기, `ACCEPT` |
 | flow TTL | 120초 | 주기 스윕으로 제거 |
-| 수신 큐(확장 시) | 256 | 판정 없이 즉시 `ACCEPT` |
+| outbound in-flight/session | 256 (`SENDING` 포함, HEARTBEAT pending 최대 1) | VERDICT enqueue 실패 시 같은 session 수신 중단·재연결 |
 | 비동기 event queue | 고정 길이 FIFO | `put_nowait` 실패 시 들어오려는 최신 event를 O(1) 폐기(drop-newest) |
 
 컨테이너 memory reservation은 2GB, pids limit 512, cpu-shares 2048이다(제16조 1항). 20분 Round 동안 상태가 무한 증가하면 OOM이다. **Round 종료 후 상태가 사라지는 것을 정상으로 취급하고 disk persistence를 요구하지 않는다**(제15조 4항).
@@ -676,7 +672,7 @@ PACKET fixture에서 type, `pkt_id`, `pkt_len`, `raw_ip`를 big-endian으로 정
 
 ### 15.2 HEARTBEAT와 session
 
-정상 부하와 비동기 부하에서 cadence 약 1초 유지 / gap이 3초에 접근하기 전 metric·failure handling 작동 / connect race, disconnect, **재연결 후 정상 판정 재개** / 재연결 후 socket writer·correlation worker·HEARTBEAT 스레드가 각각 하나씩만 존재 / SIGTERM에서 2초 내 정리 종료.
+정상 부하와 비동기 부하에서 cadence 약 1초 유지 / gap이 3초에 접근하기 전 metric·failure handling 작동 / connect race, disconnect, **재연결 후 정상 판정 재개** / 반복 reconnect 중에도 active `SocketWriter`·correlation worker·HEARTBEAT scheduler가 각각 정확히 하나이고 이전 writer가 socket을 보유하지 않음 / SIGTERM에서 2초 내 정리 종료.
 
 ### 15.3 parser와 policy
 
@@ -686,7 +682,7 @@ PolicyBundle 검증: 지원하지 않는 schema version / 중복 `rule_id` / 존
 
 ### 15.4 timing과 load
 
-monotonic timing 사용 / **1, 100, 550, 1100 packet/s 부하 프로파일 측정**(§5.1 추정 부하 기준) / hot path p50·p95·p99·max 기록 / **목표: p50 150μs 이하, p99 500μs 이하, 300ms 초과 verdict 0건** / 구성요소 p99 상한 합이 500μs 이하인지 검증 / 큐가 가득 차거나 LLM이 30초 멈춰도 latency 기준 유지 / 1100 pkt/s에서 처리 지연이 누적되지 않음.
+monotonic timing 사용 / **1, 100, 550, 1100 packet/s 부하 프로파일 측정**(§5.1 추정 부하 기준) / hot path p50·p95·p99·max 기록 / **목표: p50 150μs 이하, p99 500μs 이하, 300ms 초과 verdict 0건** / `Gate 25 + Sig 100 + Score 25 = policy 150μs`, 전체 `50+150+150+50+100=500μs`를 같은 benchmark에서 검증 / 큐가 가득 차거나 LLM이 30초 멈춰도 latency 기준 유지 / 1100 pkt/s에서 처리 지연이 누적되지 않음.
 
 fake clock·fake socket 기반 송신 모델 검증(§4.2):
 
@@ -697,8 +693,10 @@ fake clock·fake socket 기반 송신 모델 검증(§4.2):
 - 경과 시간이 **큐 진입 시각이 아니라 PACKET 수신 시각 기준**으로 계산되고, 5ms soft cutoff에서는 판단을 멈춰 `ACCEPT`를 enqueue한다
 - `BrokenPipe`, `ConnectionReset`, partial send에서 같은 session의 item을 폐기하고 재연결한다
 - 지속 부하에서 HEARTBEAT가 2초 이상 밀리면 session-unhealthy 경보와 재연결이 발생하며 HEARTBEAT를 VERDICT 앞으로 priority inversion시키지 않는다
+- fake writer를 `SENDING`에 멈춘 채 producer가 outbound in-flight 256건까지 채우면 성공한 enqueue마다 다음 `recv`로 진행하지만 257번째 `put_nowait`은 즉시 실패하고 추가 `recv` 없이 session fault·queue 폐기·reconnect한다
+- fake socket write 호출자는 항상 하나의 `SocketWriter`뿐이고 `VerdictSender`는 frame·metadata enqueue와 `SendResult` 계측 외 socket·timeout API를 호출하지 않는다
 
-측정 환경이 공식 컨테이너와 다르면 환경 차이를 기록한다. **성능을 측정하지 않고 예상치만 적지 않는다.** §5.3 확장 도입 여부는 이 측정으로 결정한다.
+측정 환경이 공식 컨테이너와 다르면 환경 차이를 기록한다. **성능을 측정하지 않고 예상치만 적지 않는다.** §5.3의 producer 추가 또는 inbound queue가 필요하다는 결과가 나오면 구현하지 않고 새 설계 승인 대상으로 보고한다.
 
 ### 15.5 bounded state와 상관분석
 
@@ -799,7 +797,7 @@ Round는 20분, Round 사이 Break는 10분이다(제6조 1·2항). 컨테이너
 이미지 빌드·태그·push는 Docker 담당자 소유다(제14조). 방어 담당자는 Break마다 다음을 즉시 전달한다.
 
 - 변경한 parser와 `rule_id` 목록, 각 rule의 승격 상태(`SHADOW`/`CANARY`/`ACTIVE`)
-- policy `bundle_id`, schema version, profile별 breaker 임계와 이전 bundle 대비 diff
+- policy `bundle_id`, schema version, profile별 alert threshold·reviewer runbook과 이전 bundle 대비 diff
 - 측정된 verdict latency 분포와 HEARTBEAT cadence
 - 추가·변경된 정상 fixture와 회귀 결과
 - rollback 조건과 직전 안전 이미지

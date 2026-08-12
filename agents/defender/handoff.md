@@ -424,17 +424,20 @@ startup validation
   → pre-approved deterministic policy
   → ACCEPT/DROP VERDICT enqueue
   → SocketWriter-only VERDICT/HEARTBEAT send
-  → latency record
+  → VerdictSender enqueue/result latency record
   → bounded async event enqueue
   → time-window/correlation/advisory/log analysis
 ```
 
 - PACKET receive, verdict decision, HEARTBEAT scheduling, socket send, async analysis의 책임을 분리한다.
 - socket write는 `SocketWriter` 단일 스레드만 수행한다. verdict producer와 heartbeat scheduler는 frame을 만든 뒤 bounded priority queue에 `put_nowait`하고 socket 또는 writer lock을 직접 사용하지 않는다.
+- `VerdictSender`는 frame 생성, `received_at_monotonic`·`broker_deadline`·sequence metadata 부착, `put_nowait`, enqueue 성공·실패와 writer `SendResult` 계측만 맡는다. socket, timeout, deadline expiry, priority dequeue는 `SocketWriter`만 소유한다.
 - queue key는 VERDICT `(0, broker_deadline, sequence)`, HEARTBEAT `(1, due_at, sequence)`로 고정해 가장 이른 VERDICT deadline을 모든 HEARTBEAT보다 먼저 보낸다. heartbeat item은 최대 하나로 coalesce한다.
 - writer 상태는 `DISCONNECTED → READY → SENDING → READY|FAULT → DISCONNECTED`와 `STOPPED`로 한정한다. timeout·partial send·socket 오류·로컬 만료는 current session item을 폐기하고 재연결하며 새 session에 verdict를 replay하지 않는다.
 - VERDICT의 `broker_remaining = received_at + 300ms - monotonic_now`, `send_wait = min(50ms, broker_remaining - 100ms)`를 dequeue 직후와 send 직전에 계산한다. `broker_remaining <= 100ms`이면 200ms 내부 hard cutoff로 로컬 폐기·재연결한다.
 - 50ms는 socket fault timeout이고 정상 p99 send 목표가 아니다. shutdown과 reconnect 중 중복 writer·heartbeat thread, orphan queue, stale socket이 남지 않게 한다.
+- reference skeleton의 한 스레드 `recv → verdict → send`와 달리, 승인 모델은 단일 receive/decision producer와 단일 SocketWriter를 분리한다. producer는 inbound queue 없이 한 packet씩 판정하고 VERDICT enqueue 성공 후 physical send를 기다리지 않고 다음 `recv`로 진행한다.
+- outbound in-flight는 현재 `SENDING`과 pending VERDICT·HEARTBEAT를 합쳐 session당 최대 256건이고 pending HEARTBEAT는 최대 1건이다. VERDICT `put_nowait` 실패 시 기다리거나 drop하지 않고 같은 session 수신을 중단해 queued item을 폐기하고 reconnect한다. producer 추가와 inbound queue 도입은 별도 설계 승인 전까지 금지한다.
 
 ### 9.4 300ms hot path 예산
 
@@ -455,6 +458,7 @@ startup validation
 
 - 모든 시간은 wall clock이 아니라 monotonic clock으로 측정한다.
 - 정상-path 구성요소 p99 상한 합은 `50+150+150+50+100=500μs`로 선언한 p99 목표를 넘지 않는다.
+- policy 150μs 내부는 `Gate 25μs + Sig 100μs + Score 25μs`로 고정하며 별도 추가 예산으로 계산하지 않는다.
 - `pkt_id`를 읽은 뒤 5ms soft cutoff에 도달하면 안전한 fallback verdict `ACCEPT`를 즉시 writer에 enqueue한다. 200ms hard cutoff, 300ms Broker deadline, 50ms socket fault timeout을 서로 대체하지 않는다.
 - parsing failure, unknown protocol, async queue full, LLM failure를 이유로 300ms timeout DROP을 유발하지 않는다.
 - 성능 실측이 초기 목표를 충족하지 못하면 rule 또는 parser를 hot path 밖으로 이동한다. 숫자를 문서에서 조용히 완화하지 않는다.
@@ -496,7 +500,7 @@ header가 유효해 `pkt_id`를 알지만 raw IP가 잘렸거나 비정상이면
 - `PacketParser`: bounded IP/L4 및 증명된 application parser dispatch
 - `HotPolicy`: pre-approved rule과 immutable correlation snapshot의 bounded single read
 - `AnomalyMonitor`: packet-derived metric 집계와 alert publication만 수행하며 runtime policy state는 변경하지 않음
-- `VerdictSender`: deadline-aware frame 생성·writer enqueue와 latency 측정
+- `VerdictSender`: frame 생성·deadline metadata enqueue와 enqueue/`SendResult` 계측만 수행; socket·timeout·deadline 판단 없음
 - `EventAdapter`: verdict 이후 관측 field를 correlation event로 최소 변환
 - `CorrelationBuilder`: worker 전용 TTL·capacity mutable state와 frozen snapshot 생성
 - `CorrelationSnapshotRef`: worker가 참조 하나를 원자 교체하고 hot path가 lock 없이 한 번 읽는 publication 경계
@@ -681,7 +685,8 @@ agents/defender/
 - 정상 부하와 async 부하에서 heartbeat cadence가 약 1초 유지
 - heartbeat gap이 3초에 접근하기 전에 metric·failure handling 작동
 - connect race, disconnect, reconnect, shutdown
-- reconnect 후 worker와 heartbeat가 하나씩만 존재
+- reconnect 후 `SocketWriter`, correlation worker, heartbeat scheduler가 각각 하나씩만 존재
+- 반복 reconnect에서도 이전 writer가 socket을 보유하지 않고 active `SocketWriter`가 정확히 하나임
 - fake clock으로 heartbeat와 VERDICT를 동시에 enqueue해도 single writer만 fake socket에 쓰고 VERDICT가 먼저 전송됨
 - writer를 멈춘 채 HEARTBEAT와 deadline이 다른 VERDICT 둘을 넣은 뒤 재개하면 earliest VERDICT, later VERDICT, HEARTBEAT 순서여서 priority inversion이 없음
 - blocked fake-socket send는 `min(50ms, broker_remaining-100ms)` 안에 timeout되고 session queue 폐기·reconnect되며 verdict를 새 session에 replay하지 않음
@@ -698,12 +703,15 @@ agents/defender/
 #### timing과 load
 
 - monotonic timing 사용
-- 최소 1, 100, 500, 1000 packet/s load profile 측정
+- 최소 1, 100, 550, 1100 packet/s load profile 측정
 - hot path p50, p95, p99, max 기록
 - 목표 환경에서 p50 150μs 이하, p99 500μs 이하, 300ms 초과 verdict 0건
 - component p99 합이 500μs 이하이고 5ms soft cutoff, 200ms internal hard cutoff, 300ms Broker deadline, 50ms socket fault timeout이 fake clock에서 독립적으로 동작
+- `Gate 25μs + Sig 100μs + Score 25μs = policy 150μs`와 전체 500μs를 같은 benchmark에서 검증
 - queue가 가득 차거나 LLM이 30초 멈춰도 hot path latency 기준 유지
 - heartbeat와 verdict가 같은 socket writer를 사용할 때 starvation 없음
+- fake writer가 `SENDING`일 때 outbound in-flight 256건까지 enqueue 성공 후 producer가 진행하고, 257번째는 대기 없이 실패해 추가 recv 없이 session fault·queue 폐기·reconnect
+- fake socket API는 `SocketWriter` 하나만 호출하고 `VerdictSender`는 frame·deadline metadata enqueue·`SendResult` 계측만 수행
 
 측정 환경이 공식 컨테이너와 다르면 환경 차이를 기록한다. 성능을 측정하지 않고 예상치만 적지 않는다.
 
