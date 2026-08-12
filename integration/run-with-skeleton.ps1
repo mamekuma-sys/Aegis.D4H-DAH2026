@@ -11,7 +11,7 @@
   공식 스켈레톤 루트(=deploy/ 의 부모). 예: C:\path\to\DAH2026_스켈레톤코드
 
 .EXAMPLE
-  pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath C:\Users\me\Downloads\DAH2026_스켈레톤코드
+  pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath C:\path\to\DAH2026_스켈레톤코드
 #>
 param(
     [Parameter(Mandatory = $true)][string]$SkeletonPath,
