@@ -328,7 +328,7 @@ Round 간 상관은 숨은 영속 상태가 아니라 코드·테스트·검토�
 - 새 protocol을 식별하지 못하면 bounded IP/L4 파싱만 수행하고 `ACCEPT`한다.
 - parser가 예외를 내거나 지원되지 않는 packet이면 `pkt_id`를 읽을 수 있는 경우 즉시 `ACCEPT`한다.
 - 새 레이어 분석이 실패해도 이전 레이어의 heartbeat, verdict, 정상 회귀 규칙은 계속 동작한다.
-- 비동기 queue가 가득 차면 분석 이벤트를 버리고 현재 packet verdict를 지연하지 않는다.
+- 비동기 queue는 고정 길이 FIFO와 `put_nowait`을 사용한다. 가득 차면 들어오려는 최신 event를 O(1)로 폐기(drop-newest)하고 기존 순서를 보존하며 현재 packet verdict를 지연하지 않는다.
 - LLM 장애, timeout, quota 소진은 heartbeat, parser, policy, verdict를 막지 않는다.
 - 메모리 압박 시 오래된 correlation state와 advisory를 먼저 제거하고 hot path 상태를 bounded limit 안에서 유지한다.
 - 이미지 build 또는 push가 pull 시각을 놓치면 이전 이미지가 사용되거나 에이전트 없이 시작할 수 있음을 운영 담당자와 팀장에게 즉시 보고한다.
@@ -365,6 +365,7 @@ Verdict 값은 `0x00` ACCEPT, `0x01` DROP이다. `pkt_len`, 실제 payload 길�
 - 에이전트가 없거나 죽으면 Broker는 fail-open으로 모든 패킷을 통과시킨다.
 - VERDICT가 300ms를 넘으면 Broker는 해당 패킷을 DROP한다.
 - Broker의 300ms를 구현 목표로 사용하지 않는다. 설계는 내부 deadline과 여유 시간을 별도로 둔다.
+- 판정 soft cutoff는 PACKET 수신 후 5ms, 내부 send hard cutoff는 200ms, Broker deadline은 300ms다. socket fault timeout 최대 50ms는 정상-path p99 예산이 아니라 blocked send를 탐지하는 별도 상한이다.
 
 ### 8.4 네트워크와 관측 경계
 
@@ -417,20 +418,23 @@ Verdict 값은 `0x00` ACCEPT, `0x01` DROP이다. `pkt_len`, 실제 payload 길�
 ```text
 startup validation
   → AGENT_SOCKET connect/reconnect
-  → independent heartbeat scheduler
+  → independent heartbeat scheduler and single SocketWriter
   → PACKET frame receive and header validation
   → bounded raw IP parser
   → pre-approved deterministic policy
-  → ACCEPT/DROP VERDICT send
+  → ACCEPT/DROP VERDICT enqueue
+  → SocketWriter-only VERDICT/HEARTBEAT send
   → latency record
   → bounded async event enqueue
   → time-window/correlation/advisory/log analysis
 ```
 
-- PACKET receive, VERDICT send, HEARTBEAT scheduling, async analysis의 책임을 분리한다.
-- 동일 socket에 HEARTBEAT와 VERDICT를 쓸 때 message boundary와 write ordering을 보존하는 방식을 정한다.
-- send lock 안에서는 frame packing과 짧은 socket send만 수행한다. parsing, logging, correlation, LLM을 lock 안에서 실행하지 않는다.
-- shutdown과 reconnect 중 중복 heartbeat thread, orphan queue, stale socket이 남지 않게 한다.
+- PACKET receive, verdict decision, HEARTBEAT scheduling, socket send, async analysis의 책임을 분리한다.
+- socket write는 `SocketWriter` 단일 스레드만 수행한다. verdict producer와 heartbeat scheduler는 frame을 만든 뒤 bounded priority queue에 `put_nowait`하고 socket 또는 writer lock을 직접 사용하지 않는다.
+- queue key는 VERDICT `(0, broker_deadline, sequence)`, HEARTBEAT `(1, due_at, sequence)`로 고정해 가장 이른 VERDICT deadline을 모든 HEARTBEAT보다 먼저 보낸다. heartbeat item은 최대 하나로 coalesce한다.
+- writer 상태는 `DISCONNECTED → READY → SENDING → READY|FAULT → DISCONNECTED`와 `STOPPED`로 한정한다. timeout·partial send·socket 오류·로컬 만료는 current session item을 폐기하고 재연결하며 새 session에 verdict를 replay하지 않는다.
+- VERDICT의 `broker_remaining = received_at + 300ms - monotonic_now`, `send_wait = min(50ms, broker_remaining - 100ms)`를 dequeue 직후와 send 직전에 계산한다. `broker_remaining <= 100ms`이면 200ms 내부 hard cutoff로 로컬 폐기·재연결한다.
+- 50ms는 socket fault timeout이고 정상 p99 send 목표가 아니다. shutdown과 reconnect 중 중복 writer·heartbeat thread, orphan queue, stale socket이 남지 않게 한다.
 
 ### 9.4 300ms hot path 예산
 
@@ -438,16 +442,20 @@ startup validation
 
 | 구간 | 초기 목표 |
 |---|---:|
-| frame header validation·unpack | p99 2ms 이하 |
-| bounded IP/L4/application parse | p99 20ms 이하 |
-| deterministic policy·bounded state lookup | p99 20ms 이하 |
-| VERDICT pack·send | p99 8ms 이하 |
-| hot path 합계 | p99 50ms 이하 |
-| 내부 emergency cutoff | PACKET 수신 후 200ms |
-| Broker hard deadline | 300ms 미만 |
+| frame header validation·unpack | p99 50μs 이하 |
+| bounded IP/L4 parse | p99 150μs 이하 |
+| deterministic policy·immutable snapshot lookup | p99 150μs 이하 |
+| VERDICT pack·writer enqueue | p99 50μs 이하 |
+| writer queue·정상 socket send | p99 100μs 이하 |
+| hot path 합계 | p50 150μs 이하, p99 500μs 이하 |
+| 판정 soft cutoff | PACKET 수신 후 5ms — `ACCEPT` enqueue |
+| 내부 send hard cutoff | PACKET 수신 후 200ms — 로컬 폐기·재연결 |
+| Broker deadline | PACKET 수신 후 300ms |
+| socket fault timeout | 최대 50ms — 정상 p99 예산과 별도 |
 
 - 모든 시간은 wall clock이 아니라 monotonic clock으로 측정한다.
-- `pkt_id`를 읽은 뒤 내부 cutoff에 도달하면 안전한 fallback verdict `ACCEPT`를 즉시 시도한다.
+- 정상-path 구성요소 p99 상한 합은 `50+150+150+50+100=500μs`로 선언한 p99 목표를 넘지 않는다.
+- `pkt_id`를 읽은 뒤 5ms soft cutoff에 도달하면 안전한 fallback verdict `ACCEPT`를 즉시 writer에 enqueue한다. 200ms hard cutoff, 300ms Broker deadline, 50ms socket fault timeout을 서로 대체하지 않는다.
 - parsing failure, unknown protocol, async queue full, LLM failure를 이유로 300ms timeout DROP을 유발하지 않는다.
 - 성능 실측이 초기 목표를 충족하지 못하면 rule 또는 parser를 hot path 밖으로 이동한다. 숫자를 문서에서 조용히 완화하지 않는다.
 
@@ -474,7 +482,7 @@ startup validation
 - heartbeat 또는 분석 worker 장애
 - 새 레이어를 아직 식별하지 못한 상태
 
-header가 유효해 `pkt_id`를 알지만 raw IP가 잘렸거나 비정상이면 `ACCEPT`와 비민감 reason code를 반환한다. header 자체가 짧아 `pkt_id`를 알 수 없으면 존재하지 않는 ID로 verdict를 만들지 말고 session 오류로 기록한 뒤 공식 skeleton 관측에 맞춰 reconnect 또는 종료한다.
+header가 유효해 `pkt_id`를 알지만 raw IP가 잘렸거나 비정상이면 `ACCEPT`와 비민감 reason code를 반환한다. `type=0x01` PACKET frame이 11-byte header보다 짧아 `pkt_id`를 알 수 없으면 존재하지 않는 ID로 verdict를 만들지 않고 socket을 닫아 재연결한다. 짧은 frame을 다음 seqpacket과 이어 붙이거나 프로세스를 종료하지 않는다.
 
 ### 9.6 구성요소 경계
 
@@ -483,12 +491,15 @@ header가 유효해 `pkt_id`를 알지만 raw IP가 잘렸거나 비정상이면
 - `RuntimeConfig`: 환경변수 검증과 안전한 기본값
 - `BrokerSession`: Unix socket 연결, reconnect, receive lifecycle
 - `FrameCodec`: PACKET validation과 VERDICT·HEARTBEAT serialization
+- `SocketWriter`: bounded deadline-priority queue와 socket send를 소유하는 단일 writer thread
 - `HeartbeatScheduler`: 약 1초 cadence와 지연 감시
 - `PacketParser`: bounded IP/L4 및 증명된 application parser dispatch
-- `HotPolicy`: pre-approved rule과 bounded read-only state lookup
-- `VerdictSender`: deadline-aware frame send와 latency 측정
+- `HotPolicy`: pre-approved rule과 immutable correlation snapshot의 bounded single read
+- `AnomalyMonitor`: packet-derived metric 집계와 alert publication만 수행하며 runtime policy state는 변경하지 않음
+- `VerdictSender`: deadline-aware frame 생성·writer enqueue와 latency 측정
 - `EventAdapter`: verdict 이후 관측 field를 correlation event로 최소 변환
-- `CorrelationStore`: TTL·capacity가 있는 flow/event state
+- `CorrelationBuilder`: worker 전용 TTL·capacity mutable state와 frozen snapshot 생성
+- `CorrelationSnapshotRef`: worker가 참조 하나를 원자 교체하고 hot path가 lock 없이 한 번 읽는 publication 경계
 - `CausalMatcher`: 관측된 key만 사용하는 비동기 chain match
 - `RiskModel`: 본선 fixture로 보정된 비동기 우선순위
 - `AdvisoryWorker`: redacted feature만 사용하는 optional LLM 조언
@@ -509,6 +520,7 @@ header가 유효해 `pkt_id`를 알지만 raw IP가 잘렸거나 비정상이면
 - `VerdictDecision`: `pkt_id`, ACCEPT/DROP, rule ID, reason code, elapsed time
 - `CorrelationEvent`: redacted observed field, timestamp, flow key, event type, evidence source
 - `CorrelationState`: TTL, last update, bounded counters, matched stages
+- `CorrelationSnapshot`: generation, published/expires monotonic, immutable `FlowKey → frozen score` map; publication 후 변경 금지
 - `AsyncAdvisory`: input feature IDs, recommendation, model ID, token usage, expiration; runtime authority 없음
 
 모든 collection에 max capacity와 eviction 정책을 둔다. Round 종료 후 상태가 사라지는 것을 정상으로 취급하고 disk persistence를 요구하지 않는다.
@@ -555,18 +567,22 @@ hot policy의 rule 우선순위, conflict resolution, expiry, rollback을 설계
 
 phase 또는 port 전체를 blanket DROP하는 rule을 금지한다. 서비스 정상성을 검사하지 않은 allowlist/denylist를 도입하지 않는다.
 
+`raw_drop_rate`, `baseline_violation_rate`, `rule_concentration`, `promotion_cohort_conflict`를 포함한 packet-derived 지표는 organizer-guaranteed SLA 또는 정상-health 신호가 제공되기 전까지 metric·경보·Break 분석 전용이다. 공격자는 signature 반복 자극, 정상 형태 replay, profile 경계 탐색으로 이 값을 오염할 수 있으므로 Round 중 `SHADOW`·`CANARY`·`ACTIVE`, canary 비율, rule scope, threshold, PolicyBundle을 자동 변경하지 않는다. rollback·승격은 Break에서 방어 담당자가 공식 SLA 결과와 fixture를 대조하고 팀장 이경준이 승인한 새 bundle을 다음 image에 넣을 때만 발생한다.
+
 ### 9.10 온라인 상관분석
 
 예선 Correlation Engine은 verdict 이후 경로로 재설계한다.
 
 - current packet의 verdict를 기다리게 하지 않는다.
-- queue는 bounded이며 full이면 newest 또는 lowest-priority analysis event를 버리는 정책을 명시한다.
-- state는 `monotonic timestamp + TTL + max keys + per-key cap`으로 제한한다.
+- queue는 고정 길이 FIFO이며 producer는 `put_nowait`만 사용한다. full이면 들어오려는 newest event를 O(1)로 폐기하고 기존 queue를 scan·재정렬하지 않는다.
+- 단일 correlation worker가 `monotonic timestamp + TTL + max keys + per-key cap` mutable builder를 독점한다.
 - out-of-order, duplicate, late event 처리 규칙을 정한다.
 - session_id, vehicle_id, mission phase는 실제 parser가 생성한 경우에만 correlation key로 사용한다.
 - S4 `S4ChainStage` matcher는 관측된 event와 key만 사용하며 보고서 15→52→131→196→238 점수를 복사하지 않는다.
 - correlation 결과는 현재 packet을 소급 차단할 수 없다.
-- 이후 packet의 hot policy가 correlation state를 읽으려면 lookup이 bounded이고 rule이 사전 승인돼 있어야 한다.
+- worker는 builder를 alias 없는 private `dict`로 복사해 `types.MappingProxyType`으로 감싸고, `@dataclass(frozen=True)`·tuple entry만 넣은 새 snapshot을 만든 뒤 `current_snapshot = next_snapshot` 참조 하나를 원자적으로 교체한다. builder와 snapshot 내부 값은 공유하지 않는다.
+- hot policy는 함수 시작에서 `snapshot = current_snapshot`을 한 번만 읽고 같은 generation에서 최대 한 번의 bounded key lookup만 한다. writer lock 또는 publication lock을 획득하거나 global reference를 다시 읽지 않는다.
+- missing, stale, key miss, generation 오류 snapshot은 즉시 `ACCEPT`한다. 유효 score도 사전 승인된 rule만 사용한다.
 - online state만으로 새 executable rule을 생성하지 않는다.
 
 ### 9.11 LLM 사용 경계
@@ -603,6 +619,8 @@ LLM은 선택적 비동기 조언자다.
 - SIGTERM과 Round 종료
 
 retry에는 bounded backoff와 shutdown interrupt를 둔다. reconnect 중 오래된 packet verdict를 새 session으로 보내지 않는다.
+
+short-frame 정책은 결정되어 있다. `type=0x01`이고 총 길이가 11 byte 미만이면 `pkt_id`를 만들 수 없으므로 verdict 없이 socket close·reconnect한다. 11-byte header가 완전하고 선언 길이만 불일치하면 해당 `pkt_id`에 `ACCEPT`한다.
 
 ### 9.13 향후 파일 구조
 
@@ -654,7 +672,8 @@ agents/defender/
 - 제공된 PACKET fixture에서 type, `pkt_id`, `pkt_len`, `raw_ip`를 big-endian으로 정확히 해석
 - ACCEPT·DROP VERDICT byte가 공식 fixture와 일치
 - HEARTBEAT가 정확히 1 byte `0x05`
-- unknown type, short header, length mismatch, trailing bytes 처리
+- unknown type과 trailing bytes 처리
+- `type=0x01`, 총 길이 `<11` short header는 verdict 없이 socket close·reconnect하고, 완전한 header의 length mismatch는 해당 `pkt_id`에 ACCEPT
 - `SOCK_SEQPACKET` message boundary 보존
 
 #### heartbeat와 session
@@ -663,6 +682,9 @@ agents/defender/
 - heartbeat gap이 3초에 접근하기 전에 metric·failure handling 작동
 - connect race, disconnect, reconnect, shutdown
 - reconnect 후 worker와 heartbeat가 하나씩만 존재
+- fake clock으로 heartbeat와 VERDICT를 동시에 enqueue해도 single writer만 fake socket에 쓰고 VERDICT가 먼저 전송됨
+- writer를 멈춘 채 HEARTBEAT와 deadline이 다른 VERDICT 둘을 넣은 뒤 재개하면 earliest VERDICT, later VERDICT, HEARTBEAT 순서여서 priority inversion이 없음
+- blocked fake-socket send는 `min(50ms, broker_remaining-100ms)` 안에 timeout되고 session queue 폐기·reconnect되며 verdict를 새 session에 replay하지 않음
 
 #### parser와 policy
 
@@ -678,7 +700,8 @@ agents/defender/
 - monotonic timing 사용
 - 최소 1, 100, 500, 1000 packet/s load profile 측정
 - hot path p50, p95, p99, max 기록
-- 목표 환경에서 p99 50ms 이하, max 200ms 미만, 300ms 초과 verdict 0건
+- 목표 환경에서 p50 150μs 이하, p99 500μs 이하, 300ms 초과 verdict 0건
+- component p99 합이 500μs 이하이고 5ms soft cutoff, 200ms internal hard cutoff, 300ms Broker deadline, 50ms socket fault timeout이 fake clock에서 독립적으로 동작
 - queue가 가득 차거나 LLM이 30초 멈춰도 hot path latency 기준 유지
 - heartbeat와 verdict가 같은 socket writer를 사용할 때 starvation 없음
 
@@ -688,7 +711,9 @@ agents/defender/
 
 - TTL expiry, max key eviction, per-key cap
 - duplicate, late, out-of-order event
-- queue overflow가 verdict를 지연하지 않음
+- queue saturation에서 newest event 하나만 O(1) drop되고 기존 FIFO 순서와 verdict latency가 변하지 않음
+- worker가 snapshot을 연속 publish하는 동안 hot path read가 한 generation의 완전한 immutable 값만 보며 missing·stale snapshot은 ACCEPT
+- snapshot read가 socket writer lock이나 publication lock을 획득하지 않음
 - S4ChainStage가 FinalsPhase와 섞이지 않음
 - 관측되지 않은 session_id·vehicle_id·MissionState를 요구하지 않음
 - synthetic report score를 threshold로 사용하지 않음
@@ -701,6 +726,8 @@ agents/defender/
 - FinalsPhase 4에서 L1~L4 정상 회귀와 rule 회귀가 모두 실행
 - UAV fixture에 맞춘 rule이 근거 없이 UGV fixture에 적용되지 않음
 - 새 rule 활성화 전후 false positive count와 rollback 조건 기록
+- attack-like baseline traffic으로 `raw_drop_rate`, `baseline_violation_rate`, `rule_concentration`, `promotion_cohort_conflict`를 모두 올려도 경보만 발생하고 runtime policy state는 불변
+- packet-derived metric으로 Round 중 rollback·승격·전체 관찰 모드 전환이 불가능하며 Break 사람 승인 bundle에서만 상태가 변경됨
 
 #### 비동기 LLM·로그·보안
 
