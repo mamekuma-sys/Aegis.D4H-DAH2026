@@ -313,7 +313,7 @@ Round 간 상관은 에이전트의 숨은 영속 상태가 아니라 코드·�
 
 - 상대 방어망 요청: 공격 에이전트당 초당 10회, 버스트 20
 - flag 제출: 모든 rolling 60초에서 최대 30회
-- HTTP 429: 재시도 간격을 두고 동일 요청의 즉시 반복을 금지
+- HTTP 429: 유효한 `Retry-After`가 Round 잔여 시간을 넘으면 현 Round에서 재시도하지 않음. header 누락·무효 시만 상한 지수 backoff
 - 제출 결과: `accepted`, `own_team`, `duplicate`, `rejected`, `closed`를 구분
 - 동일 flag의 불필요한 재제출을 방지
 
@@ -469,7 +469,7 @@ S1~S5마다 다음을 정의한다.
 3. 원문을 로그에 남기지 않고 해시로 중복 확인
 4. 공유 monotonic sliding window로 모든 rolling 60초에서 30회 이하만 제출
 5. `accepted`, `own_team`, `duplicate`, `rejected`, `closed` 결과 저장
-6. HTTP 429에는 backoff 적용
+6. HTTP 429에는 유효한 `Retry-After`를 준수하고, Round 잔여 시간을 넘으면 현 Round 재시도 중단. header 누락·무효 시만 상한 지수 backoff
 7. 동일 flag의 불필요한 재제출 금지
 
 라운드 종료 시 상태가 폐기되는 점을 명시한다.
@@ -545,7 +545,7 @@ agents/attacker/tests/
 - 새 레이어가 열려도 이전 레이어가 요청 예산에서 굶지 않음
 - UAV profile을 근거 없이 UGV에 재사용하지 않음
 - 초당 10회·버스트 20 제한
-- 제출 rolling 60초 최대 30회 제한과 429 backoff
+- 제출 rolling 60초 최대 30회 제한, 유효한 `Retry-After` 준수, 잔여 Round 초과 시 미재시도
 - 관측 증거가 없는 가설 실행 거부
 - 허용 범위 밖 대상 실행 거부
 - 도구 timeout과 부분 실패 격리

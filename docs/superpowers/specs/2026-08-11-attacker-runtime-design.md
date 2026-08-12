@@ -258,7 +258,7 @@ S1~S5마다 (활성화 증거, 선행조건, 성공 증거, 중단 조건, 재�
 ③ 원문을 Round 비밀 저장소에 보관 · 해시로 중복 확인 (이미 제출·확정된 flag면 건너뜀)
 ④ 어떤 연속 60초 구간에서도 최대 30회만 제출 (POST SUBMIT_URL, {flag, token})
 ⑤ 결과 저장: accepted | own_team | duplicate | rejected | closed
-⑥ HTTP 429 → 유효한 `Retry-After` 우선, 그 외에는 상한이 있는 지수 backoff
+⑥ HTTP 429 → 유효한 `Retry-After` 우선(잔여 시간 초과 시 현 Round 재시도 안 함), header 누락·무효 시만 상한 지수 backoff
 ⑦ 동일 flag 불필요한 재제출 금지
 ```
 
@@ -274,9 +274,10 @@ S1~S5마다 (활성화 증거, 선행조건, 성공 증거, 중단 조건, 재�
 재제출을 막는다. 제출 limiter는 공유 monotonic timestamp deque에 전송 시각을 기록하고,
 `now - 60s` 이전 기록만 제거한 뒤 남은 항목이 30개이면 가장 오래된 기록이 60초 창을 벗어날
 때까지 대기한다. 확인과 추가는 원자적으로 하며 burst capacity를 두지 않는다. `Retry-After`가
-delta-seconds 또는 HTTP-date로 유효하게 해석되고 Round 잔여 시간 내인 경우 그 값을 적용하고,
-그 외에는 Round 안에서 상한이 있는 지수
-backoff를 적용한다. 라운드 종료 시 flag·세션 원문, handle, 중복 집합, deque를 폐기한다.
+delta-seconds 또는 HTTP-date로 유효하게 해석되면 그 시각보다 먼저 재시도하지 않는다. 지정된
+대기가 Round 잔여 시간을 넘으면 해당 Round에서는 재시도하지 않는다. `Retry-After` header가 없거나
+무효할 때만 Round 안에서 상한이 있는 지수 backoff를 적용한다. 라운드 종료 시 flag·세션 원문,
+handle, 중복 집합, deque를 폐기한다.
 
 ## 9.12 LLM 사용 경계
 
@@ -299,7 +300,7 @@ backoff를 적용한다. 라운드 종료 시 flag·세션 원문, handle, 중�
 | 빈 대상 목록 | inert, 주기적 재확인 |
 | 개별 표적 timeout·연결 실패 | 관측으로 기록, 해당 표적만 건너뜀, backoff 후 재시도 |
 | 도구 실패 | `ToolResult(fail)`로 격리, 다른 표적 계속 |
-| 제출 서버 429·일시 오류 | 유효한 `Retry-After` 또는 상한 지수 backoff, 동일 요청 즉시 반복 금지 |
+| 제출 서버 429·일시 오류 | 유효한 `Retry-After`를 준수하되 Round 잔여 시간 초과 시 현 Round 재시도 안 함. header 누락·무효 시만 상한 지수 backoff |
 | LiteLLM 장애·예산 소진 | LLM 조언만 중단. 관측·범위 검사·제출은 계속 |
 | 라운드 종료·종료 신호 | 임시 상태 폐기 후 정상 종료 |
 
@@ -350,7 +351,7 @@ agents/attacker/tests/
 | 누적 레이어 예산 | 새 레이어 열려도 이전 레이어 굶지 않음 | 이전 레이어 예산 0 |
 | UAV→UGV | 근거 없이 UAV profile 재사용 안 함 | 무근거 재사용 |
 | rate limit | 초당 10·버스트 20 준수 | 초과 요청 |
-| 제출 | fake monotonic clock으로 60초 경계·동시성을 검증해 모든 rolling 60초 ≤30, 429 규칙 준수 | 31번째 전송·burst·즉시 반복 |
+| 제출 | fake monotonic clock으로 60초 경계·동시성을 검증해 rolling 60초 ≤30. 유효한 `Retry-After` 준수, 잔여 시간 초과 시 현 Round 미재시도 | 31번째 전송·burst·유효한 header를 지수 backoff로 대체 |
 | 가설·계획 binding | 현 Round·endpoint의 신선한 증거와 precondition이 있음 | 증거 없음·TTL 만료·Round/endpoint 불일치 |
 | typed egress | capability별 allowlist, proxy 비활성, redirect 관측 반환 | host·port 변경·capability 교차·자동 redirect |
 | 부작용 | 기본 읽기 전용, 제한 변경은 명시적 등급·precondition으로만 허용 | 등급 없는 변경·물리·가용성·지속성·파괴 작업 |
