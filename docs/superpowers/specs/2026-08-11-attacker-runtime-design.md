@@ -10,6 +10,9 @@
 검증된 플레이북을 유지하면서 새 레이어에 적응한다. 설계는 공식 스켈레톤에서 관측 가능한 입력과
 동작, 본선 운영세칙, 당일 진행 안내만을 근거로 한다.
 
+이 문서가 공격 런타임 구현의 **단일 규범적 권위**다. `handoff.md`는 작업 배경과 예전
+점검표를 남긴 비규범적 자료이며, 두 문서가 다르면 이 설계와 상위 소스 우선순위를 따른다.
+
 ## 소스 우선순위
 
 사실이 충돌하면 다음 순서를 적용한다. (1) 최신 본선 규칙·같은 날 운영사무국 지침 → (2) 공식
@@ -66,7 +69,7 @@
 | 접근 허용 범위(상대 진입점·LiteLLM·제출) | 해당없음 | 운영세칙 제8·11조, 제24조 2호 | §9.10 실행 직전 범위 재검증 |
 | 취약점 ↔ flag 비1:1, 경로 복수 | 해당없음 | 운영세칙 제11조 ③ | §9.8 하드코딩 순서 금지, §9.11 다경로 |
 | 상대 방어망 초당 10·버스트 20 | 해당없음 | 운영세칙 제12조 ③, agent-guide | §9.5 전역 rate limiter |
-| flag 제출 분당 30·429 | 해당없음 | 운영세칙 제10조 ③, agent-guide | §9.5 제출 limiter, §9.11 backoff |
+| flag 제출 rolling 60초 최대 30·429 | 해당없음 | 운영세칙 제10조 ③, agent-guide | §9.5 제출 limiter, §9.11 backoff |
 | 제출 결과 5종 | 해당없음 | 운영세칙 제10조 ②, agent-guide | §9.11 결과 상태표 |
 | 라운드마다 컨테이너·flag 초기화 | p13, p39(불변규칙) | 운영세칙 제6·15조, 당일안내 §2 | §9.6 라운드 한정 상태, §7.6 |
 | FinalsPhase 1~4, 14 Round(2·4·4·4), 누적 개방 | 해당없음 | 운영세칙 제4·5조, 당일안내 §1 | §7.2, §9.9 |
@@ -132,15 +135,17 @@ A5(가용성 공격)는 금지행위다. 우리 공격은 flag 획득 목적에 
 |---|---|---|---|
 | 설정 검증기 | 환경변수 | 검증된 설정 또는 종료 | 없음 |
 | 대상 열거기·공정 스케줄러 | `TARGETS`,`PORTS` | `Endpoint` 큐, 다음 대상 선택 | 설정 검증기, rate limiter |
-| 전역/제출 rate limiter | 요청 시각 | 허용/대기(backoff) | 없음(토큰 버킷) |
-| 관측 수집기 | `Endpoint` | 원시 응답 | rate limiter |
+| 전역/제출 rate limiter | monotonic 요청 시각 | 허용/대기(backoff) | 전역은 토큰 버킷, 제출은 공유 60초 sliding window |
+| typed egress gateway | capability, endpoint, 구조화된 요청 | 허용된 네트워크 호출 또는 거부 | 설정 검증기, rate limiter |
+| 관측 수집기 | `Endpoint` | 원시 응답 | `ATTACK_TARGET` egress, rate limiter |
 | Profile 분류기·관측 저장소 | 원시 응답 | `ObservedServiceProfile`, 증거 | 관측 수집기 |
 | FinalsPhase 우선순위 정책 | 관측 저장소, 누적 레이어 | 표적별 예산 배분·우선순위 힌트 | 관측 저장소 |
 | S1~S5 가설 플래너 | Profile, 증거 | 활성 가설·중단 이유 | 관측 저장소 |
 | 허용 도구 레지스트리·실행 어댑터 | 계획 | 도구 실행 결과(성공/실패/timeout) | rate limiter, 범위 검사 |
 | flag 후보 추출기·중복 저장소 | 실행 결과 | flag 후보(해시) | 없음 |
-| flag 제출 클라이언트 | flag 후보 | 제출 결과 상태 | 제출 rate limiter |
-| LLM 조언 경계·라운드 예산 관리자 | 관측 요약 | 우선순위 조언(비실행) | 예산 관리자 |
+| flag 제출 클라이언트 | flag 후보 | 제출 결과 상태 | `SUBMIT` egress, 제출 rate limiter, 비밀 저장소 |
+| LLM 조언 경계·라운드 예산 관리자 | 관측 요약 | 우선순위 조언(비실행) | `LLM` egress, 예산 관리자 |
+| Round 비밀 저장소 | 비밀 원문 | TTL이 있는 비직렬화 handle | Round 시계·종료 신호 |
 | 구조화 로그 기록기 | 이벤트 | 비밀 제거 로그 | 없음 |
 | 라운드 수명주기 오케스트레이터 | 전 구성요소 | 라운드 진행 | 전부 |
 | Round 결과 요약기 | 관측·결과 | 비밀 없는 산출물 | 로그 기록기 |
@@ -149,22 +154,35 @@ A5(가용성 공격)는 금지행위다. 우리 공격은 flag 획득 목적에 
 
 코드는 작성하지 않고 타입의 필드와 불변조건만 정의한다.
 
-- `Endpoint`: `{host, port}`. 불변: `host∈TARGETS`, `port∈PORTS`, `host≠자기 팀`.
-- `ObservedServiceProfile`: `{endpoint, banner_fingerprint, status_codes, header_hints, error_signatures,
+- `Endpoint`: `{endpoint_id, host, port}`. 불변: `endpoint_id`는 검증된 host·port 쌍에 대해
+  Round 내에서 안정적이고, `host∈TARGETS`, `port∈PORTS`, `host≠자기 팀`.
+- `ObservedServiceProfile`: `{endpoint, banner_fingerprint, status_codes, redacted_header_hints, error_signatures,
   latency_band, evidence[]}`. 선택적 `FinalsPhaseHint{finals_phase, layer, reason, evidence_ref}` —
   **증거 참조가 있을 때만** 채움.
 - `S4ChainStage`(1~5): 예선 S4 체인 국면. `FinalsPhase` 번호와 대응한다고 가정하지 않는다.
 - `MissionState`: 예선 임무 상태(이륙 전·순항 등). **수신 데이터 파서로 존재가 증명될 때만** 사용.
   본선 HTTP 표적에서 증명되기 전에는 인스턴스화하지 않는다.
-- `Observation`: `{endpoint, request_fingerprint, status, header_hints, body_fingerprint, latency, evidence_ref}`.
+- `EvidenceRef`: `{evidence_id, round_id, endpoint_id, observed_at_monotonic, expires_at_monotonic,
+  observation_fingerprint}`. 불변: 생성 Round와 endpoint 밖에서 재사용하지 않고 TTL이 지나면 무효다.
+- `Observation`: `{round_id, endpoint, request_fingerprint, status, redacted_header_hints, body_fingerprint, latency,
+  evidence_ref}`.
 - `ScenarioHypothesis`: `{scenario∈{S1..S5}, activation_evidence[], preconditions[], stop_reason?}`.
-- `ExecutionPlan`: `{tool, target, args, expected_cost, timeout, budget_charge}`.
+- `ExecutionPlan`: `{plan_id, round_id, endpoint_id, tool, capability, args, evidence_refs[],
+  created_at_monotonic, expires_at_monotonic, preconditions[], side_effect_class, expected_cost, timeout,
+  budget_charge}`. 모든 `evidence_refs`는 해당 `round_id`·`endpoint_id`와 일치해야 하며 `args`는
+  비밀 원문 대신 `SecretHandle`만 담는다.
 - `ToolResult`: `{plan, outcome∈{success,fail,timeout}, observation}`.
-- `FlagCandidate`: `{hash, format_valid, submit_state?}`. **원문을 장기 식별자로 쓰지 않는다.**
+- `SecretHandle`: `{secret_id, round_id, kind, expires_at_monotonic}`. 비직렬화·비로그 타입이며
+  `kind∈{flag,session,submit_token,llm_key}`이다. Round 종료·TTL 만료 시 원문과 handle을 즉시 폐기한다.
+- `FlagCandidate`: `{hash, secret_handle, format_valid, submit_state?}`. **원문을 장기 식별자로 쓰지 않는다.**
 - `RoundBudget`: `{request_count, submit_count, llm_calls, llm_tokens}`.
 
-불변조건: 본문·응답·flag 원문은 로그·식별자로 남기지 않고 단방향 해시 또는 비민감 fingerprint를
-사용한다(운영세칙 제23·24조 증빙·키 보호). 캐시·중복 집합·관측 이력은 **라운드 한정 임시 상태**다.
+불변조건: flag·세션·토큰·키 원문은 Round 비밀 저장소 메모리에만 존재한다. 계획·증거·로그·보고서·
+LLM 프롬프트에는 handle, 단방향 해시, 비민감 fingerprint 또는 완전 마스크 값만 보낸다. 실행
+어댑터는 필요한 세션 handle만 일시적으로 해석하고, 제출 클라이언트만 flag·`SUBMIT_TOKEN` 원문을
+소비한다. 관측 수집기의 원시 응답 버퍼는 비밀 경계 안의 일시 메모리로 다루고, flag·세션을
+추출해 저장소로 옮긴 직후 영속 전에 마스크하거나 폐기한다. 캐시·중복 집합·관측 이력은
+**Round 한정 임시 상태**다.
 
 ## 9.7 관측 전략
 
@@ -213,8 +231,19 @@ S1~S5마다 (활성화 증거, 선행조건, 성공 증거, 중단 조건, 재�
 ## 9.10 실행 안전 경계
 
 - 도구는 (이름, 입력 스키마, 허용 대상, 예상 비용, timeout)이 선언된 **allowlist**로만 실행한다.
-- 실행 직전에 대상이 `TARGETS × PORTS`에 포함되는지, 상대 진입점·제출 서버·LiteLLM 범위인지
-  재검증한다(운영세칙 제11·24조).
+- egress는 `ATTACK_TARGET`, `SUBMIT`, `LLM` capability로 분리한다. 각 capability는 설정 검증 시
+  확정한 endpoint allowlist와 전용 인증 handle만 쓰며 다른 capability의 URL·인증을 재사용하지 않는다.
+- 환경 프록시는 비활성화한다. HTTP 리다이렉트를 자동으로 따라가지 않고 관측 결과로 반환한다.
+  후속 요청은 새 `ExecutionPlan`과 신선한 증거를 요구하며, host·port 변경이나 capability 교차는
+  거부한다.
+- 실행 직전에 capability, `round_id`, `endpoint_id`, 대상 allowlist, 예산, precondition, 계획
+  TTL, 모든 `evidence_refs`의 binding·TTL을 재검증한다. 증거가 없거나 오래됐거나 다른
+  Round·endpoint에 묶인 계획은 네트워크 호출 전에 거부한다.
+- `side_effect_class`의 기본값은 `READ_ONLY`다. 상태 변경 요청은
+  `BOUNDED_FLAG_DIRECTED_MUTATION`으로 명시되고, flag 획득에 필요한 유한 작업·변경 범위·안전
+  precondition·중단 조건이 모두 구조화된 allowlist와 일치할 때만 허용한다.
+- 물리 작동, 가용성 훼손, 지속성 확보, 파괴, 회복 불가, 범위 불명 작업은 항상
+  `DISALLOWED`로 거부한다. LLM 추천은 안전 등급이나 precondition을 완화할 수 없다.
 - 셸 문자열 연결보다 구조화된 인자 전달을 우선한다.
 - 병렬 실행도 전역 초당 10·버스트 20 제한을 공유한다.
 - 파괴적 동작·지속성 확보·범위 밖 이동·rate limit 우회를 금지한다. SLA 훼손(정상 서비스 방해)은
@@ -226,10 +255,10 @@ S1~S5마다 (활성화 증거, 선행조건, 성공 증거, 중단 조건, 재�
 ```text
 ① 응답에서 flag 후보 발견 (FLAG{...} 정규식)
 ② 형식 검증 (형식 불일치 폐기)
-③ 원문 로그 미기록 · 해시로 중복 확인 (이미 제출·확정된 flag면 건너뜀)
-④ 분당 30회 제한 안에서 제출 (POST SUBMIT_URL, {flag, token})
+③ 원문을 Round 비밀 저장소에 보관 · 해시로 중복 확인 (이미 제출·확정된 flag면 건너뜀)
+④ 어떤 연속 60초 구간에서도 최대 30회만 제출 (POST SUBMIT_URL, {flag, token})
 ⑤ 결과 저장: accepted | own_team | duplicate | rejected | closed
-⑥ HTTP 429 → backoff (동일 요청 즉시 반복 금지)
+⑥ HTTP 429 → 유효한 `Retry-After` 우선, 그 외에는 상한이 있는 지수 backoff
 ⑦ 동일 flag 불필요한 재제출 금지
 ```
 
@@ -242,7 +271,12 @@ S1~S5마다 (활성화 증거, 선행조건, 성공 증거, 중단 조건, 재�
 | `closed` | 라운드 종료 후 | 제출 중단, 다음 라운드 대기 |
 
 한 flag의 경로가 여럿일 수 있으므로(제11조 ③) 서로 다른 경로에서 같은 flag를 얻어도 해시 중복 검사로
-재제출을 막는다. 라운드 종료 시 모든 flag·세션·중복 집합 상태는 폐기된다.
+재제출을 막는다. 제출 limiter는 공유 monotonic timestamp deque에 전송 시각을 기록하고,
+`now - 60s` 이전 기록만 제거한 뒤 남은 항목이 30개이면 가장 오래된 기록이 60초 창을 벗어날
+때까지 대기한다. 확인과 추가는 원자적으로 하며 burst capacity를 두지 않는다. `Retry-After`가
+delta-seconds 또는 HTTP-date로 유효하게 해석되고 Round 잔여 시간 내인 경우 그 값을 적용하고,
+그 외에는 Round 안에서 상한이 있는 지수
+backoff를 적용한다. 라운드 종료 시 flag·세션 원문, handle, 중복 집합, deque를 폐기한다.
 
 ## 9.12 LLM 사용 경계
 
@@ -253,7 +287,8 @@ S1~S5마다 (활성화 증거, 선행조건, 성공 증거, 중단 조건, 재�
   (`litellm-gw/config.yaml`). Responses 타입 모델도 `/v1/chat/completions`로 호출한다.
 - 라운드별 LLM 호출 수·토큰 예산·사용 목적을 기록한다(운영세칙 제9·23조 증빙, 동점 시 토큰 비용
   제22조). 예산 소진 시 결정론 경로는 계속 동작한다.
-- 프롬프트·로그에 `SUBMIT_TOKEN`·`LLM_API_KEY`·flag 원문을 넣지 않는다.
+- 프롬프트·로그에 `SUBMIT_TOKEN`·`LLM_API_KEY`·flag·세션 원문을 넣지 않는다. LLM에는
+  비민감 fingerprint·마스크 요약만 전달한다.
 - 예선 합성 성능 수치(P/R/FPR, 위험도 점수)를 본선 예상 성능으로 제시하지 않는다(예선 p12·p46·p48).
 
 ## 9.13 오류 처리와 종료
@@ -264,7 +299,7 @@ S1~S5마다 (활성화 증거, 선행조건, 성공 증거, 중단 조건, 재�
 | 빈 대상 목록 | inert, 주기적 재확인 |
 | 개별 표적 timeout·연결 실패 | 관측으로 기록, 해당 표적만 건너뜀, backoff 후 재시도 |
 | 도구 실패 | `ToolResult(fail)`로 격리, 다른 표적 계속 |
-| 제출 서버 429·일시 오류 | backoff, 동일 요청 즉시 반복 금지 |
+| 제출 서버 429·일시 오류 | 유효한 `Retry-After` 또는 상한 지수 backoff, 동일 요청 즉시 반복 금지 |
 | LiteLLM 장애·예산 소진 | LLM 조언만 중단. 관측·범위 검사·제출은 계속 |
 | 라운드 종료·종료 신호 | 임시 상태 폐기 후 정상 종료 |
 
@@ -278,7 +313,7 @@ S1~S5마다 (활성화 증거, 선행조건, 성공 증거, 중단 조건, 재�
 agents/attacker/src/aegis_attacker/
 ├─ config.py         # 환경변수 검증, 설정 타입
 ├─ models.py         # Endpoint·ObservedServiceProfile·Observation·Hypothesis·FlagCandidate 등
-├─ rate_limit.py     # 전역(10/s·burst20)·제출(30/min) 토큰버킷
+├─ rate_limit.py     # 전역 10/s·burst20 토큰 버킷, 제출 공유 60초 sliding window
 ├─ observation.py    # 관측 수집·정규화
 ├─ profiles.py       # ObservedServiceProfile 분류, FinalsPhaseHint
 ├─ phase_policy.py   # 누적 레이어 예산 배분·우선순위 힌트
@@ -315,13 +350,16 @@ agents/attacker/tests/
 | 누적 레이어 예산 | 새 레이어 열려도 이전 레이어 굶지 않음 | 이전 레이어 예산 0 |
 | UAV→UGV | 근거 없이 UAV profile 재사용 안 함 | 무근거 재사용 |
 | rate limit | 초당 10·버스트 20 준수 | 초과 요청 |
-| 제출 | 분당 30 준수, 429 backoff | 초과·즉시 반복 |
-| 가설 | 관측 증거 없는 가설 거부 | 무근거 실행 |
+| 제출 | fake monotonic clock으로 60초 경계·동시성을 검증해 모든 rolling 60초 ≤30, 429 규칙 준수 | 31번째 전송·burst·즉시 반복 |
+| 가설·계획 binding | 현 Round·endpoint의 신선한 증거와 precondition이 있음 | 증거 없음·TTL 만료·Round/endpoint 불일치 |
+| typed egress | capability별 allowlist, proxy 비활성, redirect 관측 반환 | host·port 변경·capability 교차·자동 redirect |
+| 부작용 | 기본 읽기 전용, 제한 변경은 명시적 등급·precondition으로만 허용 | 등급 없는 변경·물리·가용성·지속성·파괴 작업 |
 | 범위 | 허용 밖 대상 실행 거부 | 범위 밖 요청 |
 | 도구 | timeout·부분 실패 격리 | 전체 중단 |
 | flag | 중복 제출 방지, 5종 결과 처리 | 재제출·미처리 |
 | LLM | 장애·소진 시 결정론 경로 유지 | 결정론 경로 중단 |
-| 로그 | 토큰·키·flag 원문 제거 | 비밀 노출 |
+| 비밀 수명주기 | Round 메모리에만 보관, handle 사용, TTL·종료 폐기 | 직렬화·TTL 이후 잔존·LLM 원문 전달 |
+| 로그 | 토큰·키·flag·세션 원문 제거 | 비밀 노출 |
 | Round 요약 | 비밀·상대 팀 값 제거 | 비밀 포함 |
 | 라운드 종료 | 임시 상태 폐기 | 상태 잔존 |
 
@@ -434,7 +472,7 @@ Adaptation Loop(p40) 개념은 이렇게 **오프라인 이미지 개선 루프*
 
 ### 요청·제출 제한
 - 상대 방어망: 공격 에이전트당 초당 10회·버스트 20(제12조).
-- flag 제출: 분당 30회, 초과 시 429(제10조).
+- flag 제출: 모든 rolling 60초에서 최대 30회, 초과 시 429(제10조).
 - 제출 결과 `accepted`/`own_team`/`duplicate`/`rejected`/`closed` 구분, 동일 flag 불필요 재제출 방지.
 
 ### 네트워크·상태
