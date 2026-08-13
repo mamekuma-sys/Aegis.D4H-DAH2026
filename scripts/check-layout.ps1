@@ -70,12 +70,18 @@ $forbiddenHomePatterns = @(
 )
 
 $pathLeaks = @()
-$trackedFiles = git -C $repoRoot ls-files
+$trackedFiles = git -C $repoRoot -c core.quotePath=false ls-files
 $forbiddenTrackedExtensions = @('.pdf', '.zip', '.tar', '.gz', '.pcap', '.pcapng')
+$forbiddenTrackedBasenames = @(
+    'DAH2026_본선_당일_진행_안내.md',
+    'DAH2026_스켈레톤코드_상세_설명.md'
+)
 $trackedArtifacts = @()
 foreach ($relativePath in $trackedFiles) {
     $extension = [System.IO.Path]::GetExtension($relativePath).ToLowerInvariant()
-    if ($forbiddenTrackedExtensions -contains $extension) {
+    $basename = [System.IO.Path]::GetFileName($relativePath)
+    if (($forbiddenTrackedExtensions -contains $extension) -or
+        ($forbiddenTrackedBasenames -contains $basename)) {
         $trackedArtifacts += $relativePath
     }
 }
