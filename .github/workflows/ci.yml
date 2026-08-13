@@ -21,3 +21,7 @@ jobs:
       - name: Test external skeleton validator
         shell: pwsh
         run: ./scripts/tests/test-validate-skeleton.ps1
+
+      - name: Test attacker Compose override contract
+        shell: pwsh
+        run: ./scripts/tests/test-compose-agents-override.ps1

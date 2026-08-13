@@ -3,6 +3,8 @@
 공식 스켈레톤은 이 저장소에 포함하지 않습니다.
 
 > 공격 이미지 빌드·라이브 스모크·Registry 배포 절차는 `integration/attacker-deploy.md`(배포 담당자용 런북)를 참조합니다.
+>
+> 여러 Compose 파일을 `-f`로 병합하면 상대경로는 override 파일이 아니라 첫 번째 Compose 파일 기준으로 해석됩니다. `compose.agents.yml`은 저장소 상대경로를 쓰지 않고, `run-with-skeleton.ps1`이 `AEGIS_ATTACKER_CONTEXT`에 저장소 `agents/attacker` 절대경로를 넣어 주입합니다. 개인 절대경로는 Git에 기록하지 않습니다.
 
 ## 현재 가능한 검사
 
