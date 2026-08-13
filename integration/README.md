@@ -2,6 +2,8 @@
 
 공식 스켈레톤은 이 저장소에 포함하지 않습니다.
 
+> 공격 이미지 빌드·라이브 스모크·Registry 배포 절차는 `integration/attacker-deploy.md`(배포 담당자용 런북)를 참조합니다.
+
 ## 현재 가능한 검사
 
 ```powershell
