@@ -1,19 +1,16 @@
-# 방어 에이전트 이미지 — **초안. Docker 담당자와 팀장 이경준의 검토가 필요하다.**
-#
-# 설계 §14: "실제 dependency와 entrypoint는 Docker 담당자와 검토하되 Dockerfile은
-# 방어 담당자가 단독 확정하지 않는다." 이 파일은 §17.1의 인계 항목(실행 명령,
-# 환경변수, 런타임 의존성, socket mount 요구사항)을 구체적인 형태로 전달하기 위한
-# 초안이며, 확정 권한은 Docker 담당자에게 있다.
-#
-# 표준 라이브러리 전용 — pip install 없음(requirements.txt 참조).
-# 이미지 시작 시간이 Round 시간에 포함되므로 시작 경로를 짧게 유지한다.
+# 방어 에이전트 이미지. 표준 라이브러리 전용 — pip install 없음.
+# 이미지 시작 시간이 라운드 시간에 포함되므로 시작 경로를 짧게 유지한다.
 FROM python:3.12-slim
 WORKDIR /app
 
 # 판정 코드와 versioned PolicyBundle. policy/ 는 host volume 이나 런타임 다운로드가
 # 아니라 build context 에 포함한다(설계 §10.2).
+#
+# RuntimeConfig._default_policy_dir() 는 패키지(/app/aegis_defender)에서
+# ../../policy 를 보므로 컨테이너에서는 /policy 이다. /app/policy 에 복사하면
+# active.json 을 찾지 못해 policy_source=empty 가 된다.
 COPY src/aegis_defender /app/aegis_defender
-COPY policy /app/policy
+COPY policy /policy
 
 # 레퍼런스 이미지와 동일하게 비특권 사용자로 실행한다.
 USER 65534

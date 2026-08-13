@@ -40,6 +40,7 @@ $requiredFiles = @(
     'integration/compose.agents.yml'
     'integration/run-with-skeleton.ps1'
     'integration/attacker-deploy.md'
+    'integration/defender-deploy.md'
 )
 
 $missing = @()
