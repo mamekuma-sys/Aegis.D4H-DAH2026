@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Superseded decision notice (2026-08-13):** 이 문서는 당시 검토 과정을 보존하는 역사적 plan이다. 아래 완료 항목 중 packet-derived `baseline_violation_rate` 등으로 CANARY/ACTIVE를 runtime `SHADOW`로 자동 rollback하는 결정은 폐기됐다. organizer-guaranteed 정상-health/SLA 신호가 없는 동안 해당 지표는 metric·경보·Break 분석 전용이며, 상태 변경은 Break에서 방어 담당자와 팀장이 승인한 다음 PolicyBundle로만 수행한다. 최종 구현 권한은 `docs/superpowers/specs/2026-08-11-defender-runtime-design.md` §10.3과 `research/defense-mapping.md`에 있다.
+
 **Goal:** A~H 방어 전략 제안을 본선 입력 계약과 라운드 운영에 대조해 채택·조건부 채택·제외로 판정하고, 기존 방어 설계 PR의 계산 및 서킷 브레이커 오류를 바로잡는다.
 
-**Architecture:** 300ms 동기 경로에는 bounded parser, 고신뢰 signature, 사전 계산된 flow state 조회만 둔다. 무거운 분석과 LLM은 verdict 이후 또는 Break에 수행하고, rule과 임계값은 이미지에 포함된 별도 정책 파일로 관리한다. 서킷 브레이커는 공격자가 보낸 트래픽만으로 전체 방어를 해제하지 않고 최근 승격 rule과 해당 traffic profile로 영향 범위를 제한한다.
+**Architecture:** 300ms 동기 경로에는 bounded parser, 고신뢰 signature, 사전 계산된 flow state 조회만 둔다. 무거운 분석과 LLM은 verdict 이후 또는 Break에 수행하고, rule과 임계값은 이미지에 포함된 별도 정책 파일로 관리한다. 당시에는 packet-derived 지표로 최근 승격 rule과 해당 traffic profile만 자동 rollback하는 범위 제한형 서킷 브레이커를 제안했으나, 위 supersession에 따라 finals runtime에는 구현하지 않는다.
 
 **Tech Stack:** Markdown 설계 문서, Python 3.12 표준 라이브러리 전제, PowerShell 저장소 검사
 
@@ -61,9 +63,9 @@
 
   무작위 packet DROP은 재현성과 SLA 예측을 해치므로 직접 채택하지 않는다. `SHADOW` 관측과 flow/profile 단위의 결정론적 `CANARY`만 허용하고, positive·negative·SLA fixture와 오탐 예산을 통과한 rule에 한정한다.
 
-- [x] **Step 4: 서킷 브레이커를 범위 제한형으로 수정한다**
+- [x] **Step 4: 서킷 브레이커를 범위 제한형으로 수정한다 — 역사적 완료, 자동 전환 결정은 폐기됨**
 
-  `baseline_violation_rate`를 조작 불가능하다고 부르지 않고 공격자 영향이 남는 proxy로 정의한다. 낮은 임계는 최근 승격 CANARY cohort를 Shadow로 되돌리는 데만 쓰고, 전체 정책 관찰 모드는 운영진이 식별 가능한 SLA 신호가 생기기 전까지 자동 수행하지 않는다.
+  당시에는 `baseline_violation_rate`를 공격자 영향이 남는 proxy로 정의하고 낮은 임계에서 최근 승격 CANARY cohort만 Shadow로 되돌리도록 제안했다. 최종 설계는 이 신호도 공격자가 오염할 수 있어 자동 rollback 근거로 부족하다고 판정했다. 현재 요구는 alert-only metric test와 Break 사람 승인 audit이며 Round 중 effective policy는 불변이다.
 
 - [x] **Step 5: 절대 Round와 누적 layer 운영을 연결한다**
 

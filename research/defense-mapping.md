@@ -10,6 +10,8 @@
 
 **예선의 합성 점수와 임계값을 본선 rule에 복사하지 않는다.** 보고서 §4.6·§5.2가 이 값들을 보정되지 않은 설계값으로 자체 명시한다.
 
+`raw_drop_rate`, `baseline_violation_rate`, `rule_concentration`, `promotion_cohort_conflict` 등 packet-derived 지표는 organizer-guaranteed 정상-health/SLA 신호가 없는 현재 계약에서 **metric·경보·Break 분석 전용**이다. Round 중 runtime `SHADOW`·`CANARY`·`ACTIVE`나 effective policy를 자동 변경할 수 없고, rollback·승격은 Break에서 공식 SLA 결과와 fixture를 대조한 뒤 방어 담당자와 팀장이 승인한 새 bundle로만 수행한다.
+
 ## A~H 전략 대안 검토
 
 아래 평가는 전달받은 전략 비교안을 본선 입력 계약과 대조한 결과다. 원안의 평가는 비교 맥락을 보존하기 위해 그대로 기록하되, 실제 채택 여부는 오른쪽의 본선 판정을 따른다.
@@ -50,7 +52,7 @@
 | R3~R4 | L1~L2 | 검증된 L1 A rule만 ACTIVE, L2 A/B는 SHADOW | L1 SLA 회귀 유지, L2 parser와 정상 profile 확보 |
 | R5~R6 | L1~L2 | 검증된 L2 A 승격, B는 profile별 SHADOW 또는 결정론적 CANARY | baseline 충돌·rule별 오탐·latency 예산 통과 |
 | R7~R8 | L1~L3 | L1~L2의 검증 상태 유지, 새 L3 A/B/C는 SHADOW | UAV traffic을 기존 profile과 분리하고 parser fixture 확보 |
-| R9~R10 | L1~L3 | 검증된 L3 rule만 CANARY/ACTIVE, H로 다음 이미지 후보 보강 | L1~L3 누적 SLA 회귀와 rollback 검증 |
+| R9~R10 | L1~L3 | 검증된 L3 rule만 CANARY/ACTIVE, H로 다음 이미지 후보 보강 | L1~L3 누적 SLA 회귀와 Break 사람 승인 rollback audit |
 | R11~R12 | L1~L4 | L1~L3 상태 유지, 새 L4 A/B/C는 SHADOW | UGV를 UAV와 별도 profile로 식별하고 L4 정상 fixture 확보 |
 | R13~R14 | L1~L4 | 검증된 L4 rule만 승격, 효과 없는 rule 제거, H 후보는 계속 SHADOW | 네 레이어 누적 회귀, 300ms 초과 0건, bounded memory 유지 |
 
@@ -63,15 +65,15 @@
 | **S1** GCS 계정 탈취 — Mission Context Validator | 17–19 | Mission Plan(웨이포인트·작전구역), Vehicle State(모드·위치·고도·배터리), Mission Phase | **제외** — 세 맥락 모두 `raw_ip`에 존재하지 않음 | 없음. parser 작성 불가 | **제외** | 없음. DROP rule을 만들지 않음 | 해당 없음 | 해당 없음 | 해당 없음 |
 | S1 파생 — 명령 의미론 검증 원칙 | 5, 19 | 요청 내용과 맥락의 논리적 모순 | **미확인** — 애플리케이션 프로토콜 파싱이 선증명되어야 함 | `FinalsPhase 2` 이후 MCS 트래픽 fixture 필요 | 온라인 비동기 | 없음 | 미확인 상태에서 DROP rule 금지 | FinalsPhase 2~4 / L2~L4 | `test_correlation.py` |
 | **S2** 파라미터 변조 — Golden Profile + 해시 체인 | 20–23 | 파라미터 전체 세트, `PARAM_SET` 메시지, 변경 이력 | **제외** — 파라미터 저장소가 노출되지 않음 | 없음 | **제외** | 없음 | 해당 없음 | 해당 없음 | 해당 없음 |
-| S2 재정의 — 정상 트래픽 기준선(baseline profile) | 20, 35 | 관측된 정상 protocol·port·payload 패턴 집합 | **가능** — `FinalsPhase 1`에서 정상 트래픽을 수집해 구성 | IPv4/TCP 헤더 + bounded payload view. `FinalsPhase 1` 정상 fixture | 동기(조회) | **직접 DROP 없음.** 최근 승격 cohort의 충돌률 산출에 사용 | 공격자 영향이 남는 proxy이므로 해당 rule·profile의 범위 제한 rollback에만 사용 | FinalsPhase 1~4 / L1~L4 | `test_breaker.py` |
+| S2 재정의 — 정상 트래픽 기준선(baseline profile) | 20, 35 | 관측된 정상 protocol·port·payload 패턴 집합 | **가능** — `FinalsPhase 1`에서 정상 트래픽을 수집해 구성 | IPv4/TCP 헤더 + bounded payload view. `FinalsPhase 1` 정상 fixture | 온라인 비동기 경보 | **직접 DROP 없음.** 충돌률 metric·경보만 산출 | 공격자 영향이 남는 proxy이므로 runtime policy 불변. Break 사람 검토 자료로만 사용 | FinalsPhase 1~4 / L1~L4 | `test_anomaly.py`, `test_policy_audit.py` |
 | **S3** 센서 은폐 — Physics-Based Detector, Shadow State | 23–26 | 기체 질량·추력 계수·항력 계수, 명령·센서 시계열 | **제외** — 역학 파라미터와 기체 상태 모두 미관측 | 없음 | **제외** | 없음 | 해당 없음 | 해당 없음 | 해당 없음 |
-| S3 파생 — 조작 저항성 높은 기준 선택 원칙 | 23 | 공격자가 통제하기 어려운 관측량 | **부분 가능** — 선택 원칙으로 적용하되 현재 packet-derived ground truth는 없음 | 정상 negative fixture와 profile별 충돌 회귀 | 동기 | 간접. DROP rule 활성화 조건(§6.1 4항)의 근거 | 전체 정책 해제 금지, 최근 승격 cohort·profile만 rollback | FinalsPhase 1~4 / L1~L4 | `test_breaker.py` |
+| S3 파생 — 조작 저항성 높은 기준 선택 원칙 | 23 | 공격자가 통제하기 어려운 관측량 | **부분 가능** — 선택 원칙으로 적용하되 현재 packet-derived ground truth는 없음 | 정상 negative fixture와 profile별 충돌 회귀 | 오프라인 승인 | 직접 영향 없음. 다음 bundle의 DROP rule 승인 근거 | packet-derived 지표는 alert-only, 상태 변경은 Break 사람 승인만 허용 | FinalsPhase 1~4 / L1~L4 | `test_anomaly.py`, `test_policy_audit.py` |
 | **S4** Multi-stage — Causal Graph Matcher | 10, 27–29 | 이벤트 유형, 세션 ID, 기체 ID, 타임스탬프, 계층그룹 | **부분 가능** — flow key(5-tuple)와 monotonic 시각만 관측 가능. `session_id`·`vehicle_id`는 **미확인** | 관측된 flow key와 도착 시각. 애플리케이션 세션 키는 parser 선증명 필요 | **온라인 비동기 — verdict 이후 경로** | **없음. 상관 결과가 현재 packet을 소급 차단할 수 없다** | queue full 시 event 폐기, verdict 무영향 | FinalsPhase 2~4 / L1~L4 | `test_correlation.py` |
 | S4 파생 — 체인 중간 선제 차단 | 10, 28 | 부분 매칭 상태 | **미확인** — 레이어 식별이 선증명되어야 함 | dst 3옥텟과 레이어 대응 관계 미증명(§16.1) | 온라인 비동기 | 이후 packet의 `Score` 조회에만 반영. 사전 승인된 rule 한정 | state 없으면 `ACCEPT` | FinalsPhase 2~4 / L2~L4 | `test_correlation.py` |
 | S4 파생 — 미학습 변종 대응(다계층 집중 휴리스틱) | 28, 43 | 시간 윈도우 내 다계층 이상 이벤트 집중 | **미확인** — 레이어 식별 선증명 필요 | 위와 동일 | 온라인 비동기 | 없음. 조사 우선순위 신호로만 사용 | 해당 없음 | FinalsPhase 3~4 / L1~L4 | `test_correlation.py` |
 | **S5** AI Poisoning — Deterministic-AI 이중판단 | 30–32, 41–42 | 독립 입력 파이프라인 2개, 판단 이력 | **가능** — 본선 시간 계약이 분리를 강제 | 동기 경로는 규칙만, LLM은 비동기 조언 전용 | 동기(규칙) + 온라인 비동기(조언) | **LLM 출력은 어떤 packet도 직접 ACCEPT/DROP 하지 않는다** | LLM 장애·timeout·quota 소진이 verdict와 HEARTBEAT에 영향 없음 | FinalsPhase 1~4 / L1~L4 | `test_advisory.py` |
 | S5 파생 — AI 입력 검증 3단계 | 33 | 스키마 적합성, 입력 분포, 소스 서명 | **부분 가능** — 스키마 검증은 가능, 서명은 본선 이벤트에 없어 제외 | 자체 생성한 `CorrelationEvent` 스키마 | 온라인 비동기 | 없음 | 검증 미통과 입력은 LLM에 전달하지 않음 | FinalsPhase 1~4 | `test_advisory.py` |
-| S5 파생 — 방어 시스템 자체가 공격 표면 | 11, 32 | 방어 동작을 유도하는 공격 패턴 | **가능** — 본선에서 서킷 브레이커 조작 형태로 재현 | raw DROP율 조작 시나리오 fixture | 동기 | 없음. 조작 시도 시에도 방어를 해제하지 않음 | raw DROP율을 자동 전환 트리거에서 제외 | FinalsPhase 1~4 / L1~L4 | `test_breaker.py` |
+| S5 파생 — 방어 시스템 자체가 공격 표면 | 11, 32 | 방어 동작을 유도하는 공격 패턴 | **가능** — packet-derived metric 오염 형태로 재현 | DROP율·baseline 충돌·rule 집중 조작 fixture | 온라인 비동기 경보 | 없음. 조작 시도 시에도 effective policy 불변 | 모든 packet-derived 지표를 runtime 전환 트리거에서 제외 | FinalsPhase 1~4 / L1~L4 | `test_anomaly.py` |
 
 ## 방어 파이프라인 구성요소별 매핑
 
@@ -93,7 +95,7 @@
 |---|---:|---|---|---|---|---|---|
 | Availability-First Response | 13, 35 | **가능** | 동기 | 불확실하면 빠른 `ACCEPT` | 설계 §6 기본 정책의 근거 | FinalsPhase 1~4 / L1~L4 | `test_policy.py` |
 | Graduated Response(단계적 대응) | 35 | **부분 가능** — 출력이 2값이라 단계가 rule 승격 단계로 이동 | 동기 | `SHADOW`→`CANARY`→`ACTIVE` 승격 단계로 재구현 | 신규 rule은 관찰 전용부터 시작 | FinalsPhase 1~4 | `test_policy.py` |
-| Graceful Degradation | 35 | **가능** | 동기 | 최근 승격 CANARY/ACTIVE cohort의 해당 profile만 `SHADOW` rollback | 안정화된 ACTIVE와 다른 profile은 유지, 같은 Round 자동 재활성화 없음 | FinalsPhase 1~4 | `test_breaker.py` |
+| Graceful Degradation | 35 | **Break 운영 절차로 재설계** | 오프라인 | Round 중 verdict·effective policy 변화 없음 | 경보를 공식 SLA·fixture와 대조하고 사람 승인한 다음 bundle에서만 범위 제한 rollback | FinalsPhase 1~4 | `test_anomaly.py`, `test_policy_audit.py` |
 | Mission-Phase Awareness | 35 | **제외** — `MissionState` 미관측 | **제외** | 없음 | 해당 없음 | 해당 없음 | 해당 없음 |
 | Fail-Safe by Default | 13 | **재해석** — 본선의 안전 기본값은 차단이 아니라 통과 | 동기 | parser 실패·overload·LLM 장애에서 `ACCEPT` | Broker fail-open과 방향 일치 | FinalsPhase 1~4 | `test_policy.py` |
 | Hard Negative(정상이나 의심스러운 케이스) | 43 | **가능** | 오프라인 | 각 DROP rule의 정상 negative fixture로 직접 반영 | 오탐률을 정직하게 측정하는 근거 | FinalsPhase 1~4 | `test_policy.py` |
@@ -103,7 +105,7 @@
 
 ## DROP 영향이 있는 항목의 승인 조건
 
-위 S1~S5 및 파이프라인 매핑 표에서 runtime `ACCEPT`/`DROP`에 직접 연결되는 예선 개념은 아직 없다. 정상 트래픽 기준선은 DROP을 직접 발생시키지 않고 최근 승격 cohort의 충돌률 산출과 범위 제한 rollback에만 쓰인다. 실제 DROP 후보는 앞의 A~H 검토에서 채택한 A, 증명된 C invariant와 사전 승인된 multi-signal rule에서 별도로 나온다.
+위 S1~S5 및 파이프라인 매핑 표에서 runtime `ACCEPT`/`DROP`에 직접 연결되는 예선 개념은 아직 없다. 정상 트래픽 기준선과 packet-derived 충돌률은 metric·경보·Break 분석에만 쓰이며 runtime rollback이나 effective-policy 변경을 일으키지 않는다. 실제 DROP 후보는 앞의 A~H 검토에서 채택한 A, 증명된 C invariant와 사전 승인된 multi-signal rule에서 별도로 나온다.
 
 실제 `DROP` rule은 `FinalsPhase 1`의 관측 이후에 개별로 추가되며, 각 rule은 설계 §6.1의 6조건과 §10.2의 기록 항목을 모두 충족해야 한다. 최소 요건은 다음과 같다.
 
