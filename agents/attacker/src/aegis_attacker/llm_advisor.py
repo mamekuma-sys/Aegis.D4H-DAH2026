@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from .audit import Redactor
-from .models import RoundBudget
+from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
 MAX_LLM_CALLS_PER_ROUND = 200
@@ -50,27 +50,32 @@ SYSTEM_PROMPT = (
 
 
 class LLMAdvisor:
-    """LiteLLM 프록시에 조언을 요청한다. 실행 권한 없음."""
+    """LiteLLM 프록시에 `LLM` egress로 조언을 요청한다. 실행 권한 없음.
 
-    def __init__(self, http, config, budget: RoundBudget, redactor: Redactor = None,
-                 max_calls: int = MAX_LLM_CALLS_PER_ROUND):
-        self._http = http
+    LLM 키는 Round 비밀 저장소 handle로만 참조하고, 프롬프트는 flag·세션·키·토큰 원문을
+    Redactor로 제거한 뒤 전달한다(§9.12).
+    """
+
+    def __init__(self, egress, config, budget: RoundBudget, secret_store,
+                 llm_key_handle, max_calls: int = MAX_LLM_CALLS_PER_ROUND):
+        self._egress = egress
         self._config = config
         self._budget = budget
+        self._store = secret_store
+        self._key_handle = llm_key_handle
         self._max_calls = max_calls
-        # api_key·submit_token을 프롬프트에서 절대 노출하지 않도록 redactor에 등록.
-        secrets = {config.llm_api_key, config.submit_token}
-        self._redactor = redactor or Redactor(secrets)
 
     def advise_exploit(self, banner: str, feedback: str, hints):
-        if not self._config.llm_api_key:
+        if self._key_handle is None:
             return None
         if self._budget.llm_calls >= self._max_calls:
             return None  # 예산 소진 → 결정론 경로로
 
+        # 현재 저장된 모든 비밀 원문을 프롬프트에서 제거(플러스 FLAG 정규식).
+        redactor = Redactor(self._store.secrets_snapshot())
         hint_line = "Priority hints: " + ", ".join(h.value for h in hints) if hints else ""
         observed = feedback or banner
-        user_content = self._redactor.scrub("\n".join(x for x in (hint_line, observed) if x))
+        user_content = redactor.scrub("\n".join(x for x in (hint_line, observed) if x))
 
         payload = json.dumps({
             "model": self._config.llm_model,
@@ -81,10 +86,12 @@ class LLMAdvisor:
                 {"role": "user", "content": user_content},
             ],
         })
-        resp = self._http.request(
-            "POST", self._config.llm_base_url + "/v1/chat/completions",
+        api_key = self._store.resolve(self._key_handle)  # 원문은 여기서만
+        resp = self._egress.request(
+            Capability.LLM, "POST",
+            self._config.llm_base_url + "/v1/chat/completions",
             headers={
-                "Authorization": f"Bearer {self._config.llm_api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             body=payload, timeout=LLM_TIMEOUT,

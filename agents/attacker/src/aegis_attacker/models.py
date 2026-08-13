@@ -43,6 +43,22 @@ class Outcome(enum.Enum):
     TIMEOUT = "timeout"
 
 
+class Capability(enum.Enum):
+    """typed egress capability(§9.5·§9.10). 각 capability는 전용 allowlist·인증만 쓴다."""
+
+    ATTACK_TARGET = "ATTACK_TARGET"
+    SUBMIT = "SUBMIT"
+    LLM = "LLM"
+
+
+class SideEffectClass(enum.Enum):
+    """실행 부작용 등급(§9.10). 기본은 읽기 전용."""
+
+    READ_ONLY = "READ_ONLY"
+    BOUNDED_FLAG_DIRECTED_MUTATION = "BOUNDED_FLAG_DIRECTED_MUTATION"
+    DISALLOWED = "DISALLOWED"
+
+
 class SubmitState(enum.Enum):
     """flag 제출 결과 5종(운영세칙 제10조)."""
 
@@ -76,6 +92,11 @@ class Endpoint:
     def key(self) -> str:
         return f"{self.host}:{self.port}"
 
+    @property
+    def endpoint_id(self) -> str:
+        """검증된 host·port 쌍에 대해 Round 내에서 안정적인 식별자(§9.6)."""
+        return f"{self.host}:{self.port}"
+
 
 @dataclass(frozen=True)
 class FinalsPhaseHint:
@@ -98,6 +119,23 @@ class FinalsPhaseHint:
             raise ValueError("FinalsPhaseHint 는 근거(reason·evidence_ref)를 요구한다")
 
 
+@dataclass(frozen=True)
+class EvidenceRef:
+    """관측 증거 참조. 생성 Round·endpoint 밖에서 재사용 금지, TTL 경과 시 무효(§9.6)."""
+
+    evidence_id: str
+    round_id: str
+    endpoint_id: str
+    observed_at_monotonic: float
+    expires_at_monotonic: float
+    observation_fingerprint: str
+
+    def valid_at(self, now: float, round_id: str, endpoint_id: str) -> bool:
+        return (self.round_id == round_id
+                and self.endpoint_id == endpoint_id
+                and now < self.expires_at_monotonic)
+
+
 @dataclass
 class Observation:
     """단일 관측. timeout·연결거부·비정상 응답도 실패가 아니라 관측으로 기록한다(§9.7)."""
@@ -105,10 +143,12 @@ class Observation:
     endpoint: Endpoint
     request_fingerprint: str
     status: int  # 0 = 응답 없음(연결거부/timeout)
-    header_hints: dict = field(default_factory=dict)
+    redacted_header_hints: dict = field(default_factory=dict)
     body_fingerprint: str = ""
     latency_ms: float = 0.0
     note: str = ""
+    round_id: str = ""
+    evidence_ref: Optional["EvidenceRef"] = None
 
     @property
     def no_response(self) -> bool:
@@ -122,7 +162,7 @@ class ObservedServiceProfile:
     endpoint: Endpoint
     banner_fingerprint: str = ""
     status_codes: set = field(default_factory=set)
-    header_hints: dict = field(default_factory=dict)
+    redacted_header_hints: dict = field(default_factory=dict)
     error_signatures: list = field(default_factory=list)
     latency_band: str = "unknown"
     evidence: list = field(default_factory=list)
@@ -149,11 +189,24 @@ class ScenarioHypothesis:
 
 @dataclass
 class ExecutionPlan:
-    """허용 도구 실행 계획(§9.10). 실행 직전 범위·예산 재검증 대상."""
+    """허용 도구 실행 계획(§9.6·§9.10). 실행 직전 capability·binding·TTL·예산 재검증 대상.
+
+    `args`는 비밀 원문 대신 `SecretHandle`만 담는다. 모든 `evidence_refs`는 해당
+    `round_id`·`endpoint_id`와 일치해야 한다.
+    """
 
     tool: str
     target: Endpoint
     args: dict = field(default_factory=dict)
+    plan_id: str = ""
+    round_id: str = ""
+    endpoint_id: str = ""
+    capability: Capability = Capability.ATTACK_TARGET
+    evidence_refs: list = field(default_factory=list)
+    created_at_monotonic: float = 0.0
+    expires_at_monotonic: float = float("inf")
+    preconditions: list = field(default_factory=list)
+    side_effect_class: SideEffectClass = SideEffectClass.READ_ONLY
     expected_cost: int = 1
     timeout: float = 6.0
     budget_charge: int = 1
@@ -173,9 +226,10 @@ class ToolResult:
 
 @dataclass
 class FlagCandidate:
-    """flag 후보. 원문 대신 해시로 중복 확인한다(§9.11)."""
+    """flag 후보. 원문 대신 해시로 중복 확인하고, 원문은 SecretHandle로만 참조한다(§9.6·§9.11)."""
 
     flag_hash: str
+    secret_handle: object = None  # SecretHandle (원문은 Round 비밀 저장소에만)
     format_valid: bool = True
     submit_state: Optional[SubmitState] = None
 

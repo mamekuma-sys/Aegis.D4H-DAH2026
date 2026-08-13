@@ -28,7 +28,7 @@ class TestClassify(unittest.TestCase):
         p = classify(EP, 200, BANNER_AUTH, {"Set-Cookie": "session=abc"}, 40.0)
         self.assertEqual(p.status_codes, {200})
         self.assertEqual(p.latency_band, "fast")
-        self.assertIn("Set-Cookie", p.header_hints)
+        self.assertIn("Set-Cookie", p.redacted_header_hints)
         self.assertTrue(any(e.startswith("banner:") for e in p.evidence))
         self.assertTrue(any(e.startswith("header:") for e in p.evidence))
         self.assertIsNone(p.finals_phase_hint)  # 증거가 레이어를 확정하지 않음
@@ -42,7 +42,7 @@ class TestClassify(unittest.TestCase):
         p = classify(EP, 200, BANNER_SQLI, {}, 20.0)
         merge_observation(p, 500, "no such table: sqlite_master", {"X-Flag": "1"})
         self.assertIn(500, p.status_codes)
-        self.assertIn("X-Flag", p.header_hints)
+        self.assertIn("X-Flag", p.redacted_header_hints)
         self.assertIn("sqlite", p.error_signatures)
 
 

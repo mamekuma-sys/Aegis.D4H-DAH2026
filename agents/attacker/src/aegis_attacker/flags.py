@@ -1,8 +1,8 @@
 """flag 후보 추출·형식 검증·해시 중복 제거·제출.
 
-설계 §9.11. flag 원문을 로그·장기 식별자로 쓰지 않고 단방향 해시로 중복을 확인한다.
-제출은 분당 30회 제한(rate limiter)을 지키고 429에는 backoff한다. 한 flag의 경로가
-여럿일 수 있으므로(운영세칙 제11조 ③) 서로 다른 경로에서 같은 flag를 얻어도 재제출하지 않는다.
+설계 §9.6·§9.11. flag 원문은 Round 비밀 저장소에만 두고 handle로만 참조한다. 중복은
+해시로 확인한다. 제출은 `SUBMIT` egress로 60초 sliding window를 지키며, 429에는 유효한
+`Retry-After`를 우선 준수하되 Round 잔여 시간을 넘으면 현 Round에는 재시도하지 않는다.
 """
 
 from __future__ import annotations
@@ -11,13 +11,13 @@ import hashlib
 import json
 import re
 
-from .models import SubmitState
-from .rate_limit import Backoff
+from .models import Capability, SubmitState
+from .rate_limit import Backoff, parse_retry_after
+from .secrets import KIND_FLAG
 
 FLAG_RE = re.compile(r"FLAG\{[^}]*\}")
 MAX_SUBMIT_RETRIES = 3
 
-# 서버 status 문자열 → SubmitState
 _STATE_MAP = {
     "accepted": SubmitState.ACCEPTED,
     "own_team": SubmitState.OWN_TEAM,
@@ -48,51 +48,59 @@ def extract_flags(text: str) -> list:
 
 
 class FlagStore:
-    """제출한 flag의 해시별 결과를 라운드 한정으로 보관한다."""
+    """제출한 flag의 해시별 결과를 라운드 한정으로 보관한다(원문 없음)."""
 
     def __init__(self):
         self._states = {}  # fingerprint -> SubmitState
 
-    def is_resolved(self, flag: str) -> bool:
-        """이미 서버 판정을 받은 flag면 재제출하지 않는다(ERROR는 미해결)."""
-        st = self._states.get(flag_fingerprint(flag))
+    def is_resolved(self, flag_hash: str) -> bool:
+        st = self._states.get(flag_hash)
         return st is not None and st != SubmitState.ERROR
 
-    def state_of(self, flag: str):
-        return self._states.get(flag_fingerprint(flag))
+    def state_of(self, flag_hash: str):
+        return self._states.get(flag_hash)
 
-    def record(self, flag: str, state: SubmitState) -> None:
-        self._states[flag_fingerprint(flag)] = state
+    def record(self, flag_hash: str, state: SubmitState) -> None:
+        self._states[flag_hash] = state
 
     def accepted_count(self) -> int:
         return sum(1 for s in self._states.values() if s == SubmitState.ACCEPTED)
 
 
 class SubmitClient:
-    """flag 제출 클라이언트. 제출 rate limit 준수 + 429 backoff."""
+    """flag 제출 클라이언트. `SUBMIT` egress + 제출 rate limit + Retry-After."""
 
-    def __init__(self, http, rate, submit_url: str, submit_token: str,
-                 sleep=None, backoff: Backoff = None):
-        self._http = http
+    def __init__(self, egress, rate, submit_url: str, submit_token_handle,
+                 secret_store, clock=None, sleep=None, backoff: Backoff = None,
+                 round_deadline: float = float("inf")):
+        self._egress = egress
         self._rate = rate
         self._url = submit_url
-        self._token = submit_token
+        self._token_handle = submit_token_handle
+        self._store = secret_store
+        self._clock = clock or (lambda: 0.0)
         self._sleep = sleep or (lambda dt: None)
         self._backoff = backoff or Backoff()
+        self._round_deadline = round_deadline
 
-    def submit(self, flag: str) -> SubmitState:
-        if not self._url or not self._token:
+    def submit(self, flag_handle) -> SubmitState:
+        if not self._url or self._token_handle is None:
             return SubmitState.ERROR
-        body = json.dumps({"flag": flag, "token": self._token})
+        flag = self._store.resolve(flag_handle)          # 원문은 여기서만 해석
+        token = self._store.resolve(self._token_handle)
+        body = json.dumps({"flag": flag, "token": token})
         for _ in range(MAX_SUBMIT_RETRIES):
             self._rate.acquire_submit()
-            resp = self._http.request(
-                "POST", self._url,
-                headers={"Content-Type": "application/json"},
-                body=body, timeout=10.0,
-            )
+            resp = self._egress.request(
+                Capability.SUBMIT, "POST", self._url,
+                headers={"Content-Type": "application/json"}, body=body, timeout=10.0)
             if resp.status == 429:
-                self._sleep(self._backoff.next_delay())
+                wait = parse_retry_after(resp.headers.get("Retry-After"))
+                if wait is None:
+                    wait = self._backoff.next_delay()  # header 없거나 무효
+                if self._clock() + wait > self._round_deadline:
+                    return SubmitState.ERROR  # 현 Round 재시도 안 함
+                self._sleep(wait)
                 continue
             self._backoff.reset()
             return self._parse_state(resp)
@@ -111,10 +119,11 @@ class SubmitClient:
 
 
 class FlagPipeline:
-    """추출 → 형식검증 → 해시 중복확인 → 제출 → 결과 기록."""
+    """추출 → 형식검증 → 비밀 저장소 보관 → 해시 중복확인 → 제출 → 결과 기록."""
 
-    def __init__(self, submit_client: SubmitClient, store: FlagStore = None):
+    def __init__(self, submit_client: SubmitClient, secret_store, store: FlagStore = None):
         self._client = submit_client
+        self._secret_store = secret_store
         self.store = store or FlagStore()
 
     def process(self, text: str) -> list:
@@ -124,10 +133,11 @@ class FlagPipeline:
             if not is_valid_flag(flag):
                 continue
             fp = flag_fingerprint(flag)
-            if self.store.is_resolved(flag):
-                results.append((fp, self.store.state_of(flag)))  # 재제출 안 함
+            if self.store.is_resolved(fp):
+                results.append((fp, self.store.state_of(fp)))  # 재제출 안 함
                 continue
-            state = self._client.submit(flag)
-            self.store.record(flag, state)
+            handle = self._secret_store.put(KIND_FLAG, flag)  # 원문은 저장소로
+            state = self._client.submit(handle)
+            self.store.record(fp, state)
             results.append((fp, state))
         return results

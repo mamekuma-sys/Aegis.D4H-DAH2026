@@ -2,77 +2,92 @@ import json
 import unittest
 
 from aegis_attacker.config import AttackerConfig
+from aegis_attacker.egress import EgressGateway
 from aegis_attacker.llm_advisor import LLMAdvisor
-from aegis_attacker.models import RoundBudget, VulnClass
+from aegis_attacker.models import Capability, RoundBudget, VulnClass
 from aegis_attacker.observation import HttpResponse
+from aegis_attacker.secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
 
-
-def chat_response(content, tokens=42, status=200):
-    body = json.dumps({
-        "choices": [{"message": {"content": content}}],
-        "usage": {"total_tokens": tokens},
-    })
-    return HttpResponse(status, body, {})
-
-
-class RecordingHttp:
-    def __init__(self, response):
-        self.response = response
-        self.last_body = None
-        self.calls = 0
-
-    def request(self, method, url, headers=None, body=None, timeout=6.0):
-        self.calls += 1
-        self.last_body = body
-        return self.response
-
-
+LLM_URL_HOST = ("litellm.lig.internal", 4000)
+ALLOW = {Capability.LLM: {LLM_URL_HOST}}
 CFG = AttackerConfig(
-    targets=("team2.lig.internal",), ports=(8082,),
+    targets=("t2",), ports=(8082,),
     submit_url="http://backend:4100/submit", submit_token="tok-team1-secret",
     llm_base_url="http://litellm.lig.internal:4000", llm_api_key="sk-team1-secret",
     llm_model="gpt-4o-mini",
 )
 
 
+def chat_response(content, tokens=42, status=200):
+    body = json.dumps({"choices": [{"message": {"content": content}}],
+                       "usage": {"total_tokens": tokens}})
+    return HttpResponse(status, body, {})
+
+
+class RecordingTransport:
+    def __init__(self, response):
+        self.response = response
+        self.last_body = None
+        self.last_headers = None
+        self.calls = 0
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        self.calls += 1
+        self.last_body = body
+        self.last_headers = headers
+        return self.response
+
+
+def make_advisor(response, budget=None, with_key=True, max_calls=200):
+    transport = RecordingTransport(response)
+    gw = EgressGateway(transport, ALLOW)
+    store = RoundSecretStore("r1")
+    store.put(KIND_SUBMIT_TOKEN, "tok-team1-secret")  # snapshot 에 포함 → 프롬프트에서 제거
+    key_handle = store.put(KIND_LLM_KEY, "sk-team1-secret") if with_key else None
+    adv = LLMAdvisor(gw, CFG, budget or RoundBudget(), store, key_handle, max_calls=max_calls)
+    return adv, transport
+
+
 class TestLLMAdvisor(unittest.TestCase):
-    def test_advise_returns_parsed_exploit(self):
-        http = RecordingHttp(chat_response('{"vuln":"SSRF","path":"/fetch?url=127.0.0.1"}'))
-        budget = RoundBudget()
-        adv = LLMAdvisor(http, CFG, budget)
+    def test_returns_parsed_exploit(self):
+        adv, _ = make_advisor(chat_response('{"vuln":"SSRF","path":"/fetch?url=127.0.0.1"}'))
         out = adv.advise_exploit("URL Fetcher /fetch", "", [VulnClass.SSRF])
         self.assertEqual(out["path"], "/fetch?url=127.0.0.1")
-        self.assertEqual(budget.llm_calls, 1)
-        self.assertEqual(budget.llm_tokens, 42)
+
+    def test_budget_increments(self):
+        b = RoundBudget()
+        adv, _ = make_advisor(chat_response('{"path":"/x"}'), budget=b)
+        adv.advise_exploit("b", "", [])
+        self.assertEqual(b.llm_calls, 1)
+        self.assertEqual(b.llm_tokens, 42)
 
     def test_prompt_redacts_flag_and_secrets(self):
-        http = RecordingHttp(chat_response('{"path":"/x"}'))
-        adv = LLMAdvisor(http, CFG, RoundBudget())
-        feedback = "prev body: FLAG{leak} key=sk-team1-secret token=tok-team1-secret"
+        adv, transport = make_advisor(chat_response('{"path":"/x"}'))
+        feedback = "prev: FLAG{leak} key=sk-team1-secret token=tok-team1-secret"
         adv.advise_exploit("banner", feedback, [])
-        self.assertNotIn("FLAG{leak}", http.last_body)
-        self.assertNotIn("sk-team1-secret", http.last_body)
-        self.assertNotIn("tok-team1-secret", http.last_body)
-        self.assertIn("[FLAG]", http.last_body)
+        self.assertNotIn("FLAG{leak}", transport.last_body)
+        self.assertNotIn("sk-team1-secret", transport.last_body)
+        self.assertNotIn("tok-team1-secret", transport.last_body)
+
+    def test_key_sent_via_egress_auth(self):
+        adv, transport = make_advisor(chat_response('{"path":"/x"}'))
+        adv.advise_exploit("b", "", [])
+        self.assertEqual(transport.last_headers["Authorization"], "Bearer sk-team1-secret")
 
     def test_budget_cap_returns_none(self):
-        http = RecordingHttp(chat_response('{"path":"/x"}'))
-        budget = RoundBudget(llm_calls=5)
-        adv = LLMAdvisor(http, CFG, budget, max_calls=5)
+        adv, transport = make_advisor(chat_response('{"path":"/x"}'),
+                                      budget=RoundBudget(llm_calls=5), max_calls=5)
         self.assertIsNone(adv.advise_exploit("b", "", []))
-        self.assertEqual(http.calls, 0)  # 호출 자체 안 함
+        self.assertEqual(transport.calls, 0)
 
     def test_non_200_returns_none(self):
-        http = RecordingHttp(chat_response("x", status=500))
-        adv = LLMAdvisor(http, CFG, RoundBudget())
+        adv, _ = make_advisor(chat_response("x", status=500))
         self.assertIsNone(adv.advise_exploit("b", "", []))
 
-    def test_no_api_key_returns_none(self):
-        cfg = AttackerConfig(targets=("h",), ports=(80,), llm_api_key="")
-        http = RecordingHttp(chat_response('{"path":"/x"}'))
-        adv = LLMAdvisor(http, cfg, RoundBudget())
+    def test_no_key_handle_returns_none(self):
+        adv, transport = make_advisor(chat_response('{"path":"/x"}'), with_key=False)
         self.assertIsNone(adv.advise_exploit("b", "", []))
-        self.assertEqual(http.calls, 0)
+        self.assertEqual(transport.calls, 0)
 
 
 if __name__ == "__main__":

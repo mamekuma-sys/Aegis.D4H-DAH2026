@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
-from .models import Endpoint, Observation
+from .models import Capability, Endpoint, EvidenceRef, Observation
 
 # 관측 시 주목하는 응답 헤더(스켈레톤 agent-guide 관측 관례).
 NOTABLE_HEADERS = (
@@ -39,8 +39,20 @@ class HttpResponse:
     headers: dict = field(default_factory=dict)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """리다이렉트를 따라가지 않는다(§9.10). 3xx는 관측 결과로 반환된다."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class UrllibHttp:
-    """표준 라이브러리 urllib 기반 HTTP 전송."""
+    """표준 라이브러리 urllib 기반 HTTP 전송. 프록시 비활성·리다이렉트 미추적(§9.10)."""
+
+    def __init__(self):
+        # 환경 프록시 비활성(ProxyHandler({})) + 리다이렉트 미추적.
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirect())
 
     def request(self, method: str, url: str, headers=None, body=None,
                 timeout: float = 6.0) -> HttpResponse:
@@ -49,7 +61,7 @@ class UrllibHttp:
         for k, v in (headers or {}).items():
             req.add_header(k, v)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with self._opener.open(req, timeout=timeout) as r:
                 return HttpResponse(getattr(r, "status", 200),
                                     r.read().decode("utf-8", "replace"),
                                     dict(r.headers.items()))
@@ -72,29 +84,59 @@ def port_open(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
-class Observer:
-    """rate limit을 지키며 표적을 관측한다."""
+class EvidenceFactory:
+    """Round·endpoint에 묶인 TTL 증거 참조를 만든다(§9.6)."""
 
-    def __init__(self, http, rate, clock=time.monotonic):
-        self._http = http
-        self._rate = rate
+    def __init__(self, round_id: str, clock=time.monotonic, ttl: float = 90.0):
+        self._round_id = round_id
         self._clock = clock
+        self._ttl = ttl
+        self._n = 0
+
+    def make(self, endpoint: Endpoint, observation_fingerprint: str) -> EvidenceRef:
+        self._n += 1
+        now = self._clock()
+        return EvidenceRef(
+            evidence_id=f"ev-{self._round_id}-{self._n}",
+            round_id=self._round_id,
+            endpoint_id=endpoint.endpoint_id,
+            observed_at_monotonic=now,
+            expires_at_monotonic=now + self._ttl,
+            observation_fingerprint=observation_fingerprint,
+        )
+
+
+class Observer:
+    """rate limit을 지키며 `ATTACK_TARGET` egress로 표적을 관측한다."""
+
+    def __init__(self, egress, rate, round_id: str = "", clock=time.monotonic,
+                 evidence: EvidenceFactory = None):
+        self._egress = egress
+        self._rate = rate
+        self._round_id = round_id
+        self._clock = clock
+        self._evidence = evidence or EvidenceFactory(round_id, clock)
 
     def observe(self, endpoint: Endpoint, method: str = "GET", path: str = "/",
                 headers=None, body=None, timeout: float = 6.0):
         """(Observation, HttpResponse) 반환. 원시 응답 본문은 로그로 남기지 않는다."""
         self._rate.acquire_request()
         start = self._clock()
-        resp = self._http.request(method, endpoint.base_url() + path, headers, body, timeout)
+        resp = self._egress.request(
+            Capability.ATTACK_TARGET, method, endpoint.base_url() + path,
+            headers, body, timeout)
         latency_ms = (self._clock() - start) * 1000.0
+        body_fp = fingerprint(resp.body)
         obs = Observation(
             endpoint=endpoint,
             request_fingerprint=fingerprint(f"{method} {path}"),
             status=resp.status,
-            header_hints=notable_headers(resp.headers),
-            body_fingerprint=fingerprint(resp.body),
+            redacted_header_hints=notable_headers(resp.headers),
+            body_fingerprint=body_fp,
             latency_ms=latency_ms,
             note="no-response" if resp.status == 0 else "",
+            round_id=self._round_id,
+            evidence_ref=self._evidence.make(endpoint, body_fp),
         )
         return obs, resp
 

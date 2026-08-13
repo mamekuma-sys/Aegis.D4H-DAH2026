@@ -39,7 +39,7 @@ def classify(endpoint: Endpoint, status: int, banner: str, headers,
     profile = ObservedServiceProfile(endpoint)
     profile.banner_fingerprint = fingerprint(banner)
     profile.status_codes = {status}
-    profile.header_hints = notable_headers(headers)
+    profile.redacted_header_hints = notable_headers(headers)
     profile.latency_band = latency_band(latency_ms)
 
     low = (banner or "").lower()
@@ -50,7 +50,7 @@ def classify(endpoint: Endpoint, status: int, banner: str, headers,
     text = (banner or "").strip()
     if text:
         profile.add_evidence("banner:" + text[:80])
-    for key in profile.header_hints:
+    for key in profile.redacted_header_hints:
         profile.add_evidence("header:" + key.lower())
     if status == 0:
         profile.add_evidence("no-response")
@@ -61,7 +61,7 @@ def merge_observation(profile: ObservedServiceProfile, status: int, body: str, h
     """후속 관측을 기존 프로파일에 누적한다(상태 코드·헤더·오류 시그니처)."""
     profile.status_codes.add(status)
     for k, v in notable_headers(headers).items():
-        profile.header_hints.setdefault(k, v)
+        profile.redacted_header_hints.setdefault(k, v)
         profile.add_evidence("header:" + k.lower())
     low = (body or "").lower()
     for sig in ERROR_SIGNATURES:

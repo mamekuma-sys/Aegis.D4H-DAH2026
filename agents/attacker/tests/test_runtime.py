@@ -109,12 +109,11 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertGreater(report.requests_made, 1)  # 관측·시도는 했음
 
     def test_error_isolated_per_target(self):
-        class BoomHttp:
+        class BoomTransport:
             def request(self, *a, **k):
                 raise RuntimeError("network boom")
         rt = make_runtime(FakeArena("b", "/x", "FLAG{x}"))
-        rt.http = BoomHttp()
-        rt.observer._http = BoomHttp()
+        rt.transport = BoomTransport()  # egress는 run_once에서 이 transport로 구성됨
         # 예외가 run_once 전체를 죽이지 않고 표적 단위로 격리된다
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 0)

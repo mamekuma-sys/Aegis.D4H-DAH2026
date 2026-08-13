@@ -1,5 +1,7 @@
 import unittest
 
+from aegis_attacker.config import AttackerConfig
+from aegis_attacker.egress import EgressGateway, build_allowlists
 from aegis_attacker.models import Endpoint
 from aegis_attacker.observation import (
     HttpResponse,
@@ -8,6 +10,9 @@ from aegis_attacker.observation import (
     notable_headers,
 )
 from aegis_attacker.rate_limit import RateLimiter
+
+EP = Endpoint("team2.lig.internal", 8082)
+CFG = AttackerConfig(targets=("team2.lig.internal",), ports=(8082,), llm_api_key="k")
 
 
 class FakeClock:
@@ -21,8 +26,8 @@ class FakeClock:
         self.t += dt
 
 
-class FakeHttp:
-    def __init__(self, response, record=None):
+class FakeTransport:
+    def __init__(self, response):
         self.response = response
         self.calls = []
 
@@ -36,7 +41,7 @@ class TestHelpers(unittest.TestCase):
         fp = fingerprint("FLAG{secret}")
         self.assertEqual(len(fp), 16)
         self.assertNotIn("FLAG", fp)
-        self.assertEqual(fp, fingerprint("FLAG{secret}"))  # 결정론적
+        self.assertEqual(fp, fingerprint("FLAG{secret}"))
 
     def test_notable_headers_filter(self):
         h = {"Set-Cookie": "s=1", "Content-Type": "text/html", "X-Role": "user"}
@@ -50,28 +55,30 @@ class TestObserver(unittest.TestCase):
     def _observer(self, resp):
         clk = FakeClock()
         rl = RateLimiter(clock=clk, sleep=lambda dt: clk.advance(dt))
-        return Observer(FakeHttp(resp), rl, clock=clk), clk
+        gw = EgressGateway(FakeTransport(resp), build_allowlists(CFG))
+        return Observer(gw, rl, round_id="r1", clock=clk), clk
 
     def test_observe_banner_builds_observation(self):
         obs_er, _ = self._observer(HttpResponse(200, "URL Fetcher", {"Server": "Werkzeug"}))
-        obs, resp = obs_er.observe_banner(Endpoint("team2.lig.internal", 8082))
+        obs, resp = obs_er.observe_banner(EP)
         self.assertEqual(obs.status, 200)
         self.assertEqual(resp.body, "URL Fetcher")
-        self.assertIn("Server", obs.header_hints)
+        self.assertIn("Server", obs.redacted_header_hints)
+        self.assertEqual(obs.round_id, "r1")
+        self.assertIsNotNone(obs.evidence_ref)  # 증거 참조 부착
+        self.assertTrue(obs.evidence_ref.valid_at(0.0, "r1", EP.endpoint_id))
         self.assertFalse(obs.no_response)
 
     def test_no_response_recorded_as_observation(self):
-        # status 0(연결거부/필터 DROP)도 실패가 아니라 관측이다.
         obs_er, _ = self._observer(HttpResponse(0, "", {}))
-        obs, _ = obs_er.observe_banner(Endpoint("h", 8082))
+        obs, _ = obs_er.observe_banner(EP)
         self.assertTrue(obs.no_response)
         self.assertEqual(obs.note, "no-response")
 
     def test_observe_respects_rate_limit(self):
-        # 21회 관측해도 rate limiter가 blocking으로 흐르게 하되 예외 없이 완료.
         obs_er, _ = self._observer(HttpResponse(200, "ok", {}))
         for _ in range(25):
-            obs_er.observe_banner(Endpoint("h", 8082))
+            obs_er.observe_banner(EP)
 
 
 if __name__ == "__main__":

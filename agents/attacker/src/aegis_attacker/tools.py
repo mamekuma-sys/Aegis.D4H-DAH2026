@@ -11,28 +11,21 @@ from __future__ import annotations
 import time
 import urllib.parse
 
-from .models import Endpoint, ExecutionPlan, Observation, Outcome, ToolResult
-from .observation import fingerprint, notable_headers
+from .models import (
+    Capability,
+    ExecutionPlan,
+    Observation,
+    Outcome,
+    SideEffectClass,
+    ToolResult,
+)
+from .observation import EvidenceFactory, fingerprint, notable_headers
 
 _QUOTE_SAFE = "/?&=%:+@,;!*'()$-_.~"
 
 
-class ScopeViolation(Exception):
-    """허용 범위 밖 대상 실행 시도."""
-
-
-class Scope:
-    """허용된 공격 대상 집합. 실행 직전 재검증에 쓴다."""
-
-    def __init__(self, endpoints):
-        self._allowed = {(e.host, e.port) for e in endpoints}
-
-    def contains(self, endpoint: Endpoint) -> bool:
-        return (endpoint.host, endpoint.port) in self._allowed
-
-    def check(self, endpoint: Endpoint) -> None:
-        if not self.contains(endpoint):
-            raise ScopeViolation(f"범위 밖 대상: {endpoint.key()}")
+class PlanBindingError(Exception):
+    """계획의 capability·Round·endpoint·TTL·증거·부작용 재검증 실패(§9.10)."""
 
 
 # ---- 시그니처 회피 (상대 방어 필터 우회, 규칙 내) ----
@@ -90,16 +83,43 @@ def evasion_variants(payload: str) -> list:
 # ---- 실행 어댑터 ----
 
 class ExecutionAdapter:
-    """단일 HTTP 도구 실행기. 실행 직전 범위·rate 재검증."""
+    """단일 HTTP 도구 실행기. 실행 직전 capability·binding·TTL·부작용·rate 재검증.
 
-    def __init__(self, http, rate, scope: Scope, clock=time.monotonic):
-        self._http = http
+    범위(host·port) allowlist는 egress gateway가 강제한다(§9.10).
+    """
+
+    def __init__(self, egress, rate, round_id: str = "", clock=time.monotonic,
+                 evidence: EvidenceFactory = None):
+        self._egress = egress
         self._rate = rate
-        self._scope = scope
+        self._round_id = round_id
         self._clock = clock
+        self._evidence = evidence or EvidenceFactory(round_id, clock)
+
+    def _validate_binding(self, plan: ExecutionPlan, endpoint_id: str) -> None:
+        now = self._clock()
+        if plan.capability != Capability.ATTACK_TARGET:
+            raise PlanBindingError("ATTACK_TARGET capability 아님")
+        if plan.round_id and plan.round_id != self._round_id:
+            raise PlanBindingError("Round 불일치")
+        if plan.endpoint_id and plan.endpoint_id != endpoint_id:
+            raise PlanBindingError("endpoint 불일치")
+        if now >= plan.expires_at_monotonic:
+            raise PlanBindingError("계획 TTL 만료")
+        if not plan.evidence_refs:
+            raise PlanBindingError("신선한 증거 없음")
+        for ref in plan.evidence_refs:
+            if not ref.valid_at(now, self._round_id, endpoint_id):
+                raise PlanBindingError("증거 TTL·binding 불일치")
+        if plan.side_effect_class == SideEffectClass.DISALLOWED:
+            raise PlanBindingError("금지된 부작용 등급")
+        if (plan.side_effect_class == SideEffectClass.BOUNDED_FLAG_DIRECTED_MUTATION
+                and not plan.preconditions):
+            raise PlanBindingError("변경 작업에 안전 선행조건 없음")
 
     def execute(self, plan: ExecutionPlan) -> ToolResult:
-        self._scope.check(plan.target)  # 범위 밖이면 예외
+        endpoint_id = plan.target.endpoint_id
+        self._validate_binding(plan, endpoint_id)
 
         method = str(plan.args.get("method", "GET")).upper()
         raw_path = plan.args.get("path", "/") or "/"
@@ -111,17 +131,22 @@ class ExecutionAdapter:
 
         self._rate.acquire_request()
         start = self._clock()
-        resp = self._http.request(method, url, headers, body, plan.timeout)
+        # egress가 host·port allowlist·capability 교차·redirect를 강제한다.
+        resp = self._egress.request(
+            Capability.ATTACK_TARGET, method, url, headers, body, plan.timeout)
         latency_ms = (self._clock() - start) * 1000.0
 
         outcome = Outcome.SUCCESS if resp.status != 0 else Outcome.TIMEOUT
+        body_fp = fingerprint(resp.body)
         obs = Observation(
             endpoint=plan.target,
             request_fingerprint=fingerprint(f"{method} {raw_path}"),
             status=resp.status,
-            header_hints=notable_headers(resp.headers),
-            body_fingerprint=fingerprint(resp.body),
+            redacted_header_hints=notable_headers(resp.headers),
+            body_fingerprint=body_fp,
             latency_ms=latency_ms,
             note="no-response" if resp.status == 0 else "",
+            round_id=self._round_id,
+            evidence_ref=self._evidence.make(plan.target, body_fp),
         )
         return ToolResult(plan=plan, outcome=outcome, observation=obs, body=resp.body)

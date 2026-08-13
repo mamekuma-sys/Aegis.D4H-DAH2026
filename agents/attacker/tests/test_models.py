@@ -1,12 +1,15 @@
 import unittest
 
 from aegis_attacker.models import (
+    Capability,
     Endpoint,
+    EvidenceRef,
     FinalsPhaseHint,
     Observation,
     ObservedServiceProfile,
     Scenario,
     ScenarioHypothesis,
+    SideEffectClass,
 )
 
 
@@ -30,6 +33,33 @@ class TestEndpoint(unittest.TestCase):
         # Endpoint 는 집합/딕셔너리 키로 쓸 수 있어야 한다(중복 관측 방지).
         s = {Endpoint("h", 1), Endpoint("h", 1), Endpoint("h", 2)}
         self.assertEqual(len(s), 2)
+
+    def test_endpoint_id_stable(self):
+        self.assertEqual(Endpoint("t2", 8082).endpoint_id, "t2:8082")
+
+
+class TestEvidenceRef(unittest.TestCase):
+    def _ref(self, expires=100.0):
+        return EvidenceRef("e1", "r1", "t2:8082", 0.0, expires, "fp")
+
+    def test_valid_when_matching_and_fresh(self):
+        self.assertTrue(self._ref().valid_at(10.0, "r1", "t2:8082"))
+
+    def test_invalid_when_expired(self):
+        self.assertFalse(self._ref(expires=5.0).valid_at(10.0, "r1", "t2:8082"))
+
+    def test_invalid_on_round_or_endpoint_mismatch(self):
+        self.assertFalse(self._ref().valid_at(10.0, "r2", "t2:8082"))
+        self.assertFalse(self._ref().valid_at(10.0, "r1", "other:1"))
+
+
+class TestEnums(unittest.TestCase):
+    def test_capabilities(self):
+        self.assertEqual({c.value for c in Capability},
+                         {"ATTACK_TARGET", "SUBMIT", "LLM"})
+
+    def test_side_effect_default_read_only(self):
+        self.assertEqual(SideEffectClass.READ_ONLY.value, "READ_ONLY")
 
 
 class TestFinalsPhaseHint(unittest.TestCase):
