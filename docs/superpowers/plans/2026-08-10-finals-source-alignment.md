@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 작업 브랜치는 `docs/finals-source-alignment`이며 `main`에 직접 커밋하거나 푸시하지 않는다.
-- 사실 우선순위는 당일 운영진 안내, 본선 운영세칙, 공식 `deploy/docs/agent-guide.md`, 실제 스켈레톤, 예선 자료, 파생 팀 메모 순이다.
+- 사실 우선순위는 최신 운영진의 직접 안내, 본선 운영세칙, 공식 `deploy/docs/agent-guide.md`, 실제 스켈레톤, 예선 자료, 파생 팀 메모 순이다. `FINALS-DAY-NOTE`와 `SKELETON-EXPLANATION`은 운영진 직접 안내나 공식 원본이 아닌 파생 팀 메모다.
 - 원본 5개 파일, PDF, PCAP, 로그, 토큰, 키, 개인 PC 절대경로를 Git에 커밋하지 않는다.
 - 공격 대상은 운영진이 허용한 팀 진입점, LiteLLM, 제출 서버로 제한한다.
 - 방어의 패킷별 동기 판정 경로에는 원격 LLM 호출을 넣지 않는다.
@@ -235,7 +235,7 @@ git commit -m "docs: define finals runtime constraints"
 - Modify: `integration/README.md`
 
 **Interfaces:**
-- Consumes: 본선 이미지 명명 규칙, pull 정책, 컨테이너 실행 제한
+- Consumes: `FINALS-RULES` 14절의 이미지 명명 규칙, 15절의 pull·컨테이너 생명주기, 16절의 컨테이너 실행 제한
 - Produces: Docker 담당자가 이미지·smoke test·Compose 설계에 적용할 운영 계약
 
 - [ ] **Step 1: 이미지 이름과 라운드 생명주기를 추가**
@@ -245,6 +245,7 @@ git commit -m "docs: define finals runtime constraints"
 ```markdown
 ## 이미지 제출 계약
 
+- 근거: `FINALS-RULES` 14절(Registry, 이미지 경로, `latest`)과 15절(pull 시점, timeout, 라운드별 생명주기)
 - 공격 이미지: `ligacr.azurecr.io/team{N}/attacker:latest`
 - 방어 이미지: `ligacr.azurecr.io/team{N}/defender:latest`
 - 운영진은 라운드 시작 5분 전에 `latest`를 pull하며 pull timeout은 20분입니다.
@@ -252,6 +253,7 @@ git commit -m "docs: define finals runtime constraints"
 
 ## 실행 제한
 
+- 근거: `FINALS-RULES` 16절. 아래 값은 스켈레톤 검증 전에도 공식 규칙으로 고정됩니다.
 - 공통: `no-new-privileges`, memory reservation `2g`, CPU shares `2048`, PID limit `512`
 - 방어: Linux capability 전체 제거(`cap-drop ALL`)와 Broker socket mount
 - 비밀값과 환경별 주소는 이미지에 넣지 않고 운영진이 주입하는 환경변수와 socket만 사용합니다.
@@ -259,7 +261,7 @@ git commit -m "docs: define finals runtime constraints"
 
 - [ ] **Step 2: Compose 연동 원칙을 기존 후속 단계와 연결**
 
-`compose.agents.yml`이 공식 파일을 복사하지 않고 팀 이미지, 환경변수, 방어 socket mount만 override하며 Docker 변경에는 해당 에이전트 소유자와 팀장 검토가 필요하다고 명시한다.
+`compose.agents.yml`이 공식 파일을 복사하지 않고 팀 이미지, 환경변수, 방어 socket mount만 override하며 Docker 변경에는 해당 에이전트 소유자와 팀장 검토가 필요하다고 명시한다. `OFFICIAL-SKELETON`과 공식 agent guide 검증은 16절 값의 공식 여부를 결정하는 절차가 아니라 실제 Compose·mount·환경변수 주입 구현의 일치 여부를 확인하는 절차다.
 
 - [ ] **Step 3: Docker 운영 계약을 검증**
 
@@ -341,7 +343,7 @@ BF1CC690C82605497A03B959B93784663EC6D7DFD9949DCBE9C7151B3C07A6AA
 | 파생 팀 메모 | `derived-notes/DAH2026_본선_당일_진행_안내.md` | `AA704A259A3A59B10A844A59AA6B1593DEDF31D99662B70A8D7CD58EFECD5D9E` | 공식 운영세칙의 팀용 설명, 공식 원본보다 낮은 권위 |
 | 파생 팀 메모 | `derived-notes/DAH2026_스켈레톤코드_상세_설명.md` | `BF1CC690C82605497A03B959B93784663EC6D7DFD9949DCBE9C7151B3C07A6AA` | 실제 스켈레톤 검증 전 이해 보조, 공식 guide와 관측 결과보다 낮은 권위 |
 
-Git에는 이 파일들의 원본을 저장하지 않습니다. 사실 충돌 시 당일 운영진 안내, 본선 운영세칙, 공식 agent guide, 실제 스켈레톤, 예선 자료, 파생 팀 메모 순으로 판단합니다.
+Git에는 이 파일들의 원본을 저장하지 않습니다. 사실 충돌 시 최신 운영진의 직접 안내, 본선 운영세칙, 공식 agent guide, 실제 스켈레톤, 예선 자료, 파생 팀 메모 순으로 판단합니다. 파생 팀 메모는 운영진 직접 안내나 공식 원본으로 취급하지 않습니다.
 ```
 
 - [ ] **Step 4: 검증된 목적지로 각 파일과 매니페스트를 이동**

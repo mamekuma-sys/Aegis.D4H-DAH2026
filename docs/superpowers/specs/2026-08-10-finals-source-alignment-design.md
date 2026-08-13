@@ -23,7 +23,7 @@
 | `DAH2026_본선_당일_진행_안내.md` | 파생 팀 메모 | 운영세칙의 팀용 설명으로만 사용 |
 | `DAH2026_스켈레톤코드_상세_설명.md` | 파생 팀 메모 | 실제 스켈레톤 검증 전 이해 보조 자료로만 사용 |
 
-사실이 충돌하면 당일 운영진 안내, 본선 운영세칙, 공식 `deploy/docs/agent-guide.md`, 실제 스켈레톤, 예선 자료, 파생 팀 메모 순으로 판단한다.
+사실이 충돌하면 최신 운영진의 직접 안내, 본선 운영세칙, 공식 `deploy/docs/agent-guide.md`, 실제 스켈레톤, 예선 자료, 파생 팀 메모 순으로 판단한다. 여기서 운영진 직접 안내는 `FINALS-DAY-NOTE`를 뜻하지 않는다. `FINALS-DAY-NOTE`와 `SKELETON-EXPLANATION`은 공식 원본이 아닌 파생 팀 메모다.
 
 ## Git에 반영할 파일
 
@@ -67,9 +67,10 @@
 
 ### `integration/README.md`
 
-- 공격·방어 이미지 이름과 `latest` 태그를 기록한다.
-- 라운드 시작 전 pull 시각, pull timeout, 컨테이너 수명을 기록한다.
-- `no-new-privileges`, CPU·메모리·PID 제한, 방어 `cap-drop ALL`, 소켓 마운트를 기록한다.
+- `FINALS-RULES` 14절에 근거해 공격·방어 이미지 이름과 `latest` 태그를 기록한다.
+- `FINALS-RULES` 15절에 근거해 라운드 시작 전 pull 시각, pull timeout, 컨테이너 수명을 기록한다.
+- `FINALS-RULES` 16절에 근거해 `no-new-privileges`, CPU·메모리·PID 제한, 방어 `cap-drop ALL`, 소켓 마운트와 환경변수 주입을 공식 실행 값으로 기록한다.
+- `OFFICIAL-SKELETON`과 공식 agent guide는 실제 Compose·mount·주입 구현이 운영세칙과 최신 운영진 직접 안내에 맞는지 확인하는 데 사용한다.
 - 실제 스켈레톤을 복사하지 않고 Compose override로 연결하는 원칙을 유지한다.
 
 ### `docs/architecture.md`
