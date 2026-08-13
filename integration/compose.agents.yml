@@ -1,0 +1,18 @@
+# 스켈레톤 Compose override — 팀 공격 이미지만 교체한다.
+#
+# 공식 스켈레톤 파일을 수정·복사하지 않고, team1-attacker의 빌드 컨텍스트만 팀 저장소의
+# 공격 패키지로 교체한다. TARGETS·PORTS·SUBMIT_URL·SUBMIT_TOKEN·LLM_* 등 환경변수는
+# 스켈레톤 base compose가 주입하는 값을 그대로 병합해 쓴다(하드코딩 금지).
+#
+# 실행:
+#   docker compose -f <스켈레톤>/deploy/docker-compose.yml -f integration/compose.agents.yml \
+#     --profile combat up -d --build
+# 또는 integration/run-with-skeleton.ps1 사용.
+#
+# build.context 의 상대경로는 이 파일 위치(integration/) 기준으로 해석된다.
+
+services:
+  team1-attacker:
+    build:
+      context: ../agents/attacker
+    image: aegis/attacker:latest
