@@ -216,8 +216,14 @@ class DefenderRuntime:
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 
-    def _on_writer_fault(self, reason: str) -> None:
-        self.session.request_reconnect(reason)
+    def _on_writer_fault(self, reason: str, session_id: int | None = None) -> None:
+        """writer가 알린 session fault를 수신 쪽에 전달한다.
+
+        `session_id`를 그대로 넘겨 `BrokerSession`이 generation을 확인하게 한다.
+        이전 session의 뒤늦은 실패가 이미 정상 연결된 session의 수신 루프를
+        끊으면 그 구간이 그대로 fail-open이 된다.
+        """
+        self.session.request_reconnect(reason, session_id)
 
     def start_workers(self) -> None:
         self.audit.start()

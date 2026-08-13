@@ -135,9 +135,10 @@ class TestHeartbeatUnderVerdictBacklog(unittest.TestCase):
         scheduler = HeartbeatScheduler(queue, clock=clock)
         writer = SocketWriter(queue, clock=clock, on_heartbeat_sent=scheduler.on_sent)
         transport = FakeTransport()
-        writer.attach(transport, queue.new_session())
+        session_id = queue.new_session()
+        writer.attach(transport, session_id)
         sender = VerdictSender(queue, clock=clock)
-        scheduler.reset(0.0)
+        scheduler.reset(0.0, session_id)
 
         heartbeat_sent_at = None
         verdict_results = []
@@ -168,8 +169,9 @@ class TestHeartbeatUnderVerdictBacklog(unittest.TestCase):
         queue = OutboundQueue()
         scheduler = HeartbeatScheduler(queue, clock=clock)
         writer = SocketWriter(queue, clock=clock, on_heartbeat_sent=scheduler.on_sent)
-        writer.attach(FakeTransport(), queue.new_session())
-        scheduler.reset(0.0)
+        session_id = queue.new_session()
+        writer.attach(FakeTransport(), session_id)
+        scheduler.reset(0.0, session_id)
 
         sent_at = []
         for _ in range(1000):

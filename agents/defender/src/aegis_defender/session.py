@@ -76,6 +76,10 @@ TYPE_RANK_VERDICT = 0
 TYPE_RANK_HEARTBEAT = 1
 
 
+def _fault_reason(outcome: "SendOutcome") -> str:
+    return "deadline-exhausted" if outcome is SendOutcome.EXPIRED else f"send-{outcome.value}"
+
+
 class OutboundFull(Exception):
     """in-flight 상한 초과. backpressure가 아니라 session fault다(§4.2)."""
 
@@ -259,9 +263,15 @@ class OutboundQueue:
                 self._heartbeat_pending = False
             return True
 
-    def purge_session(self) -> int:
-        """현재 session의 대기 item을 모두 버린다. 새 session에 replay하지 않는다."""
+    def purge_session(self, session_id: int | None = None) -> int:
+        """지정한 session의 대기 item을 버린다. 새 session에 replay하지 않는다.
+
+        `session_id`를 주면 그 session이 아직 현재일 때만 비운다. 이전 generation의
+        뒤늦은 정리가 이미 새 session에 쌓인 verdict를 지우지 못하게 하기 위한 것이다.
+        """
         with self._cv:
+            if session_id is not None and session_id != self._session_id:
+                return 0
             dropped = len(self._heap)
             self._heap.clear()
             self._in_flight = 0
@@ -377,15 +387,39 @@ class SocketWriter:
         with self._lock:
             return self._transport, self._session_id
 
-    def _is_current(self, transport: SocketTransport, session_id: int) -> bool:
-        """이 (transport, session)이 아직 현재 generation인가.
+    def _claim_fault(
+        self, transport: SocketTransport | None, session_id: int | None
+    ) -> tuple[SocketTransport | None, int] | None:
+        """generation 확인과 `FAULT` 전이·소켓 소유권 회수를 **한 임계구역에서** 수행한다.
 
-        blocking send는 lock 밖에서 일어나므로, send가 반환할 때쯤이면 수신 쪽이
-        EOF를 받아 이미 재연결했을 수 있다. 그 사실을 확인하지 않고 부수효과를
-        내면 이전 session의 실패가 **현재 session을 끊는다.**
+        확인과 전이를 나누면 그 사이에 재연결이 끼어들 수 있다. 확인은 통과했지만
+        전이 시점에는 이미 다른 generation인 상태가 되고, 이전 session의 실패가
+        새 session을 `FAULT`로 끌어내린다. 그래서 "아직 현재인가"와 "그렇다면 지금
+        소유권을 뺏는다"를 하나의 lock 안에서 끝낸다.
+
+        claim에 성공하면 `(회수한 transport, 그 session id)`를, 이미 교체됐으면
+        `None`을 돌려준다. `transport`가 `None`이면 generation과 무관한 장애
+        (writer 루프 자체의 예외)이므로 현재 것을 그대로 회수한다.
         """
         with self._lock:
-            return self._transport is transport and self._session_id == session_id
+            current = self._transport
+            if transport is not None:
+                if current is not transport or self._session_id != session_id:
+                    return None
+            claimed_session = self._session_id
+            self._transport = None
+            if self._state is not WriterState.STOPPED:
+                self._state = WriterState.FAULT
+            return current, claimed_session
+
+    def _claim_ready(self, transport: SocketTransport, session_id: int) -> bool:
+        """성공 경로의 `READY` 전이도 같은 임계구역 규칙을 따른다."""
+        with self._lock:
+            if self._transport is not transport or self._session_id != session_id:
+                return False
+            if self._state is WriterState.SENDING:
+                self._state = WriterState.READY
+            return True
 
     def detach(
         self,
@@ -406,11 +440,12 @@ class SocketWriter:
                 return False
             if expected_session is not None and self._session_id != expected_session:
                 return False
+            claimed_session = self._session_id
             self._transport = None
             if self._state is not WriterState.STOPPED:
                 self._state = WriterState.DISCONNECTED
         transport.close()
-        self._queue.purge_session()
+        self._queue.purge_session(claimed_session)
         return True
 
     def start(self) -> None:
@@ -479,23 +514,48 @@ class SocketWriter:
     ) -> SendResult:
         """send 시도 하나를 마무리한다.
 
-        **부수효과를 내기 전에 generation을 다시 확인한다.** blocking send가 도는
-        동안 수신 쪽이 EOF를 받아 재연결했다면 이 결과는 이미 사라진 session의
-        것이다. 그것으로 큐를 건드리거나 HEARTBEAT epoch를 옮기거나 session을
-        끊으면, 이전 session의 실패가 방금 연결된 session의 verdict를 폐기하고
-        fail-open을 만든다.
-        """
-        if not self._is_current(transport, session_id):
-            return self._settle_stale(result.item, f"superseded:{result.outcome.value}")
+        **generation 확인과 상태 전이를 원자적으로 수행한 뒤에만** 부수효과를 낸다.
+        blocking send가 도는 동안 수신 쪽이 EOF를 받아 재연결했다면 이 결과는 이미
+        사라진 session의 것이다. 그것으로 큐를 건드리거나 HEARTBEAT epoch를 옮기거나
+        session fault를 알리면, 이전 session의 실패가 방금 연결된 session을
+        중단시켜 fail-open 구간을 만든다.
 
+        확인과 전이를 나누면 그 사이가 그대로 경합 구간이 되므로, `_claim_fault`와
+        `_claim_ready`가 두 동작을 한 lock 안에서 끝낸다.
+        """
+        item = result.item
+        outcome = result.outcome
+
+        if outcome.is_fault:
+            claimed = self._claim_fault(transport, session_id)
+            if claimed is None:
+                return self._settle_stale(item, f"superseded:{outcome.value}")
+            self._count_outcome(result)
+            self._queue.complete(item)
+            self.last_result = result
+            self._announce_fault(_fault_reason(outcome), claimed)
+            return result
+
+        if not self._claim_ready(transport, session_id):
+            return self._settle_stale(item, f"superseded:{outcome.value}")
+
+        self._count_outcome(result)
+        if outcome is SendOutcome.SENT and started is not None:
+            self._observe(L_SEND, result.completed_at - started)
+        self._queue.complete(item)
+        self.last_result = result
+
+        if outcome is SendOutcome.SENT and not item.is_verdict and self._on_heartbeat_sent:
+            # §4.2 — **전체 frame의 성공 송신이 확인된 뒤에만** epoch를 갱신한다.
+            # scheduler가 자체 lock 안에서 session id를 다시 확인하므로, 이 호출과
+            # 재연결이 겹쳐도 이전 session의 성공 시각이 새 epoch를 덮지 않는다.
+            self._on_heartbeat_sent(result.completed_at, session_id)
+        return result
+
+    def _count_outcome(self, result: SendResult) -> None:
         outcome = result.outcome
         if outcome is SendOutcome.SENT:
             self._count(M_SEND_OK)
-            if started is not None:
-                self._observe(L_SEND, result.completed_at - started)
-            if not result.item.is_verdict and self._on_heartbeat_sent is not None:
-                # §4.2 — **전체 frame의 성공 송신이 확인된 뒤에만** epoch를 갱신한다.
-                self._on_heartbeat_sent(result.completed_at)
         elif outcome is SendOutcome.EXPIRED:
             self._count(M_VERDICT_EXPIRED if result.item.is_verdict else M_HEARTBEAT_EXPIRED)
         elif outcome is SendOutcome.TIMEOUT:
@@ -504,19 +564,6 @@ class SocketWriter:
             self._count(M_SEND_ERROR)
         elif outcome is SendOutcome.PARTIAL:
             self._count(M_SEND_PARTIAL)
-
-        self._queue.complete(result.item)
-        self.last_result = result
-
-        if outcome.is_fault:
-            reason = (
-                "deadline-exhausted" if outcome is SendOutcome.EXPIRED
-                else f"send-{outcome.value}"
-            )
-            self._fault(reason, transport, session_id)
-        else:
-            self._state = WriterState.READY
-        return result
 
     def _settle_stale(self, item: OutboundItem, detail: str) -> SendResult:
         """이전 session의 결과를 조용히 흘려보낸다. 현재 session을 건드리지 않는다."""
@@ -555,25 +602,48 @@ class SocketWriter:
         reason: str,
         transport: SocketTransport | None = None,
         session_id: int | None = None,
-    ) -> None:
-        """session fault를 선언한다.
+    ) -> bool:
+        """session fault를 선언한다. 실제로 선언했으면 True.
 
         `transport`가 주어지면 그 generation이 아직 현재일 때만 진행한다.
-        이전 session의 뒤늦은 실패로 현재 session을 끊지 않기 위한 것이다.
         transport 없이 호출되는 경우(writer 루프 자체의 예외)는 generation과
-        무관한 장애이므로 그대로 처리한다.
+        무관한 장애이므로 현재 것을 그대로 회수한다.
         """
-        if transport is not None and not self._is_current(transport, session_id):
+        claimed = self._claim_fault(transport, session_id)
+        if claimed is None:
             self._count(M_SEND_STALE)
-            return
+            return False
+        self._announce_fault(reason, claimed)
+        return True
 
-        self._state = WriterState.FAULT
+    def _announce_fault(
+        self, reason: str, claimed: tuple[SocketTransport | None, int]
+    ) -> None:
+        """claim이 끝난 뒤의 정리와 통보.
+
+        여기서 하는 일은 전부 이미 회수한 generation에 대한 것이다. `on_fault`에
+        session id를 함께 넘기는 이유는, 그 사이 새 session이 열렸다면 수신 쪽이
+        이 통보를 무시해야 하기 때문이다 — 그러지 않으면 이전 session의 실패가
+        새 session의 수신 루프를 중단시킨다.
+        """
+        claimed_transport, claimed_session = claimed
         self._count(M_SESSION_FAULT)
         if self._audit is not None:
-            self._audit.log("session-fault", source="writer", reason=reason)
-        self.detach(transport, session_id)
+            self._audit.log(
+                "session-fault", source="writer", reason=reason, session_id=claimed_session
+            )
+        if claimed_transport is not None:
+            claimed_transport.close()
+        self._queue.purge_session(claimed_session)
+
+        # §4.2 상태기계 — `FAULT`는 즉시 `DISCONNECTED`로 넘어간다. 그 사이에 새
+        # transport가 붙었다면 그쪽 상태(`READY`)를 덮지 않는다.
+        with self._lock:
+            if self._transport is None and self._state is WriterState.FAULT:
+                self._state = WriterState.DISCONNECTED
+
         if self._on_fault is not None:
-            self._on_fault(reason)
+            self._on_fault(reason, claimed_session)
 
     def _count(self, name: str) -> None:
         if self._metrics is not None:
@@ -619,8 +689,11 @@ class BrokerSession:
         self._connect_fn = connect_fn or self._dial_seqpacket
         self._stop = stop_event or threading.Event()
         self._fault = threading.Event()
+        self._state_lock = threading.Lock()
+        self._active_session_id = 0
         self.connect_attempts = 0
         self.sessions_opened = 0
+        self.stale_reconnect_requests = 0
 
     @staticmethod
     def _dial_seqpacket(path: str) -> SocketTransport:
@@ -628,11 +701,29 @@ class BrokerSession:
         sock.connect(path)
         return SocketTransport(sock)
 
-    def request_reconnect(self, reason: str = "") -> None:
-        """writer나 producer가 session fault를 알린다."""
-        self._fault.set()
+    def request_reconnect(self, reason: str = "", session_id: int | None = None) -> bool:
+        """writer나 producer가 session fault를 알린다. 실제로 반영했으면 True.
+
+        `session_id`를 주면 그 session이 아직 활성일 때만 반영한다. writer가
+        이전 generation의 실패를 뒤늦게 통보할 수 있는데, 그것으로 현재 수신
+        루프를 끊으면 이미 정상 연결된 session이 곧바로 중단되고 그 구간이
+        fail-open이 된다.
+
+        `session_id` 없이 호출하는 쪽(producer)은 현재 session의 수신 스레드
+        자신이므로 generation을 따질 필요가 없다.
+        """
+        with self._state_lock:
+            if session_id is not None and session_id != self._active_session_id:
+                self.stale_reconnect_requests += 1
+                if self._audit is not None:
+                    self._audit.log(
+                        "stale-reconnect-ignored", reason=reason, session_id=session_id
+                    )
+                return False
+            self._fault.set()
         if self._audit is not None and reason:
             self._audit.log("reconnect-requested", reason=reason)
+        return True
 
     def stop(self) -> None:
         self._stop.set()
@@ -648,12 +739,17 @@ class BrokerSession:
             if transport is None:
                 return
 
-            self._fault.clear()
             session_id = self._queue.new_session()
             connected_at = self._clock()
+            # 활성 generation 갱신과 fault 신호 해제를 한 임계구역에서 처리한다.
+            # 이전 generation의 뒤늦은 reconnect 요청이 이 사이에 끼어들어 새
+            # session을 시작하자마자 끊는 일이 없어야 한다.
+            with self._state_lock:
+                self._active_session_id = session_id
+                self._fault.clear()
             self._writer.attach(transport, session_id)
             if self._heartbeat is not None:
-                self._heartbeat.reset(connected_at)
+                self._heartbeat.reset(connected_at, session_id)
             self.sessions_opened += 1
             self._count(M_SESSION_CONNECTED)
             if self._audit is not None:

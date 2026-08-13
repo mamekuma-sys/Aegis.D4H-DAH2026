@@ -9,7 +9,11 @@ PACKET 수신 → 제한된 파싱 → 300ms 이내 결정론적 판정 → VERD
 1. **불확실하면 빠르게 `ACCEPT`한다.** parser 예외, 미지원 protocol, queue full, LLM 장애는 어느 것도 `DROP` 사유가 아닙니다(§6.2). 파싱 실패를 차단으로 바꾸는 순간 공격자는 malformed 패킷만 보내서 우리가 정상 트래픽을 막게 만들 수 있습니다.
 2. **소켓에 쓰는 주체는 `SocketWriter` 단일 스레드 하나뿐입니다**(§4.2). 판정 스레드와 HEARTBEAT 스케줄러는 불변 item을 만들어 우선순위 큐에 `put_nowait`할 뿐 `socket.send`를 직접 호출하지 않습니다.
 
-   여기에 따라오는 불변조건이 하나 더 있습니다 — **send 결과는 그 `(transport, session_id)`가 아직 현재 generation일 때만 반영합니다.** `send`는 lock 밖에서 일어나므로 반환할 때쯤이면 수신 쪽이 EOF를 받아 이미 재연결했을 수 있고, 그 결과로 큐·HEARTBEAT epoch·session 상태를 건드리면 이전 session의 실패가 방금 연결된 session의 verdict를 폐기해 fail-open을 만듭니다. `_settle`, `_fault`, `detach`, `OutboundQueue.complete`가 모두 generation을 확인하며, `tests/test_session.py`의 `TestStaleSessionResults`가 회귀 검증합니다.
+   여기에 따라오는 불변조건이 하나 더 있습니다 — **send 결과는 그 `(transport, session_id)`가 아직 현재 generation일 때만 반영하며, 확인과 상태 전이는 하나의 임계구역에서 원자적으로 수행합니다.** `send`는 lock 밖에서 일어나므로 반환할 때쯤이면 수신 쪽이 EOF를 받아 이미 재연결했을 수 있습니다. 확인과 전이를 나누면 그 사이가 그대로 경합 구간이 되어, 확인은 통과했지만 전이 시점에는 이미 다른 generation인 상태가 됩니다.
+
+   `_claim_fault()`가 "아직 현재인가"와 "그렇다면 지금 소유권을 뺏는다"를 한 lock 안에서 끝내고, `_claim_ready()`가 성공 경로에 같은 규칙을 적용합니다. claim 이후의 통보에는 회수한 session id를 함께 실어, `BrokerSession.request_reconnect()`와 `HeartbeatScheduler.on_sent()`가 각자의 lock 안에서 generation을 다시 확인합니다. 이 통보 경로를 막지 않으면 이전 session의 실패가 새 session의 수신 루프를 중단시켜 그 구간이 fail-open이 됩니다.
+
+   `tests/test_session.py`의 `TestStaleSessionResults`(claim 전후 삽입 포함)와 `TestReconnectNotificationScoping`이 회귀 검증합니다.
 3. **원격 LLM은 packet별 동기 판정 경로에 들어가지 않습니다**(§0.5, §12). 300ms 시한에 물리적으로 불가능하며, `contracts/defender/README.md`가 이를 계약으로 못박습니다.
 
 진짜 위험은 공격자가 아니라 우리 자신입니다(§0.3). 에이전트가 죽거나 연결이 끊기면 Broker는 fail-open으로 전 패킷을 통과시키고, 판정이 300ms를 넘으면 Broker가 그 패킷을 DROP하며, rule을 잘못 넣으면 SLA가 붕괴합니다. 구조의 절반이 이 셋을 막는 데 쓰입니다.

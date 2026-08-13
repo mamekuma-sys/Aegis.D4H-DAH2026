@@ -39,7 +39,15 @@ from aegis_defender.session import (
 )
 from aegis_defender.protocol import VERDICT_ACCEPT
 
-from .fakes import FakeClock, FakeTransport, ipv4_tcp, minimal_bundle, packet_frame, rule_document
+from .fakes import (
+    FakeClock,
+    FakeTransport,
+    fault_recorder,
+    ipv4_tcp,
+    minimal_bundle,
+    packet_frame,
+    rule_document,
+)
 
 # §5.2 확정 예산 (초)
 BUDGET_HOT_PATH_P50 = 150e-6
@@ -231,7 +239,7 @@ class TestCutoffIndependence(unittest.TestCase):
         self.queue = OutboundQueue()
         self.faults = []
         self.writer = SocketWriter(
-            self.queue, clock=self.clock, on_fault=self.faults.append
+            self.queue, clock=self.clock, on_fault=fault_recorder(self.faults)
         )
         self.transport = FakeTransport()
         self.writer.attach(self.transport, self.queue.new_session())
@@ -272,7 +280,7 @@ class TestCutoffIndependence(unittest.TestCase):
 
         metrics = M()
         writer = SocketWriter(
-            self.queue, metrics=metrics, clock=self.clock, on_fault=self.faults.append
+            self.queue, metrics=metrics, clock=self.clock, on_fault=fault_recorder(self.faults)
         )
         writer.attach(self.transport, self.queue.current_session())
 

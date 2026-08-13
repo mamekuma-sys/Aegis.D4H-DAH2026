@@ -87,6 +87,24 @@ class FakeTransport:
         self.inbox.append(frame)
 
 
+def fault_recorder(sink: list):
+    """`on_fault(reason, session_id)` 콜백에서 reason만 모은다."""
+
+    def record(reason, session_id=None):
+        sink.append(reason)
+
+    return record
+
+
+def completion_recorder(sink: list):
+    """`on_heartbeat_sent(completed_at, session_id)` 콜백에서 시각만 모은다."""
+
+    def record(completed_at, session_id=None):
+        sink.append(completed_at)
+
+    return record
+
+
 def ipv4_tcp(
     payload: bytes = b"",
     src_ip: bytes = bytes((10, 1, 0, 4)),

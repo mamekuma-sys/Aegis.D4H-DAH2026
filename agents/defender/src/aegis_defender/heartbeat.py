@@ -80,8 +80,10 @@ class HeartbeatScheduler:
         self._epoch: float | None = None
         self._session_connected_at: float | None = None
         self._last_successful_heartbeat: float | None = None
+        self._session_id: int | None = None
         self._thread: threading.Thread | None = None
         self.sent_count = 0
+        self.stale_completions_ignored = 0
 
     # ── epoch 상태 ──────────────────────────────────────────────────────────
 
@@ -103,12 +105,13 @@ class HeartbeatScheduler:
     def service_deadline(self) -> float | None:
         return None if self._epoch is None else self._epoch + self._service_budget
 
-    def reset(self, session_connected_at: float) -> None:
+    def reset(self, session_connected_at: float, session_id: int | None = None) -> None:
         """새 session의 epoch를 연다. 이전 session의 시각을 재사용하지 않는다."""
         with self._cv:
             self._session_connected_at = session_connected_at
             self._epoch = session_connected_at
             self._last_successful_heartbeat = None
+            self._session_id = session_id
             self._cv.notify_all()
 
     def clear(self) -> None:
@@ -117,11 +120,29 @@ class HeartbeatScheduler:
             self._epoch = None
             self._session_connected_at = None
             self._last_successful_heartbeat = None
+            self._session_id = None
             self._cv.notify_all()
 
-    def on_sent(self, completed_at: float) -> None:
-        """writer가 **전체 frame 송신 성공**을 확인했을 때만 호출된다."""
+    def on_sent(self, completed_at: float, session_id: int | None = None) -> bool:
+        """writer가 **전체 frame 송신 성공**을 확인했을 때만 호출된다.
+
+        `session_id`가 현재 session과 다르면 무시한다. writer가 성공을 통보하는
+        시점과 재연결이 겹칠 수 있는데, 이전 session의 성공 시각으로 epoch를
+        옮기면 방금 연 session의 첫 HEARTBEAT due가 과거로 당겨지거나 미뤄져
+        §4.2의 "reconnect는 이전 session의 timestamp를 재사용하지 않는다"가 깨진다.
+        generation 확인과 epoch 갱신을 같은 lock 안에서 끝낸다.
+        """
         with self._cv:
+            # 양쪽 generation이 모두 알려져 있고 서로 다를 때만 거절한다. 한쪽이
+            # 미지정이면 비교할 근거가 없으므로 그것을 이유로 epoch 갱신을 막지
+            # 않는다 — 막으면 HEARTBEAT가 영영 나가지 않아 fail-open이 된다.
+            if (
+                session_id is not None
+                and self._session_id is not None
+                and session_id != self._session_id
+            ):
+                self.stale_completions_ignored += 1
+                return False
             previous = self._last_successful_heartbeat
             reference = previous if previous is not None else self._session_connected_at
             self._last_successful_heartbeat = completed_at
@@ -141,6 +162,7 @@ class HeartbeatScheduler:
                         gap_seconds=round(gap, 3),
                         threshold=BROKER_LIVENESS_THRESHOLD,
                     )
+        return True
 
     # ── tick ────────────────────────────────────────────────────────────────
 

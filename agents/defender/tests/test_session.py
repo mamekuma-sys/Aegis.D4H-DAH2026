@@ -28,7 +28,14 @@ from aegis_defender.session import (
     WriterState,
 )
 
-from .fakes import FakeClock, FakeTransport, ipv4_tcp, packet_frame
+from .fakes import (
+    FakeClock,
+    FakeTransport,
+    completion_recorder,
+    fault_recorder,
+    ipv4_tcp,
+    packet_frame,
+)
 
 CONFIG = RuntimeConfig(agent_socket="/run/agent.sock")
 
@@ -140,7 +147,7 @@ class TestSocketWriterBudget(unittest.TestCase):
         self.faults = []
         self.writer = SocketWriter(
             self.queue, metrics=self.metrics, clock=self.clock,
-            on_fault=self.faults.append,
+            on_fault=fault_recorder(self.faults),
         )
         self.transport = FakeTransport()
         self.session_id = self.queue.new_session()
@@ -227,8 +234,8 @@ class TestSocketWriterBudget(unittest.TestCase):
     def test_heartbeat_epoch_advances_only_on_full_success(self):
         completions = []
         writer = SocketWriter(
-            self.queue, clock=self.clock, on_heartbeat_sent=completions.append,
-            on_fault=self.faults.append,
+            self.queue, clock=self.clock, on_heartbeat_sent=completion_recorder(completions),
+            on_fault=fault_recorder(self.faults),
         )
         transport = FakeTransport()
         writer.attach(transport, self.queue.current_session())
@@ -259,9 +266,14 @@ class TestStaleSessionResults(unittest.TestCase):
         self.queue = OutboundQueue()
         self.metrics = Metrics()
         self.faults = []
+        self.fault_sessions = []
+
+        def record_fault(reason, session_id=None):
+            self.faults.append(reason)
+            self.fault_sessions.append(session_id)
+
         self.writer = SocketWriter(
-            self.queue, metrics=self.metrics, clock=self.clock,
-            on_fault=self.faults.append,
+            self.queue, metrics=self.metrics, clock=self.clock, on_fault=record_fault,
         )
         self.sender = VerdictSender(self.queue, clock=self.clock)
 
@@ -337,8 +349,8 @@ class TestStaleSessionResults(unittest.TestCase):
         """§4.2 — reconnect는 이전 session의 HEARTBEAT 시각을 재사용하지 않는다."""
         completions = []
         writer = SocketWriter(
-            self.queue, clock=self.clock, on_heartbeat_sent=completions.append,
-            on_fault=self.faults.append,
+            self.queue, clock=self.clock, on_heartbeat_sent=completion_recorder(completions),
+            on_fault=fault_recorder(self.faults),
         )
         old = FakeTransport()
         old.hold = threading.Event()
@@ -384,6 +396,44 @@ class TestStaleSessionResults(unittest.TestCase):
         self._release(thread)
         del box
 
+    def test_reconnect_right_after_the_generation_claim_does_not_abort_the_new_session(self):
+        """generation 확인 **직후**에 session B가 붙는 경우(§4.2).
+
+        확인과 전이를 나누면 이 구간이 그대로 경합이 된다. `_claim_fault`가 둘을
+        한 lock 안에서 끝내므로, claim 이후에 붙은 session B는 이전 generation의
+        정리에 영향을 받지 않아야 한다. claim 직후에 재연결을 끼워 넣어 확인한다.
+        """
+        thread, box = self._start_blocked_send()
+
+        original_claim = self.writer._claim_fault
+        interposed = {}
+
+        def claim_then_reconnect(transport, session_id):
+            claimed = original_claim(transport, session_id)
+            if claimed is not None and "done" not in interposed:
+                interposed["done"] = True
+                # claim 은 성공했지만 부수효과는 아직이다. 여기서 session B 가 붙는다.
+                new_transport = FakeTransport()
+                new_session = self.queue.new_session()
+                self.writer.attach(new_transport, new_session)
+                self.sender.send(2, VERDICT_ACCEPT, self.clock.now)
+                interposed["transport"] = new_transport
+                interposed["session"] = new_session
+            return claimed
+
+        self.writer._claim_fault = claim_then_reconnect
+        self._release(thread, TimeoutError("late timeout"))
+
+        self.assertTrue(interposed.get("done"), "삽입 지점이 실행되지 않았다")
+        self.assertIs(box[0].outcome, SendOutcome.TIMEOUT)
+        # 이전 generation 의 정리가 session B 를 건드리지 않았다.
+        self.assertFalse(interposed["transport"].closed, "새 socket 이 닫혔다")
+        self.assertEqual(self.queue.qsize(), 1, "새 session verdict 가 폐기됐다")
+        self.assertIs(self.writer.state, WriterState.READY)
+        # fault 통보에는 **이전** session id 가 실려, 수신 쪽이 무시할 수 있다.
+        self.assertEqual(self.fault_sessions, [self.old_session])
+        self.assertNotEqual(self.fault_sessions[0], interposed["session"])
+
     def test_detach_ignores_a_generation_that_is_no_longer_current(self):
         new_transport, new_session = self._reconnect()
         # 이미 지나간 generation 으로 detach 를 시도해도 현재 것을 닫지 않는다.
@@ -394,6 +444,64 @@ class TestStaleSessionResults(unittest.TestCase):
         self.assertTrue(self.writer.detach(new_transport, new_session))
         self.assertTrue(new_transport.closed)
         self.old.hold.set()
+
+
+class TestReconnectNotificationScoping(unittest.TestCase):
+    """이전 generation의 fault 통보가 현재 수신 루프를 끊지 못한다(§4.2).
+
+    writer가 fault를 알리면 `DefenderRuntime._on_writer_fault` →
+    `BrokerSession.request_reconnect()`로 이어져 수신 루프의 fault event가 set된다.
+    통보에 session id가 실리지 않으면, 이전 session의 실패가 방금 연결된 session의
+    수신 루프를 즉시 종료시켜 그 구간이 fail-open이 된다.
+    """
+
+    def _session(self, connect_fn):
+        clock = FakeClock()
+        queue = OutboundQueue()
+        writer = SocketWriter(queue, clock=clock)
+        return BrokerSession(
+            config=CONFIG, queue=queue, writer=writer, heartbeat=None,
+            metrics=Metrics(), clock=clock, connect_fn=connect_fn,
+        )
+
+    def test_stale_reconnect_request_is_rejected(self):
+        made = []
+
+        def connect(path):
+            transport = FakeTransport()
+            made.append(transport)
+            if len(made) >= 2:
+                session.stop()
+                return transport
+            transport.feed(b"")  # 첫 session 은 즉시 EOF → 재연결
+            return transport
+
+        session = self._session(connect)
+        session.run(lambda envelope: True)
+
+        active = session._active_session_id
+        self.assertGreaterEqual(active, 2)
+
+        # 이전 generation 의 통보는 반영되지 않는다.
+        self.assertFalse(session.request_reconnect("send-timeout", session_id=active - 1))
+        self.assertEqual(session.stale_reconnect_requests, 1)
+
+        # 현재 generation 의 통보는 반영된다.
+        self.assertTrue(session.request_reconnect("send-timeout", session_id=active))
+
+    def test_producer_request_without_session_id_is_always_accepted(self):
+        # producer 는 현재 session 의 수신 스레드 자신이므로 generation 을 따지지 않는다.
+        session = self._session(lambda path: FakeTransport())
+        self.assertTrue(session.request_reconnect("verdict-enqueue-full"))
+
+    def test_runtime_forwards_the_session_id_to_the_session(self):
+        """배선 확인 — writer의 session id가 `request_reconnect`까지 도달한다."""
+        import inspect
+
+        from aegis_defender.main import DefenderRuntime
+
+        signature = inspect.signature(DefenderRuntime._on_writer_fault)
+        self.assertIn("session_id", signature.parameters)
 
 
 class TestSingleWriterOwnership(unittest.TestCase):
