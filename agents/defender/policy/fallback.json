@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "bundle_id": "defender-fallback-empty",
+  "generated_at": "2026-08-13T00:00:00Z",
+  "baseline_profiles": [],
+  "rules": [],
+  "alert_profiles": [
+    {
+      "profile_id": "round-default",
+      "minimum_samples": 200,
+      "sustain_window": 30.0,
+      "alert_thresholds": {
+        "raw_drop_rate": 0.05,
+        "baseline_violation_rate": 0.01,
+        "parser_failure_rate": 0.2,
+        "rule_concentration": 0.8,
+        "promotion_cohort_conflict": 0.01
+      },
+      "reviewer_runbook": "Break 에서만 조치한다. 이 bundle 은 rule 이 없는 최후 검증본이므로, 선택됐다는 사실 자체가 active.json 검증 실패를 뜻한다. startup 로그의 policy_errors 를 먼저 확인한다."
+    }
+  ]
+}
