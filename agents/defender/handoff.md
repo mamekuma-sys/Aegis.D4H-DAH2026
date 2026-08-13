@@ -360,7 +360,7 @@ Verdict 값은 `0x00` ACCEPT, `0x01` DROP이다. `pkt_len`, 실제 payload 길�
 ### 8.3 시간·실패 계약
 
 - PACKET 수신 후 300ms 안에 VERDICT를 반환한다.
-- 마지막 성공 HEARTBEAT 기준 약 1초에 다음 HEARTBEAT를 due로 만들고, 마지막 성공 후 2초를 절대 service deadline으로 둔다.
+- 성공한 socket 연결 시각 `session_connected_at`을 세션별 HEARTBEAT epoch로 초기화한다. 최초 HEARTBEAT는 연결 후 약 1초 due, 연결 후 2초 절대 service deadline이며, 이후에는 마지막 성공 송신 시각을 같은 방식으로 사용한다.
 - Broker는 3초 이상 HEARTBEAT가 없으면 에이전트가 죽은 것으로 판단한다.
 - 에이전트가 없거나 죽으면 Broker는 fail-open으로 모든 패킷을 통과시킨다.
 - VERDICT가 300ms를 넘으면 Broker는 해당 패킷을 DROP한다.
@@ -432,9 +432,9 @@ startup validation
 - PACKET receive, verdict decision, HEARTBEAT scheduling, socket send, async analysis의 책임을 분리한다.
 - socket write는 `SocketWriter` 단일 스레드만 수행한다. verdict producer와 heartbeat scheduler는 frame을 만든 뒤 bounded priority queue에 `put_nowait`하고 socket 또는 writer lock을 직접 사용하지 않는다.
 - `VerdictSender`는 frame 생성, `received_at_monotonic`·`broker_deadline`·`absolute_send_deadline`·sequence metadata 부착, `put_nowait`, enqueue 성공·실패와 writer `SendResult` 계측만 맡는다. socket, timeout, deadline expiry, priority dequeue는 `SocketWriter`만 소유한다.
-- queue key는 두 type 모두 `(absolute_send_deadline, type_rank, sequence)`로 고정한다. VERDICT는 packet receipt+200ms 내부 send deadline, HEARTBEAT는 마지막 성공+2s service deadline을 사용하고 가장 이른 절대 deadline을 먼저 보낸다. deadline tie에서만 VERDICT(`type_rank=0`)가 HEARTBEAT(`type_rank=1`)보다 앞선다. heartbeat item은 최대 하나로 coalesce하되 더 이른 기존 deadline을 연장하지 않는다.
+- queue key는 두 type 모두 `(absolute_send_deadline, type_rank, sequence)`로 고정한다. VERDICT는 packet receipt+200ms 내부 send deadline, HEARTBEAT는 connection/success epoch+2s service deadline을 사용하고 가장 이른 절대 deadline을 먼저 보낸다. deadline tie에서만 VERDICT(`type_rank=0`)가 HEARTBEAT(`type_rank=1`)보다 앞선다. heartbeat item은 최대 하나로 coalesce하되 더 이른 기존 deadline을 연장하지 않는다.
 - writer 상태는 `DISCONNECTED → READY → SENDING → READY|FAULT → DISCONNECTED`와 `STOPPED`로 한정한다. timeout·partial send·socket 오류·로컬 만료는 current session item을 폐기하고 재연결하며 새 session에 verdict를 replay하지 않는다.
-- VERDICT의 `broker_remaining = received_at + 300ms - monotonic_now`, `send_wait = min(50ms, broker_remaining - 100ms)`를 dequeue 직후와 send 직전에 계산한다. `broker_remaining <= 100ms`이면 200ms 내부 hard cutoff로 로컬 폐기·재연결한다. HEARTBEAT는 약 1초 due, 마지막 성공+2초 service deadline을 가지며 `send_wait = min(50ms, service_deadline-now)`를 사용한다. 어느 deadline도 충족할 수 없으면 stale frame을 송신하지 않고 session queue를 폐기해 재연결하며 verdict를 새 session에 replay하지 않는다.
+- VERDICT의 `broker_remaining = received_at + 300ms - monotonic_now`, `send_wait = min(50ms, broker_remaining - 100ms)`를 dequeue 직후와 send 직전에 계산한다. `broker_remaining <= 100ms`이면 200ms 내부 hard cutoff로 로컬 폐기·재연결한다. HEARTBEAT는 `heartbeat_epoch+1s` due, `heartbeat_epoch+2s` service deadline과 `send_wait = min(50ms, service_deadline-now)`를 사용한다. 최초 epoch는 성공한 연결의 monotonic `session_connected_at`이고 `last_successful_heartbeat=None`이다. 전체 HEARTBEAT frame 송신 성공 후에만 epoch를 `send_completed_at_monotonic`으로 갱신하며 timeout·partial send·socket 오류에서는 갱신하지 않는다. 어느 deadline도 충족할 수 없으면 stale frame을 송신하지 않고 session queue를 폐기해 재연결하며 verdict를 새 session에 replay하지 않는다.
 - 50ms는 socket fault timeout이고 정상 p99 send 목표가 아니다. shutdown과 reconnect 중 중복 writer·heartbeat thread, orphan queue, stale socket이 남지 않게 한다.
 - reference skeleton의 한 스레드 `recv → verdict → send`와 달리, 승인 모델은 단일 receive/decision producer와 단일 SocketWriter를 분리한다. producer는 inbound queue 없이 한 packet씩 판정하고 VERDICT enqueue 성공 후 physical send를 기다리지 않고 다음 `recv`로 진행한다.
 - outbound in-flight는 현재 `SENDING`과 pending VERDICT·HEARTBEAT를 합쳐 session당 최대 256건이고 pending HEARTBEAT는 최대 1건이다. VERDICT `put_nowait` 실패 시 기다리거나 drop하지 않고 같은 session 수신을 중단해 queued item을 폐기하고 reconnect한다. producer 추가와 inbound queue 도입은 별도 설계 승인 전까지 금지한다.
@@ -496,7 +496,7 @@ header가 유효해 `pkt_id`를 알지만 raw IP가 잘렸거나 비정상이면
 - `BrokerSession`: Unix socket 연결, reconnect, receive lifecycle
 - `FrameCodec`: PACKET validation과 VERDICT·HEARTBEAT serialization
 - `SocketWriter`: bounded deadline-priority queue와 socket send를 소유하는 단일 writer thread
-- `HeartbeatScheduler`: 약 1초 cadence와 지연 감시
+- `HeartbeatScheduler`: 세션별 connection/success epoch 기준 약 1초 cadence와 2초 service deadline 감시
 - `PacketParser`: bounded IP/L4 및 증명된 application parser dispatch
 - `HotPolicy`: pre-approved rule과 immutable correlation snapshot의 bounded single read
 - `AnomalyMonitor`: packet-derived metric 집계와 alert publication만 수행하며 runtime policy state는 변경하지 않음
@@ -622,7 +622,7 @@ LLM은 선택적 비동기 조언자다.
 - LLM timeout·429·invalid JSON·quota exhaustion
 - SIGTERM과 Round 종료
 
-retry에는 bounded backoff와 shutdown interrupt를 둔다. reconnect 중 오래된 packet verdict를 새 session으로 보내지 않는다.
+retry에는 bounded backoff와 shutdown interrupt를 둔다. reconnect 중 오래된 packet verdict를 새 session으로 보내지 않는다. 연결 성공 때마다 새 `session_connected_at`을 기록하고 `last_successful_heartbeat=None`으로 초기화하며, 이전 session의 HEARTBEAT timestamp, due/deadline과 pending item을 폐기한다.
 
 short-frame 정책은 결정되어 있다. `type=0x01`이고 총 길이가 11 byte 미만이면 `pkt_id`를 만들 수 없으므로 verdict 없이 socket close·reconnect한다. 11-byte header가 완전하고 선언 길이만 불일치하면 해당 `pkt_id`에 `ACCEPT`한다.
 
@@ -658,6 +658,8 @@ agents/defender/
     ├── test_heartbeat.py
     ├── test_packet.py
     ├── test_policy.py
+    ├── test_anomaly.py
+    ├── test_policy_audit.py
     ├── test_state.py
     ├── test_correlation.py
     ├── test_advisory.py
@@ -689,6 +691,9 @@ agents/defender/
 - 반복 reconnect에서도 이전 writer가 socket을 보유하지 않고 active `SocketWriter`가 정확히 하나임
 - HEARTBEAT와 VERDICT의 absolute send deadline이 같으면 tie-break로 VERDICT가 먼저 전송되고 single writer만 fake socket에 씀
 - writer를 멈춘 채 HEARTBEAT service deadline이 두 VERDICT deadline 사이에 오도록 넣은 뒤 재개하면 earliest VERDICT, HEARTBEAT, later VERDICT 순서로 전송됨
+- fake clock 최초 연결 `t=0`에서 `last_successful_heartbeat=None`이어도 최초 HEARTBEAT due/service deadline이 `t=1s`/`t=2s`로 정해짐
+- 최초 HEARTBEAT 전부터 verdict backlog가 nonempty여도 connection epoch 기준 service deadline 전에 HEARTBEAT가 나가고 nonexpired verdict는 300ms를 지킴
+- 이전 session HEARTBEAT 성공 `t=0.75s`, reconnect 성공 `t=10s`이면 새 due/deadline은 `t=11s`/`t=12s`이고 이전 timestamp와 pending HEARTBEAT item을 재사용하지 않음
 - 지속적으로 nonempty인 verdict backlog에서도 HEARTBEAT가 마지막 성공 후 2초 service deadline 전에 전송되고, 만료되지 않은 verdict는 packet receipt 후 300ms 안에 전송됨
 - blocked fake-socket send는 VERDICT `min(50ms, broker_remaining-100ms)`, HEARTBEAT `min(50ms, service_deadline-now)` 안에 timeout되고 session queue 폐기·reconnect되며 verdict를 새 session에 replay하지 않음
 
