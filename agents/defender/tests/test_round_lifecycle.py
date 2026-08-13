@@ -13,6 +13,7 @@ import json
 import ntpath
 import os
 import pathlib
+import posixpath
 import re
 import tempfile
 import threading
@@ -125,23 +126,53 @@ class TestRuntimeConfig(unittest.TestCase):
     def test_advisory_enabled_requires_a_key(self):
         self.assertTrue(load_config({"LLM_API_KEY": "x"}).advisory_enabled)
 
-    def test_contract_socket_path_is_accepted_on_every_host_os(self):
-        """`AGENT_SOCKET`은 컨테이너 안의 Linux 경로다.
+    # `AGENT_SOCKET`은 컨테이너 안의 Linux 경로다. `os.path.isabs`는 Windows에서
+    # `ntpath`로 위임되는데 두 모듈의 판정이 갈리는 입력이 있고, 그 경계는
+    # 인터프리터 버전에 따라서도 움직인다(3.13에서 `ntpath.isabs('/run/agent.sock')`가
+    # True→False로 바뀌었다). 호스트 OS나 Python 버전 때문에 런타임 계약이
+    # 달라져서는 안 되므로, 판정 기준이 `posixpath`와 정확히 일치해야 한다.
+    SOCKET_PATH_CASES = (
+        "/run/agent.sock",
+        "/var/run/agent.sock",
+        "/tmp/x/agent.sock",
+        "agent.sock",
+        "./agent.sock",
+        "run\\agent.sock",
+        "C:/agent.sock",
+        "\\\\server\\share\\agent.sock",
+    )
 
-        `os.path.isabs`는 Windows에서 `ntpath`로 위임되고, Python 3.13부터
-        `ntpath.isabs('/run/agent.sock')`가 False다. 호스트 OS 규칙으로 판단하면
-        개발자가 Windows에서 테스트를 돌린다는 이유만으로 계약 기본값이 거부된다.
+    def test_socket_path_validation_follows_posix_not_the_host_os(self):
+        """주의 — 이 테스트는 **Windows에서 돌 때만** `os.path`로의 회귀를 잡는다.
+
+        Linux·macOS에서는 `os.path`가 곧 `posixpath`라 둘을 구분할 수 없다.
+        CI(`defender-tests`)는 ubuntu이므로 이 검사는 Linux에서 통과해도
+        회귀 부재의 증거가 되지 않는다. Windows 개발 환경에서 한 번씩 전체
+        테스트를 돌리는 것이 실질적인 안전망이다.
         """
-        self.assertFalse(ntpath.isabs("/run/agent.sock"))  # 전제 확인
-        for path in ("/run/agent.sock", "/var/run/agent.sock", "/tmp/x/agent.sock"):
+        for path in self.SOCKET_PATH_CASES:
             with self.subTest(path=path):
-                self.assertEqual(load_config({"AGENT_SOCKET": path}).agent_socket, path)
+                try:
+                    loaded = load_config({"AGENT_SOCKET": path})
+                    accepted = True
+                except ConfigError:
+                    accepted = False
+                self.assertEqual(accepted, posixpath.isabs(path))
+                if accepted:
+                    self.assertEqual(loaded.agent_socket, path)
 
-    def test_windows_style_path_is_still_rejected(self):
-        for path in ("agent.sock", "./agent.sock", "run\\agent.sock"):
-            with self.subTest(path=path):
-                with self.assertRaises(ConfigError):
-                    load_config({"AGENT_SOCKET": path})
+    def test_the_case_table_actually_discriminates(self):
+        """위 테스트가 `os.path`로의 회귀를 실제로 잡는지 확인한다.
+
+        `ntpath`와 `posixpath`의 판정이 갈리는 입력이 표에 하나도 없으면 위
+        테스트는 Linux에서 언제나 통과하는 무의미한 검사가 된다. 어떤 입력에서
+        갈리는지는 버전마다 다르므로 "적어도 하나"만 요구한다.
+        """
+        disagreeing = [
+            path for path in self.SOCKET_PATH_CASES
+            if ntpath.isabs(path) != posixpath.isabs(path)
+        ]
+        self.assertTrue(disagreeing, "ntpath/posixpath 판정이 갈리는 입력이 표에 없다")
 
 
 class TestConsoleOutputPortability(unittest.TestCase):
