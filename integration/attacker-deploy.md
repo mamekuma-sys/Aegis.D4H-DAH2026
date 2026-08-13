@@ -59,6 +59,9 @@ if ($LASTEXITCODE -ne 0) { throw 'docker build failed' }
 # (게이트 5) 스켈레톤 위 라이브 스모크 — 공/방 기동 후 공격 로그 확인
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>"
 if ($LASTEXITCODE -ne 0) { throw 'skeleton live smoke up failed' }
+# 운영 페이지 또는 POST /control/start 로 라운드를 연 뒤, 스켈레톤 이미지로 바뀐 공/방을 되돌린다.
+pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -ReapplyAgents
+if ($LASTEXITCODE -ne 0) { throw 'reapply team agent images failed' }
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -Logs
 # 정리: named volume은 유지한다. down -v 를 쓰지 않는다.
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -Down
@@ -85,6 +88,7 @@ if ($LASTEXITCODE -ne 0) { throw 'docker push failed' }
 - **LLM 변수 이름**: 공식 주입은 `LLM_BASE_URL`·`LLM_API_KEY`. 라이브 스모크에서 LLM 경로까지 태우려면 스켈레톤 `.env`의 `LLM_UPSTREAM_KEY`가 있어야 하며, 없으면 LLM 조언 경로만 fail-open되고 결정론 경로는 정상 동작한다.
 - **서비스명/프로필**: override는 스켈레톤 서비스 `team1-attacker`와 `team1-defender`(`profiles: ["combat"]`)에 병합된다. 스켈레톤 서비스명이 바뀌면 override도 갱신해야 한다.
 - **Compose 경로**: 여러 `-f` 병합 시 상대경로는 첫 번째 Compose 파일 기준이다. override에 저장소 상대경로를 두지 말고 `run-with-skeleton.ps1`이 주입하는 `AEGIS_ATTACKER_CONTEXT`를 사용한다.
+- **운영 페이지 시작 재생성**: backend `POST /control/start`는 combatant를 스켈레톤 이미지로 되돌린다. 로컬 스모크에서 라운드를 연 뒤에는 `-ReapplyAgents`로 팀 이미지를 다시 올리고 실행 중 이미지를 검사한다. 본선은 Registry `latest`를 쓰므로 이 절차가 필요 없다.
 
 ## 5. 설계상 의도된 범위 (배포에 문제 없음)
 

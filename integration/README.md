@@ -6,6 +6,8 @@
 > 방어 이미지 절차는 `integration/defender-deploy.md`를 참조합니다.
 >
 > 여러 Compose 파일을 `-f`로 병합하면 상대경로는 override 파일이 아니라 첫 번째 Compose 파일 기준으로 해석됩니다. `compose.agents.yml`은 저장소 상대경로를 쓰지 않고, `run-with-skeleton.ps1`이 `AEGIS_ATTACKER_CONTEXT`와 `AEGIS_DEFENDER_CONTEXT`에 저장소 절대경로를 넣어 주입합니다. 개인 절대경로는 Git에 기록하지 않습니다.
+>
+> 로컬 스모크에서 운영 페이지 또는 `POST /control/start`로 라운드를 열면 Team 1 컨테이너가 스켈레톤 이미지로 다시 만들어집니다. 그 뒤에는 `run-with-skeleton.ps1 -ReapplyAgents`로 팀 이미지를 되돌리고 실행 중 이미지를 검사합니다.
 
 ## 현재 가능한 검사
 

@@ -40,6 +40,27 @@ if ($runnerText -notmatch 'ConfigOnly') {
 if ($runnerText -notmatch 'LogsDefender') {
     throw 'run-with-skeleton.ps1 is missing -LogsDefender.'
 }
+if ($runnerText -notmatch 'ReapplyAgents') {
+    throw 'run-with-skeleton.ps1 is missing -ReapplyAgents.'
+}
+if ($runnerText -notmatch "--no-deps") {
+    throw 'run-with-skeleton.ps1 does not reapply agents with --no-deps.'
+}
+if ($runnerText -notmatch "--no-build") {
+    throw 'run-with-skeleton.ps1 does not reapply agents with --no-build.'
+}
+if ($runnerText -notmatch "--force-recreate") {
+    throw 'run-with-skeleton.ps1 does not reapply agents with --force-recreate.'
+}
+if ($runnerText -notmatch 'team1-attacker' -or $runnerText -notmatch 'team1-defender') {
+    throw 'run-with-skeleton.ps1 does not reapply both team1-attacker and team1-defender.'
+}
+if ($runnerText -notmatch 'Config\.Image') {
+    throw 'run-with-skeleton.ps1 does not inspect the running container image after reapply.'
+}
+if ($runnerText -notmatch 'Run -ReapplyAgents after /control/start') {
+    throw 'run-with-skeleton.ps1 does not fail closed when /control/start replaced team images.'
+}
 if ($runnerText -match "'down',\s*'-v'" -or $runnerText -match 'down -v') {
     throw 'run-with-skeleton.ps1 still uses docker compose down -v.'
 }
@@ -77,6 +98,12 @@ if ($attackerText -notmatch "throw 'docker build failed'") {
 if ($attackerText -notmatch "throw 'docker push failed'") {
     throw 'attacker-deploy.md does not stop when docker push fails.'
 }
+if ($attackerText -notmatch 'ReapplyAgents') {
+    throw 'attacker-deploy.md does not document -ReapplyAgents after /control/start.'
+}
+if ($attackerText -notmatch "throw 'reapply team agent images failed'") {
+    throw 'attacker-deploy.md does not stop when team image reapply fails.'
+}
 
 $defenderText = [System.IO.File]::ReadAllText($defenderRunbook)
 if ($defenderText -notmatch 'python -m unittest discover') {
@@ -106,8 +133,11 @@ if ($defenderText -notmatch "throw 'docker push failed'") {
 if ($defenderText -notmatch 'team\{N\}/defender:latest') {
     throw 'defender-deploy.md does not use the official defender Registry name.'
 }
-if ($defenderText -notmatch 'force-recreate') {
-    throw 'defender-deploy.md does not document POST /control/start image restore.'
+if ($defenderText -notmatch 'ReapplyAgents') {
+    throw 'defender-deploy.md does not document -ReapplyAgents after /control/start.'
+}
+if ($defenderText -notmatch "throw 'reapply team agent images failed'") {
+    throw 'defender-deploy.md does not stop when team image reapply fails.'
 }
 
-Write-Output 'Agent Compose override tests passed: 21 cases.'
+Write-Output 'Agent Compose override tests passed: 29 cases.'

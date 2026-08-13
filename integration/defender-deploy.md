@@ -61,6 +61,9 @@ if ($LASTEXITCODE -ne 0) { throw 'docker build failed' }
 # (게이트 5) 스켈레톤 위 공격·방어 동시 기동
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>"
 if ($LASTEXITCODE -ne 0) { throw 'skeleton live smoke up failed' }
+# 운영 페이지 또는 POST /control/start 로 라운드를 연 뒤, 스켈레톤 이미지로 바뀐 공/방을 되돌린다.
+pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -ReapplyAgents
+if ($LASTEXITCODE -ne 0) { throw 'reapply team agent images failed' }
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -LogsDefender
 # 시작 로그에서 policy_source=active, drop_capable_rules=0 을 확인한다.
 # 정리: named volume은 유지한다. down -v 를 쓰지 않는다.
@@ -89,7 +92,7 @@ if ($LASTEXITCODE -ne 0) { throw 'docker push failed' }
 - **비밀·주소·경로 미포함(제7·16조)**: 키·토큰·개인 절대경로를 이미지·저장소에 남기지 않는다.
 - **Compose 경로**: 상대경로는 첫 번째 `-f` 파일 기준이다. `AEGIS_DEFENDER_CONTEXT`를 사용한다.
 - **시작 로그**: `policy_source=active`, `drop_capable_rules=0`이 정상이다. active bundle의 SHADOW rule은 차단 권한이 없다.
-- **운영 페이지 시작 재생성**: backend `POST /control/start`는 combatant를 스켈레톤 이미지로 force-recreate한다. 로컬 스모크에서 팀 이미지를 유지하려면 start 이후 override와 함께 `up -d --no-deps --force-recreate team1-attacker team1-defender`를 다시 실행한다. 본선은 Registry `latest`를 쓰므로 이 절차가 필요 없다.
+- **운영 페이지 시작 재생성**: backend `POST /control/start`는 combatant를 스켈레톤 이미지로 force-recreate한다. 로컬 스모크에서 라운드를 연 뒤에는 `-ReapplyAgents`로 team1-attacker·team1-defender를 팀 이미지로 되돌리고, 실행 중 이미지가 override 값인지 확인한다. 이 단계 없이 로그를 보면 스켈레톤 레퍼런스 에이전트를 검증하게 된다. 본선은 Registry `latest`를 쓰므로 이 절차가 필요 없다.
 
 ## 5. 설계상 의도된 범위
 

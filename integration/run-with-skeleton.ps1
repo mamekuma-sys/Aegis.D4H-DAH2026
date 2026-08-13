@@ -25,6 +25,10 @@
 .PARAMETER LogsDefender
   team1-defender 로그를 follow한다.
 
+.PARAMETER ReapplyAgents
+  /control/start 이후 스켈레톤 이미지로 바뀐 team1-attacker·team1-defender 를
+  팀 이미지로 다시 만들고, 실행 중 이미지가 override 값인지 검사한다.
+
 .EXAMPLE
   pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath <스켈레톤-루트>
 #>
@@ -33,7 +37,8 @@ param(
     [switch]$Down,
     [switch]$ConfigOnly,
     [switch]$Logs,
-    [switch]$LogsDefender
+    [switch]$LogsDefender,
+    [switch]$ReapplyAgents
 )
 
 $ErrorActionPreference = "Stop"
@@ -119,6 +124,47 @@ function Assert-Team1BuildContext {
     Write-Host "$ServiceName.build.context=$context"
 }
 
+function Get-ComposeServiceContainerId([string]$ServiceName) {
+    $rawIds = & docker compose --progress quiet -f $compose -f $override --profile combat ps -q $ServiceName
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker compose ps failed for $ServiceName"
+    }
+    $first = $null
+    foreach ($line in @($rawIds)) {
+        $trimmed = ([string]$line).Trim()
+        if ($trimmed.Length -gt 0) {
+            $first = $trimmed
+            break
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($first)) {
+        throw "$ServiceName is not running"
+    }
+    return $first
+}
+
+function Assert-Team1RunningImage([string]$ServiceName) {
+    $cfg = Get-MergedComposeConfig
+    $service = $cfg.services.psobject.Properties[$ServiceName]
+    if ($null -eq $service) {
+        throw "merged compose is missing service $ServiceName"
+    }
+    $expected = [string]$service.Value.image
+    if ([string]::IsNullOrWhiteSpace($expected)) {
+        throw "merged compose has empty $ServiceName.image"
+    }
+    $containerId = Get-ComposeServiceContainerId $ServiceName
+    $actual = (& docker inspect --format '{{.Config.Image}}' $containerId)
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker inspect failed for $ServiceName"
+    }
+    $actual = ([string]$actual).Trim()
+    if ($actual -ne $expected) {
+        throw "$ServiceName is running image '$actual', expected '$expected'. Run -ReapplyAgents after /control/start."
+    }
+    Write-Host "$ServiceName.image=$actual"
+}
+
 if ($Down) {
     Invoke-AgentCompose @('down')
     return
@@ -128,6 +174,13 @@ Assert-Team1BuildContext -ServiceName 'team1-attacker' -ExpectedContext $env:AEG
 Assert-Team1BuildContext -ServiceName 'team1-defender' -ExpectedContext $env:AEGIS_DEFENDER_CONTEXT -SkeletonPathValue $SkeletonPath -RepoLeaf 'defender'
 
 if ($ConfigOnly) {
+    return
+}
+
+if ($ReapplyAgents) {
+    Invoke-AgentCompose @('up', '-d', '--no-deps', '--no-build', '--force-recreate', 'team1-attacker', 'team1-defender')
+    Assert-Team1RunningImage 'team1-attacker'
+    Assert-Team1RunningImage 'team1-defender'
     return
 }
 
@@ -144,6 +197,7 @@ if ($Logs) {
 # 공/방 이미지 빌드 + 인프라 기동. LLM 키는 스켈레톤 .env(LLM_UPSTREAM_*)로 주입한다.
 Invoke-AgentCompose @('up', '-d', '--build')
 Write-Host "→ 운영 페이지: http://localhost:4100 (게임 길이 설정 후 시작)"
+Write-Host "→ 라운드 시작 후 팀 이미지 재적용:  pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath <스켈레톤-루트> -ReapplyAgents"
 Write-Host "→ 공격 로그:  pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath <스켈레톤-루트> -Logs"
 Write-Host "→ 방어 로그:  pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath <스켈레톤-루트> -LogsDefender"
 Write-Host "→ 정리:       pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath <스켈레톤-루트> -Down"
