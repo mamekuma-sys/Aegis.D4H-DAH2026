@@ -155,6 +155,19 @@ class TestRuntimeResilience(unittest.TestCase):
         # Round 종료 시 비밀 원문 폐기
         self.assertEqual(rt._secret_store.secrets_snapshot(), set())
 
+    def test_budget_resets_between_rounds(self):
+        # LLM exploit 경로를 실제로 타서 라운드마다 llm_calls가 증가하게 한다
+        arena = FakeArena("URL Fetcher — GET /fetch?url=<url>", "/fetch?url=x", "FLAG{win}",
+                          flag_when=lambda full: full.startswith("/fetch"))
+        rt = make_runtime(arena)
+        rt.run_once()
+        after_first = rt.budget.llm_calls
+        self.assertGreater(after_first, 0)  # 첫 라운드에서 LLM 예산을 소비
+        rt.run_once()
+        # 라운드별 예산은 격리되어야 한다: 누적(2N)이 아니라 라운드 단위(N)로 리셋
+        self.assertEqual(rt.budget.llm_calls, after_first)
+        self.assertEqual(rt._report.summary()["llm_calls"], after_first)
+
 
 class MultiPortArena:
     """여러 포트가 같은 배너를 내고 exploit 경로에서 포트별 flag를 반환한다."""

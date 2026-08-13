@@ -9,6 +9,7 @@ from aegis_attacker.models import (
     MissionState,
     Observation,
     ObservedServiceProfile,
+    RoundBudget,
     S4ChainStage,
     Scenario,
     ScenarioHypothesis,
@@ -134,6 +135,32 @@ class TestHypothesis(unittest.TestCase):
         self.assertTrue(h.active)
         h.stop_reason = "예산 소진"
         self.assertFalse(h.active)
+
+
+class TestRoundBudget(unittest.TestCase):
+    def test_try_reserve_llm_enforces_cap_atomically(self):
+        b = RoundBudget()
+        # 상한까지는 예약 성공하며 호출 수를 증가시킨다
+        self.assertTrue(b.try_reserve_llm(2))
+        self.assertTrue(b.try_reserve_llm(2))
+        self.assertEqual(b.llm_calls, 2)
+        # 상한 도달 후에는 실패하고 카운터를 더 올리지 않는다
+        self.assertFalse(b.try_reserve_llm(2))
+        self.assertEqual(b.llm_calls, 2)
+
+    def test_reset_clears_all_counters(self):
+        b = RoundBudget()
+        b.request_count = 5
+        b.submit_count = 3
+        b.try_reserve_llm(100)
+        b.add_llm(0, 42)
+        b.reset()
+        self.assertEqual(
+            (b.request_count, b.submit_count, b.llm_calls, b.llm_tokens),
+            (0, 0, 0, 0),
+        )
+        # 리셋 후 다시 상한만큼 예약 가능(라운드별 격리)
+        self.assertTrue(b.try_reserve_llm(1))
 
 
 if __name__ == "__main__":

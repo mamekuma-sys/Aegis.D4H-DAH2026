@@ -63,6 +63,7 @@ class AttackerRuntime:
     def _build_round(self) -> None:
         self._round_seq += 1
         self._round_id = f"round-{self._round_seq}"
+        self.budget.reset()  # 라운드별 예산 격리 — 누적 상한/보고 왜곡 방지
         now = self.clock()
         store = RoundSecretStore(self._round_id, clock=self.clock)
         submit_handle = (store.put(KIND_SUBMIT_TOKEN, self.config.submit_token)

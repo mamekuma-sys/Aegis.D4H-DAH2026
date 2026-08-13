@@ -279,3 +279,19 @@ class RoundBudget:
         with self._lock:
             self.llm_calls += calls
             self.llm_tokens += tokens
+
+    def try_reserve_llm(self, max_calls: int) -> bool:
+        """호출 상한 검사와 예약을 원자적으로 수행(병렬 안전). 여유 없으면 False."""
+        with self._lock:
+            if self.llm_calls >= max_calls:
+                return False
+            self.llm_calls += 1
+            return True
+
+    def reset(self) -> None:
+        """Round 시작 시 사용량을 0으로 되돌린다(라운드별 예산 격리)."""
+        with self._lock:
+            self.request_count = 0
+            self.submit_count = 0
+            self.llm_calls = 0
+            self.llm_tokens = 0

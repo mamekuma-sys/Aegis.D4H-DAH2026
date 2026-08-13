@@ -78,8 +78,8 @@ class LLMAdvisor:
     def advise_exploit(self, banner: str, feedback: str, hints, model: str = None):
         if self._key_handle is None:
             return None
-        if self._budget.llm_calls >= self._max_calls:
-            return None  # 예산 소진 → 결정론 경로로
+        if not self._budget.try_reserve_llm(self._max_calls):
+            return None  # 예산 소진 → 결정론 경로로 (검사·예약 원자적, 병렬 초과 방지)
 
         # 현재 저장된 모든 비밀 원문을 프롬프트에서 제거(플러스 FLAG 정규식).
         redactor = Redactor(self._store.secrets_snapshot())
@@ -106,7 +106,7 @@ class LLMAdvisor:
             },
             body=payload, timeout=LLM_TIMEOUT,
         )
-        self._budget.add_llm(1, 0)  # 호출 수 원자적 증가(병렬 안전)
+        # 호출 수는 try_reserve_llm에서 이미 원자적으로 예약됨. 여기선 토큰만 가산.
         if resp.status != 200:
             return None
         try:
