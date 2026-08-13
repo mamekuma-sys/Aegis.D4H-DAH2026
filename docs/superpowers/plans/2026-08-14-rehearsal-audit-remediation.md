@@ -330,7 +330,7 @@ git commit -m "ci: gate rehearsal images and preflight"
 ```powershell
 pwsh -NoProfile -File scripts/check-layout.ps1
 pwsh -NoProfile -File scripts/tests/test-validate-skeleton.ps1
-pwsh -NoProfile -File scripts/validate-skeleton.ps1 -SkeletonPath 'C:\Users\mamekuma\Downloads\DAH2026_스켈레톤코드'
+pwsh -NoProfile -File scripts/validate-skeleton.ps1 -SkeletonPath '<OFFICIAL_SKELETON>'
 pwsh -NoProfile -File scripts/tests/test-compose-agents-override.ps1
 wsl env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s agents/attacker/tests -t agents/attacker -v
 wsl env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s agents/defender/tests -t agents/defender -v

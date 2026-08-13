@@ -99,4 +99,3 @@
 - attacker와 defender 전체 unit tests, layout, skeleton validator, compose contract가 통과해야 한다.
 - 수정된 commit에서 두 이미지를 clean build하고 `linux/amd64`, CMD, user, revision label, secret absence를 확인해야 한다.
 - 공식 skeleton에서 최소 30초 동안 두 이미지를 함께 실행하고 실제 E2E latency distribution과 timeout count를 기록해야 한다.
-
