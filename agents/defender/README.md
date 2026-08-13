@@ -13,7 +13,9 @@ PACKET 수신 → 제한된 파싱 → 300ms 이내 결정론적 판정 → VERD
 
    `_claim_fault()`가 "아직 현재인가"와 "그렇다면 지금 소유권을 뺏는다"를 한 lock 안에서 끝내고, `_claim_ready()`가 성공 경로에 같은 규칙을 적용합니다. claim 이후의 통보에는 회수한 session id를 함께 실어, `BrokerSession.request_reconnect()`와 `HeartbeatScheduler.on_sent()`가 각자의 lock 안에서 generation을 다시 확인합니다. 이 통보 경로를 막지 않으면 이전 session의 실패가 새 session의 수신 루프를 중단시켜 그 구간이 fail-open이 됩니다.
 
-   `tests/test_session.py`의 `TestStaleSessionResults`(claim 전후 삽입 포함)와 `TestReconnectNotificationScoping`이 회귀 검증합니다.
+   같은 규칙이 HEARTBEAT를 **만드는** 쪽에도 적용됩니다. `HeartbeatScheduler.tick()`은 epoch와 session id를 한 번의 lock hold 안에서 함께 snapshot하고, item에는 큐의 현재 session이 아니라 그 snapshot한 id를 붙입니다. 둘을 따로 읽으면 "이전 epoch에서 계산한 deadline"과 "새 session의 id"가 결합된 item이 만들어지는데, 그 item은 session 검사를 전부 통과하지만 deadline이 이미 지나 있어 writer가 방금 연 소켓을 만료로 닫아버립니다.
+
+   `tests/test_session.py`의 `TestStaleSessionResults`(claim 전후 삽입 포함)·`TestReconnectNotificationScoping`과 `tests/test_heartbeat.py`의 `TestTickGenerationRace`가 회귀 검증합니다.
 3. **원격 LLM은 packet별 동기 판정 경로에 들어가지 않습니다**(§0.5, §12). 300ms 시한에 물리적으로 불가능하며, `contracts/defender/README.md`가 이를 계약으로 못박습니다.
 
 진짜 위험은 공격자가 아니라 우리 자신입니다(§0.3). 에이전트가 죽거나 연결이 끊기면 Broker는 fail-open으로 전 패킷을 통과시키고, 판정이 300ms를 넘으면 Broker가 그 패킷을 DROP하며, rule을 잘못 넣으면 SLA가 붕괴합니다. 구조의 절반이 이 셋을 막는 데 쓰입니다.

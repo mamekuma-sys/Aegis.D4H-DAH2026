@@ -24,6 +24,7 @@ from aegis_defender.session import (
     SendOutcome,
     SocketWriter,
     VerdictSender,
+    WriterState,
 )
 from aegis_defender.protocol import VERDICT_ACCEPT
 
@@ -186,6 +187,105 @@ class TestHeartbeatUnderVerdictBacklog(unittest.TestCase):
         for gap in gaps:
             self.assertGreaterEqual(gap, 0.99)
             self.assertLess(gap, 1.1)
+
+
+class TestTickGenerationRace(unittest.TestCase):
+    """epoch snapshot과 session id 부착 사이의 재연결(§4.2).
+
+    둘을 따로 읽으면 "이전 epoch에서 계산한 deadline"과 "새 session의 id"가
+    결합된 item이 만들어진다. 그 item은 session 검사를 모두 통과하지만 deadline은
+    이미 지나 있어, writer가 새 session의 HEARTBEAT를 만료로 처리하고 방금 연
+    소켓을 닫는다 — 재연결 직후 다시 fail-open이 되는 경로다.
+    """
+
+    def setUp(self):
+        self.clock = FakeClock()
+        self.queue = OutboundQueue()
+        self.faults = []
+        self.scheduler = HeartbeatScheduler(self.queue, clock=self.clock)
+        self.writer = SocketWriter(
+            self.queue, clock=self.clock,
+            on_fault=lambda reason, session_id=None: self.faults.append((reason, session_id)),
+            on_heartbeat_sent=self.scheduler.on_sent,
+        )
+        self.old_transport = FakeTransport()
+        self.old_session = self.queue.new_session()
+        self.writer.attach(self.old_transport, self.old_session)
+        self.scheduler.reset(0.0, self.old_session)
+
+    def _reconnect_during_item_construction(self):
+        """epoch/session snapshot 직후, item이 큐에 들어가기 전에 재연결시킨다."""
+        interposed = {}
+        original = self.queue.next_sequence
+
+        def next_sequence_then_reconnect():
+            sequence = original()
+            if "done" not in interposed:
+                interposed["done"] = True
+                new_transport = FakeTransport()
+                new_session = self.queue.new_session()
+                self.writer.attach(new_transport, new_session)
+                self.clock.now = 3.0
+                self.scheduler.reset(self.clock.now, new_session)
+                interposed["transport"] = new_transport
+                interposed["session"] = new_session
+            return sequence
+
+        self.queue.next_sequence = next_sequence_then_reconnect
+        return interposed
+
+    def test_stale_tick_is_discarded_instead_of_expiring_the_new_session(self):
+        self.clock.now = 1.0  # epoch 0 기준 due
+        interposed = self._reconnect_during_item_construction()
+
+        queued = self.scheduler.tick()
+
+        self.assertTrue(interposed.get("done"), "삽입 지점이 실행되지 않았다")
+        self.assertNotEqual(interposed["session"], self.old_session)
+        self.assertFalse(queued, "이전 epoch 의 tick 이 새 session 에 enqueue 됐다")
+        self.assertEqual(self.queue.qsize(), 0)
+        self.assertEqual(self.scheduler.stale_ticks_discarded, 1)
+        self.assertEqual(self.queue.stale_heartbeat_offers, 1)
+
+        # writer 는 보낼 것이 없고, 새 transport 는 열린 채로 남는다.
+        self.assertIsNone(self.writer.send_once(0.0))
+        self.assertFalse(interposed["transport"].closed, "새 socket 이 닫혔다")
+        self.assertIs(self.writer.state, WriterState.READY)
+        self.assertEqual(self.faults, [], "새 session 에 fault 가 통보됐다")
+
+    def test_next_tick_uses_the_new_epoch(self):
+        """폐기된 tick은 손실이 아니다 — 다음 tick이 새 epoch로 다시 만든다."""
+        self.clock.now = 1.0
+        interposed = self._reconnect_during_item_construction()
+        self.scheduler.tick()
+
+        # 새 epoch 3.0 → due 4.0, service deadline 5.0
+        self.clock.now = 4.0
+        self.assertTrue(self.scheduler.tick())
+
+        # 큐에서 직접 꺼내 검사하면 writer 가 보낼 것이 없어지므로, 실제 송신
+        # 결과에서 item 을 확인한다.
+        result = self.writer.send_once(0.0)
+        self.assertIs(result.outcome, SendOutcome.SENT)
+        self.assertEqual(result.item.session_id, interposed["session"])
+        self.assertEqual(result.item.absolute_send_deadline, 5.0)
+        self.assertEqual(self.faults, [])
+        self.assertEqual(self.scheduler.last_successful_heartbeat, 4.0)
+
+    def test_item_carries_the_scheduler_session_not_the_queue_session(self):
+        """부착하는 id의 출처가 계약이다.
+
+        큐의 현재 session을 읽으면 epoch와 id가 서로 다른 시점의 값이 되어
+        위 경합이 그대로 생긴다.
+        """
+        self.clock.now = 1.0
+        # scheduler 만 이전 generation 에 남기고 큐를 먼저 넘긴다.
+        new_session = self.queue.new_session()
+        self.assertNotEqual(new_session, self.old_session)
+
+        self.assertFalse(self.scheduler.tick())
+        self.assertEqual(self.queue.qsize(), 0)
+        self.assertEqual(self.scheduler.stale_ticks_discarded, 1)
 
 
 class TestSchedulerThread(unittest.TestCase):

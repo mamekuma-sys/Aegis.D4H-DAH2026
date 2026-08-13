@@ -84,6 +84,7 @@ class HeartbeatScheduler:
         self._thread: threading.Thread | None = None
         self.sent_count = 0
         self.stale_completions_ignored = 0
+        self.stale_ticks_discarded = 0
 
     # ── epoch 상태 ──────────────────────────────────────────────────────────
 
@@ -106,12 +107,18 @@ class HeartbeatScheduler:
         return None if self._epoch is None else self._epoch + self._service_budget
 
     def reset(self, session_connected_at: float, session_id: int | None = None) -> None:
-        """새 session의 epoch를 연다. 이전 session의 시각을 재사용하지 않는다."""
+        """새 session의 epoch를 연다. 이전 session의 시각을 재사용하지 않는다.
+
+        `session_id`를 주지 않으면 큐의 현재 session을 쓴다. epoch와 session id는
+        항상 짝으로 움직여야 하므로, 한쪽만 알려진 상태를 남기지 않는다.
+        """
         with self._cv:
             self._session_connected_at = session_connected_at
             self._epoch = session_connected_at
             self._last_successful_heartbeat = None
-            self._session_id = session_id
+            self._session_id = (
+                session_id if session_id is not None else self._queue.current_session()
+            )
             self._cv.notify_all()
 
     def clear(self) -> None:
@@ -167,7 +174,19 @@ class HeartbeatScheduler:
     # ── tick ────────────────────────────────────────────────────────────────
 
     def tick(self, now: float | None = None) -> bool:
-        """due가 됐으면 HEARTBEAT를 enqueue한다. 넣었으면 True."""
+        """due가 됐으면 HEARTBEAT를 enqueue한다. 넣었으면 True.
+
+        **epoch와 session id를 한 번의 lock hold 안에서 함께 snapshot한다.** 둘을
+        따로 읽으면 그 사이에 재연결이 끼어들어 "이전 epoch에서 계산한 deadline"과
+        "새 session의 id"가 결합된 item이 만들어진다. 그 item은 session 검사를
+        모두 통과하지만 deadline은 이미 지나 있으므로, writer가 새 session의
+        HEARTBEAT를 만료로 처리하고 방금 연 소켓을 닫는다 — 재연결하자마자 다시
+        fail-open이 되는 경로다.
+
+        item에 큐의 현재 session이 아니라 snapshot한 scheduler session id를 붙이는
+        것이 핵심이다. 그 사이 큐가 새 generation으로 넘어갔다면
+        `offer_heartbeat()`의 session 검사가 이 stale tick을 폐기한다.
+        """
         with self._cv:
             epoch = self._epoch
             if epoch is None:
@@ -176,16 +195,24 @@ class HeartbeatScheduler:
             if moment < epoch + self._period:
                 return False
             deadline = epoch + self._service_budget
+            session_id = self._session_id
 
         item = OutboundItem(
             absolute_send_deadline=deadline,
             type_rank=TYPE_RANK_HEARTBEAT,
             sequence=self._queue.next_sequence(),
             frame=HEARTBEAT_FRAME,
-            session_id=self._queue.current_session(),
+            session_id=session_id,
         )
+
+        stale_before = self._queue.stale_heartbeat_offers
         if self._queue.offer_heartbeat(item):
             return True
+        if self._queue.stale_heartbeat_offers > stale_before:
+            # 재연결이 끼어들어 이 tick 은 이미 지나간 generation 의 것이 됐다.
+            # 다음 tick 이 새 epoch 로 다시 만든다.
+            self.stale_ticks_discarded += 1
+            return False
         if self._metrics is not None:
             self._metrics.incr(M_HEARTBEAT_COALESCED)
         return False

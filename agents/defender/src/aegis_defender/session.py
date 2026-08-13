@@ -169,6 +169,7 @@ class OutboundQueue:
         self._heartbeat_pending = False
         self._closed = False
         self.heartbeat_coalesced = 0
+        self.stale_heartbeat_offers = 0
 
     @property
     def capacity(self) -> int:
@@ -223,7 +224,12 @@ class OutboundQueue:
         가므로 나중 tick의 deadline이 항상 같거나 더 늦기 때문이다.
         """
         with self._cv:
-            if self._closed or item.session_id != self._session_id:
+            if self._closed:
+                return False
+            if item.session_id != self._session_id:
+                # 이전 generation에서 만들어진 tick. deadline이 이전 epoch 기준이라
+                # 그대로 받아들이면 새 session의 HEARTBEAT가 즉시 만료된다.
+                self.stale_heartbeat_offers += 1
                 return False
             if self._heartbeat_pending:
                 self.heartbeat_coalesced += 1
