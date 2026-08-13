@@ -74,7 +74,7 @@ docker push ligacr.azurecr.io/team{N}/attacker:latest
 if ($LASTEXITCODE -ne 0) { throw 'docker push failed' }
 ```
 
-`-ConfigOnly`는 `up` 없이 병합 Compose를 읽고 `team1-attacker.build.context`가 저장소 `agents/attacker`인지 검사한다. 상대경로 `../agents/attacker` 또는 `<스켈레톤-루트>/agents/attacker`이면 실패한다.
+`-ConfigOnly`는 `up` 없이 병합 Compose를 읽고 `team1-attacker`와 `team1-defender`의 `build.context`가 각각 저장소 경로인지 검사한다. 상대경로 `../agents/attacker`·`../agents/defender` 또는 스켈레톤 쪽 `agents/`이면 실패한다.
 
 ## 4. 계약·함정 체크
 
@@ -83,7 +83,7 @@ if ($LASTEXITCODE -ne 0) { throw 'docker push failed' }
 - **pull 타이밍(제15조)**: 운영진이 라운드 시작 5분 전 `latest`를 pull(타임아웃 20분), 컨테이너는 라운드마다 새로 생성·삭제된다. 이미지 시작 시간도 라운드 시간에 포함되므로 시작 경로를 늘리지 않는다.
 - **비밀·주소·경로 미포함(제7·16조)**: `TARGETS`/토큰/키는 이미지에 굽지 않고 운영진 주입 환경변수로만 참조한다. 이미지·저장소에 개인 절대경로를 남기지 않는다.
 - **LLM 변수 이름**: 공식 주입은 `LLM_BASE_URL`·`LLM_API_KEY`. 라이브 스모크에서 LLM 경로까지 태우려면 스켈레톤 `.env`의 `LLM_UPSTREAM_KEY`가 있어야 하며, 없으면 LLM 조언 경로만 fail-open되고 결정론 경로는 정상 동작한다.
-- **서비스명/프로필**: override는 스켈레톤 서비스 `team1-attacker`(`profiles: ["combat"]`)에만 병합된다. 스켈레톤 서비스명이 바뀌면 override도 갱신해야 한다.
+- **서비스명/프로필**: override는 스켈레톤 서비스 `team1-attacker`와 `team1-defender`(`profiles: ["combat"]`)에 병합된다. 스켈레톤 서비스명이 바뀌면 override도 갱신해야 한다.
 - **Compose 경로**: 여러 `-f` 병합 시 상대경로는 첫 번째 Compose 파일 기준이다. override에 저장소 상대경로를 두지 말고 `run-with-skeleton.ps1`이 주입하는 `AEGIS_ATTACKER_CONTEXT`를 사용한다.
 
 ## 5. 설계상 의도된 범위 (배포에 문제 없음)

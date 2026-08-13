@@ -119,7 +119,7 @@ $env:PYTHONPATH="src"; python -m aegis_defender
 
 - 실행 명령: `python -u -m aegis_defender` (WORKDIR `/app`, `PYTHONPATH` 불필요)
 - 런타임 의존성: **없음**(표준 라이브러리 전용)
-- 이미지에 포함해야 할 경로: `src/aegis_defender/`, `policy/`
+- 이미지에 포함해야 할 경로: `src/aegis_defender/` → `/app/aegis_defender`, `policy/` → `/policy`
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
