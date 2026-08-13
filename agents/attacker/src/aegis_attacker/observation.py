@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -85,19 +86,22 @@ def port_open(host: str, port: int, timeout: float = 2.0) -> bool:
 
 
 class EvidenceFactory:
-    """Round·endpoint에 묶인 TTL 증거 참조를 만든다(§9.6)."""
+    """Round·endpoint에 묶인 TTL 증거 참조를 만든다(§9.6). 병렬 안전."""
 
     def __init__(self, round_id: str, clock=time.monotonic, ttl: float = 90.0):
         self._round_id = round_id
         self._clock = clock
         self._ttl = ttl
         self._n = 0
+        self._lock = threading.Lock()
 
     def make(self, endpoint: Endpoint, observation_fingerprint: str) -> EvidenceRef:
-        self._n += 1
+        with self._lock:
+            self._n += 1
+            n = self._n
         now = self._clock()
         return EvidenceRef(
-            evidence_id=f"ev-{self._round_id}-{self._n}",
+            evidence_id=f"ev-{self._round_id}-{n}",
             round_id=self._round_id,
             endpoint_id=endpoint.endpoint_id,
             observed_at_monotonic=now,

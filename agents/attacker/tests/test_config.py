@@ -64,6 +64,13 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(cfg.llm_base_url, DEFAULT_LLM_BASE_URL)
         self.assertEqual(cfg.llm_model, DEFAULT_LLM_MODEL)
 
+    def test_concurrency_optional_with_default(self):
+        self.assertEqual(load_config({}).concurrency, 8)  # 기본 8
+        self.assertEqual(load_config({"ATTACK_CONCURRENCY": "4"}).concurrency, 4)
+        self.assertEqual(load_config({"ATTACK_CONCURRENCY": "0"}).concurrency, 1)  # 최소 1
+        self.assertEqual(load_config({"ATTACK_CONCURRENCY": "9999"}).concurrency, 32)  # 상한
+        self.assertEqual(load_config({"ATTACK_CONCURRENCY": "abc"}).concurrency, 8)  # 무효→기본
+
 
 if __name__ == "__main__":
     unittest.main()

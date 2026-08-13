@@ -9,17 +9,20 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .audit import AuditLogger, Redactor
 from .config import AttackerConfig
 from .egress import EgressError, EgressGateway, build_allowlists
 from .flags import FlagPipeline, SubmitClient
-from .llm_advisor import LLMAdvisor
+from .llm_advisor import LLMAdvisor, escalated_model
 from .models import Capability, ExecutionPlan, Outcome, RoundBudget, SideEffectClass, SubmitState
 from .observation import EvidenceFactory, Observer, UrllibHttp
 from .phase_policy import FairScheduler
 from .planner import EndpointState, Planner
+from .playbook import Playbook
 from .rate_limit import RateLimiter
+from .recon import COMMON_PROBE_PATHS
 from .round_report import RoundReport
 from .secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
 from .tools import ExecutionAdapter, PlanBindingError, evasion_variants
@@ -80,6 +83,7 @@ class AttackerRuntime:
             clock=self.clock, sleep=self.sleep, round_deadline=now + ROUND_DURATION)
         self._pipeline = FlagPipeline(submit_client, store)
         self._report = RoundReport(budget=self.budget)
+        self._playbook = Playbook()  # Round 한정 교차 재사용(비밀 없음)
 
     def _bind_plan(self, plan: ExecutionPlan, endpoint, evidence_ref) -> ExecutionPlan:
         now = self.clock()
@@ -142,6 +146,50 @@ class AttackerRuntime:
                 return vresult, False  # 필터 통과 — 이 응답으로 다음 계획
         return None, False
 
+    # ---- 결정론적 사전 정찰 (LLM 전, 토큰 0) ----
+
+    def _recon(self, endpoint, evidence_ref) -> bool:
+        for path in COMMON_PROBE_PATHS:
+            now = self.clock()
+            plan = ExecutionPlan(
+                tool="http", target=endpoint, args={"method": "GET", "path": path},
+                plan_id=f"recon-{self._round_id}-{endpoint.endpoint_id}-{path}",
+                round_id=self._round_id, endpoint_id=endpoint.endpoint_id,
+                capability=Capability.ATTACK_TARGET,
+                evidence_refs=[evidence_ref] if evidence_ref else [],
+                created_at_monotonic=now, expires_at_monotonic=now + PLAN_TTL,
+                side_effect_class=SideEffectClass.READ_ONLY, reason="recon")
+            try:
+                result = self._adapter.execute(plan)
+            except (PlanBindingError, EgressError):
+                continue
+            self._report.record_request()
+            if self._process_flags(result.body):
+                self.audit.log("hit", target=endpoint.key(), path=path, reason="recon")
+                return True
+            evidence_ref = result.observation.evidence_ref  # 다음 프로브용 신선한 증거
+        return False
+
+    def _run_bound_exploit(self, endpoint, args, evidence_ref, reason):
+        """비밀 없는 exploit 형태(method·path)를 READ_ONLY 계획으로 실행한다(playbook 재사용용)."""
+        now = self.clock()
+        plan = ExecutionPlan(
+            tool="http", target=endpoint,
+            args={"method": args.get("method", "GET"), "path": args.get("path", "/"),
+                  "headers": args.get("headers", {}) or {}, "body": args.get("body", "") or ""},
+            plan_id=f"pb-{self._round_id}-{endpoint.endpoint_id}",
+            round_id=self._round_id, endpoint_id=endpoint.endpoint_id,
+            capability=Capability.ATTACK_TARGET,
+            evidence_refs=[evidence_ref] if evidence_ref else [],
+            created_at_monotonic=now, expires_at_monotonic=now + PLAN_TTL,
+            side_effect_class=SideEffectClass.READ_ONLY, reason=reason)
+        try:
+            result = self._adapter.execute(plan)
+        except (PlanBindingError, EgressError):
+            return None, False
+        self._report.record_request()
+        return result, self._process_flags(result.body)
+
     # ---- 단일 표적 공격 ----
 
     def attack_endpoint(self, endpoint) -> bool:
@@ -153,16 +201,34 @@ class AttackerRuntime:
             return False
 
         current_evidence = obs.evidence_ref
+        banner_fp = obs.body_fingerprint
         banner = (resp.body or "").strip()
         if self._process_flags(resp.body):
             self.audit.log("hit", target=endpoint.key(), turn=0, path="/", reason="banner")
             return True
 
+        # 결정론적 사전 정찰 — 쉬운 flag를 LLM 토큰 없이
+        if self._recon(endpoint, current_evidence):
+            return True
+
+        # 라운드 내 성공 플레이북 교차 재사용 — 같은 배너의 다른 표적에 먼저 시도(LLM 전)
+        known = self._playbook.lookup(banner_fp)
+        if known:
+            result, captured = self._run_bound_exploit(endpoint, known, current_evidence, "playbook")
+            if captured:
+                self.audit.log("hit", target=endpoint.key(),
+                               path=known.get("path"), reason="playbook")
+                return True
+            if result is not None:
+                current_evidence = result.observation.evidence_ref
+
         state = EndpointState(endpoint)
         feedback = ""
         while not self._planner.should_stop(state):
             state.turn += 1
-            plan = self._planner.plan_next(endpoint, banner, feedback, state)
+            # cheap-first 모델, 실패가 쌓이면 승급
+            model = escalated_model(self.config.llm_model, max(0, state.turn - 2))
+            plan = self._planner.plan_next(endpoint, banner, feedback, state, model=model)
             if plan is None:
                 break
             self._bind_plan(plan, endpoint, current_evidence)
@@ -175,6 +241,7 @@ class AttackerRuntime:
             self._report.record_request()
 
             if self._process_flags(result.body):
+                self._playbook.record(banner_fp, plan.args)  # 교차 재사용용 기록(비밀 없음)
                 self.audit.log("hit", target=endpoint.key(), turn=state.turn,
                                path=plan.args["path"], vuln=str(plan.scenario), reason=plan.reason)
                 return True
@@ -199,21 +266,35 @@ class AttackerRuntime:
 
     # ---- 라운드 루프 ----
 
+    def _attack_isolated(self, endpoint) -> None:
+        try:
+            self.attack_endpoint(endpoint)
+        except Exception as exc:  # 표적 단위 격리
+            self.audit.log("error", target=endpoint.key(), error=type(exc).__name__)
+
     def run_once(self) -> RoundReport:
-        """엔드포인트 전체를 공정 스케줄러로 한 번 순회한다. Round 종료 시 비밀 폐기."""
+        """엔드포인트 전체를 공격한다(병렬, 전역 rate limit 공유). Round 종료 시 비밀 폐기.
+
+        concurrency<=1 이거나 표적이 1개면 결정론적 순차 경로를 쓴다.
+        """
         self._build_round()
         try:
             endpoints = self.config.endpoints()
-            sched = FairScheduler(endpoints, per_target_budget=PER_TARGET_BUDGET)
-            while True:
-                endpoint = sched.next()
-                if endpoint is None:
-                    break
-                sched.charge(endpoint)
-                try:
-                    self.attack_endpoint(endpoint)
-                except Exception as exc:  # 표적 단위 격리
-                    self.audit.log("error", target=endpoint.key(), error=type(exc).__name__)
+            workers = min(self.config.concurrency, max(1, len(endpoints)))
+            if workers <= 1:
+                # 순차(결정론) — 공정 스케줄러로 순회
+                sched = FairScheduler(endpoints, per_target_budget=PER_TARGET_BUDGET)
+                while True:
+                    endpoint = sched.next()
+                    if endpoint is None:
+                        break
+                    sched.charge(endpoint)
+                    self._attack_isolated(endpoint)
+            else:
+                # 병렬 — 표적별 스레드가 전역 rate limit·공유 상태(락)를 공유
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    for fut in [pool.submit(self._attack_isolated, e) for e in endpoints]:
+                        fut.result()
             return self._report
         finally:
             self._secret_store.expire_all()  # Round 종료 시 원문 폐기

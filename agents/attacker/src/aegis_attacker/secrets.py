@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 
@@ -56,6 +57,7 @@ class RoundSecretStore:
         self._ttl = ttl
         self._plaintext = {}  # secret_id -> plaintext
         self._counter = 0
+        self._lock = threading.Lock()
 
     @property
     def round_id(self) -> str:
@@ -64,9 +66,10 @@ class RoundSecretStore:
     def put(self, kind: str, plaintext: str) -> SecretHandle:
         if kind not in _KINDS:
             raise SecretError(f"알 수 없는 비밀 종류: {kind}")
-        self._counter += 1
-        secret_id = f"sec-{self._round_id}-{self._counter}"
-        self._plaintext[secret_id] = plaintext
+        with self._lock:
+            self._counter += 1
+            secret_id = f"sec-{self._round_id}-{self._counter}"
+            self._plaintext[secret_id] = plaintext
         return SecretHandle(secret_id, self._round_id, kind,
                             self._clock() + self._ttl)
 
@@ -76,14 +79,17 @@ class RoundSecretStore:
             raise SecretError("다른 Round 의 handle")
         if self._clock() >= handle.expires_at_monotonic:
             raise SecretError("만료된 handle")
-        if handle.secret_id not in self._plaintext:
-            raise SecretError("폐기되었거나 없는 secret")
-        return self._plaintext[handle.secret_id]
+        with self._lock:
+            if handle.secret_id not in self._plaintext:
+                raise SecretError("폐기되었거나 없는 secret")
+            return self._plaintext[handle.secret_id]
 
     def secrets_snapshot(self) -> set:
         """등록된 원문 값 집합(로그 Redactor 시드용). 값 자체는 반환하되 로그엔 안 씀."""
-        return {v for v in self._plaintext.values() if v}
+        with self._lock:
+            return {v for v in self._plaintext.values() if v}
 
     def expire_all(self) -> None:
         """Round 종료 시 원문 즉시 폐기."""
-        self._plaintext.clear()
+        with self._lock:
+            self._plaintext.clear()

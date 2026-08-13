@@ -4,9 +4,12 @@ from aegis_attacker.models import (
     Capability,
     Endpoint,
     EvidenceRef,
+    FinalsPhase,
     FinalsPhaseHint,
+    MissionState,
     Observation,
     ObservedServiceProfile,
+    S4ChainStage,
     Scenario,
     ScenarioHypothesis,
     SideEffectClass,
@@ -60,6 +63,30 @@ class TestEnums(unittest.TestCase):
 
     def test_side_effect_default_read_only(self):
         self.assertEqual(SideEffectClass.READ_ONLY.value, "READ_ONLY")
+
+
+class TestPhaseTermSeparation(unittest.TestCase):
+    """FinalsPhase·S4ChainStage·MissionState 는 서로 다른 타입·용어다(§7.1·§9.15)."""
+
+    def test_distinct_types(self):
+        self.assertNotEqual(type(FinalsPhase.P1), type(S4ChainStage.STAGE1))
+        self.assertNotEqual(type(FinalsPhase.P1), type(MissionState.CRUISE))
+        self.assertFalse(isinstance(S4ChainStage.STAGE1, FinalsPhase))
+        self.assertFalse(isinstance(MissionState.CRUISE, FinalsPhase))
+
+    def test_finals_phase_1_to_4(self):
+        self.assertEqual([p.value for p in FinalsPhase], [1, 2, 3, 4])
+
+    def test_s4chainstage_1_to_5(self):
+        self.assertEqual([s.value for s in S4ChainStage], [1, 2, 3, 4, 5])
+
+    def test_same_number_not_equal_across_types(self):
+        # 같은 숫자라도 FinalsPhase 1 과 S4ChainStage 1 을 동일시하지 않는다
+        self.assertIsNot(FinalsPhase.P1, S4ChainStage.STAGE1)
+
+    def test_mission_state_members(self):
+        self.assertIn(MissionState.PRE_FLIGHT, MissionState)
+        self.assertEqual(MissionState.RTL.value, "rtl")
 
 
 class TestFinalsPhaseHint(unittest.TestCase):

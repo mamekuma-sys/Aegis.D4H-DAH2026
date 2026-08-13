@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 from .models import RoundBudget, SubmitState
@@ -13,25 +14,29 @@ from .models import RoundBudget, SubmitState
 
 @dataclass
 class RoundReport:
-    """라운드 관측·제출·예산 집계(비밀 없음)."""
+    """라운드 관측·제출·예산 집계(비밀 없음). 병렬 공격에서 원자적으로 갱신된다."""
 
     endpoints_observed: int = 0
     requests_made: int = 0
     submit_states: dict = field(default_factory=dict)  # state.value -> count
     accepted_flag_hashes: set = field(default_factory=set)  # 해시만
     budget: RoundBudget = field(default_factory=RoundBudget)
+    _lock: object = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def record_observation(self) -> None:
-        self.endpoints_observed += 1
+        with self._lock:
+            self.endpoints_observed += 1
 
     def record_request(self) -> None:
-        self.requests_made += 1
+        with self._lock:
+            self.requests_made += 1
 
     def record_submit(self, flag_hash: str, state: SubmitState) -> None:
-        key = state.value
-        self.submit_states[key] = self.submit_states.get(key, 0) + 1
-        if state == SubmitState.ACCEPTED:
-            self.accepted_flag_hashes.add(flag_hash)
+        with self._lock:
+            key = state.value
+            self.submit_states[key] = self.submit_states.get(key, 0) + 1
+            if state == SubmitState.ACCEPTED:
+                self.accepted_flag_hashes.add(flag_hash)
 
     def accepted_count(self) -> int:
         return len(self.accepted_flag_hashes)

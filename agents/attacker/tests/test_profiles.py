@@ -46,6 +46,20 @@ class TestClassify(unittest.TestCase):
         self.assertIn("sqlite", p.error_signatures)
 
 
+class TestPerEndpointProfiles(unittest.TestCase):
+    """UAV 근거를 UGV에 무근거 재사용하지 않는다 — 프로파일은 endpoint별로 독립(§9.15)."""
+
+    def test_profiles_independent_per_endpoint(self):
+        uav = Endpoint("team2.lig.internal", 8084)
+        ugv = Endpoint("team2.lig.internal", 9001)
+        p_uav = classify(uav, 200, "UAV telemetry service", {}, 20.0)
+        p_ugv = classify(ugv, 200, "UGV walker service", {}, 20.0)
+        self.assertIsNot(p_uav, p_ugv)
+        self.assertEqual(p_uav.endpoint, uav)
+        self.assertEqual(p_ugv.endpoint, ugv)
+        self.assertNotIn("banner:UAV telemetry service", p_ugv.evidence)
+
+
 class TestSuggestVulnClasses(unittest.TestCase):
     def test_ssrf_banner(self):
         self.assertIn(VulnClass.SSRF, suggest_vuln_classes(BANNER_SSRF))

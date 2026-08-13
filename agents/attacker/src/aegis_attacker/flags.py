@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 
 from .models import Capability, SubmitState
 from .rate_limit import Backoff, parse_retry_after
@@ -52,19 +53,24 @@ class FlagStore:
 
     def __init__(self):
         self._states = {}  # fingerprint -> SubmitState
+        self._lock = threading.Lock()
 
     def is_resolved(self, flag_hash: str) -> bool:
-        st = self._states.get(flag_hash)
+        with self._lock:
+            st = self._states.get(flag_hash)
         return st is not None and st != SubmitState.ERROR
 
     def state_of(self, flag_hash: str):
-        return self._states.get(flag_hash)
+        with self._lock:
+            return self._states.get(flag_hash)
 
     def record(self, flag_hash: str, state: SubmitState) -> None:
-        self._states[flag_hash] = state
+        with self._lock:
+            self._states[flag_hash] = state
 
     def accepted_count(self) -> int:
-        return sum(1 for s in self._states.values() if s == SubmitState.ACCEPTED)
+        with self._lock:
+            return sum(1 for s in self._states.values() if s == SubmitState.ACCEPTED)
 
 
 class SubmitClient:

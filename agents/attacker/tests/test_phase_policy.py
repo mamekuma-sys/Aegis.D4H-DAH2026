@@ -5,11 +5,33 @@ from aegis_attacker.phase_policy import (
     FairScheduler,
     allocate_budget,
     layer_of_port,
+    layers_open,
+    rounds_in_phase,
+    total_rounds,
 )
 
 L1 = Endpoint("team2.lig.internal", 8082)
 L2 = Endpoint("team2.lig.internal", 8083)
 L3 = Endpoint("team2.lig.internal", 8084)
+
+
+class TestFinalsPhaseStructure(unittest.TestCase):
+    def test_round_counts_2_4_4_4(self):
+        self.assertEqual([rounds_in_phase(p) for p in (1, 2, 3, 4)], [2, 4, 4, 4])
+
+    def test_total_14_rounds(self):
+        self.assertEqual(total_rounds(), 14)
+
+    def test_cumulative_layers(self):
+        self.assertEqual(layers_open(1), [1])
+        self.assertEqual(layers_open(2), [1, 2])
+        self.assertEqual(layers_open(4), [1, 2, 3, 4])  # Phase N에서 Layer 1~N 누적
+
+    def test_bad_phase_rejected(self):
+        with self.assertRaises(ValueError):
+            rounds_in_phase(5)
+        with self.assertRaises(ValueError):
+            layers_open(0)
 
 
 class TestLayerOfPort(unittest.TestCase):

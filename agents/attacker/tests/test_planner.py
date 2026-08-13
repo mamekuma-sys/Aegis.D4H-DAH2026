@@ -15,8 +15,8 @@ class FakeAdvisor:
         self.exploit = exploit
         self.calls = []
 
-    def advise_exploit(self, banner, feedback, hints):
-        self.calls.append((banner, feedback, list(hints)))
+    def advise_exploit(self, banner, feedback, hints, model=None):
+        self.calls.append((banner, feedback, list(hints), model))
         return self.exploit
 
 
@@ -62,7 +62,7 @@ class TestPlanner(unittest.TestCase):
     def test_advisor_receives_hints(self):
         advisor = FakeAdvisor({"path": "/x"})
         Planner(advisor).plan_next(EP, "Shop /product?id=<n> SQLite", "", EndpointState(EP))
-        _, _, hints = advisor.calls[0]
+        _, _, hints, _ = advisor.calls[0]
         self.assertTrue(len(hints) >= 1)
 
     def test_should_stop_after_max_turns(self):

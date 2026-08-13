@@ -25,6 +25,8 @@ BACKOFF_BASE = 1.0
 BACKOFF_FACTOR = 2.0
 BACKOFF_CAP = 30.0
 
+_EPS = 1e-9  # 부동소수 오차 허용치(토큰 버킷)
+
 
 class TokenBucket:
     """스레드 안전 토큰 버킷. 병렬 도구 실행이 하나의 전역 버킷을 공유한다."""
@@ -46,7 +48,8 @@ class TokenBucket:
     def try_acquire(self, n: int = 1) -> bool:
         with self._lock:
             self._refill_locked()
-            if self._tokens >= n:
+            # epsilon 으로 부동소수 오차를 흡수해 refill 이 정확히 n 에 못 미치는 무한 대기를 막는다.
+            if self._tokens >= n - _EPS:
                 self._tokens -= n
                 return True
             return False
@@ -54,7 +57,7 @@ class TokenBucket:
     def wait_time(self, n: int = 1) -> float:
         with self._lock:
             self._refill_locked()
-            if self._tokens >= n:
+            if self._tokens >= n - _EPS:
                 return 0.0
             if self.rate <= 0:
                 return float("inf")

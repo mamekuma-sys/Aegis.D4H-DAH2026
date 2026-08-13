@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import enum
+import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -57,6 +58,36 @@ class SideEffectClass(enum.Enum):
     READ_ONLY = "READ_ONLY"
     BOUNDED_FLAG_DIRECTED_MUTATION = "BOUNDED_FLAG_DIRECTED_MUTATION"
     DISALLOWED = "DISALLOWED"
+
+
+class FinalsPhase(enum.IntEnum):
+    """본선 레이어 누적 개방 경기 단계(§7.1). S4ChainStage·MissionState와 다른 타입이다."""
+
+    P1 = 1
+    P2 = 2
+    P3 = 3
+    P4 = 4
+
+
+class S4ChainStage(enum.IntEnum):
+    """예선 S4 다단계 체인 국면 1~5(§7.1). FinalsPhase 번호와 대응한다고 가정하지 않는다."""
+
+    STAGE1 = 1
+    STAGE2 = 2
+    STAGE3 = 3
+    STAGE4 = 4
+    STAGE5 = 5
+
+
+class MissionState(enum.Enum):
+    """예선 기체 임무 상태(§7.1). 수신 데이터 파서로 존재가 증명될 때만 인스턴스화한다."""
+
+    PRE_FLIGHT = "pre_flight"
+    TAKEOFF = "takeoff"
+    CRUISE = "cruise"
+    MISSION = "mission"
+    RTL = "rtl"
+    LAND = "land"
 
 
 class SubmitState(enum.Enum):
@@ -236,9 +267,15 @@ class FlagCandidate:
 
 @dataclass
 class RoundBudget:
-    """라운드 한정 예산·사용량(§9.6·§9.12)."""
+    """라운드 한정 예산·사용량(§9.6·§9.12). 병렬 공격에서 원자적으로 갱신된다."""
 
     request_count: int = 0
     submit_count: int = 0
     llm_calls: int = 0
     llm_tokens: int = 0
+    _lock: object = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def add_llm(self, calls: int = 1, tokens: int = 0) -> None:
+        with self._lock:
+            self.llm_calls += calls
+            self.llm_tokens += tokens

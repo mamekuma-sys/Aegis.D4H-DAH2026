@@ -17,6 +17,16 @@ from .planner import parse_exploit
 MAX_LLM_CALLS_PER_ROUND = 200
 LLM_TIMEOUT = 20.0
 
+# 실패가 쌓이면 더 센 모델로 승급한다(cheap-first). 동점 시 토큰 비용이 적은 팀이
+# 이기므로(운영세칙 제22조) 값비싼 모델은 저비용 모델이 막혔을 때만 쓴다.
+ESCALATION_MODELS = ("gpt-4.1", "gpt-5.2")
+
+
+def escalated_model(base: str, level: int) -> str:
+    if level <= 0:
+        return base
+    return ESCALATION_MODELS[min(level - 1, len(ESCALATION_MODELS) - 1)]
+
 SYSTEM_PROMPT = (
     "You are an offensive web-security agent in an authorized CTF attack-defense match. Each target is an "
     "unknown web service that hides a flag of the form FLAG{...} behind a web vulnerability. You receive the "
@@ -65,7 +75,7 @@ class LLMAdvisor:
         self._key_handle = llm_key_handle
         self._max_calls = max_calls
 
-    def advise_exploit(self, banner: str, feedback: str, hints):
+    def advise_exploit(self, banner: str, feedback: str, hints, model: str = None):
         if self._key_handle is None:
             return None
         if self._budget.llm_calls >= self._max_calls:
@@ -78,7 +88,7 @@ class LLMAdvisor:
         user_content = redactor.scrub("\n".join(x for x in (hint_line, observed) if x))
 
         payload = json.dumps({
-            "model": self._config.llm_model,
+            "model": model or self._config.llm_model,
             "temperature": 0,
             "max_tokens": 300,
             "messages": [
@@ -96,13 +106,13 @@ class LLMAdvisor:
             },
             body=payload, timeout=LLM_TIMEOUT,
         )
-        self._budget.llm_calls += 1
+        self._budget.add_llm(1, 0)  # 호출 수 원자적 증가(병렬 안전)
         if resp.status != 200:
             return None
         try:
             obj = json.loads(resp.body)
             content = obj["choices"][0]["message"]["content"]
-            self._budget.llm_tokens += int(obj.get("usage", {}).get("total_tokens", 0) or 0)
+            self._budget.add_llm(0, int(obj.get("usage", {}).get("total_tokens", 0) or 0))
         except Exception:
             return None
         return parse_exploit(content)

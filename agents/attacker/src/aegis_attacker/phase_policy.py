@@ -10,6 +10,30 @@ from __future__ import annotations
 
 from .models import Endpoint
 
+# 본선 구조(운영세칙 제4·5조, 당일안내 §1): 4 FinalsPhase, Round 수 2·4·4·4, 총 14.
+# 레이어는 Phase N에서 Layer 1~N 누적 개방. 공식 계약에 없는 PHASE/LAYER/ROUND env는
+# 요구하지 않으며, 이 표는 참고·스케줄 힌트일 뿐 런타임 필수 입력이 아니다(§7.3·§9.9).
+FINALS_PHASE_ROUNDS = {1: 2, 2: 4, 3: 4, 4: 4}
+TOTAL_ROUNDS = 14
+
+
+def rounds_in_phase(phase: int) -> int:
+    if phase not in FINALS_PHASE_ROUNDS:
+        raise ValueError(f"FinalsPhase 는 1~4: {phase}")
+    return FINALS_PHASE_ROUNDS[phase]
+
+
+def layers_open(phase: int) -> list:
+    """FinalsPhase N에서 누적 개방되는 레이어 1~N."""
+    if phase not in FINALS_PHASE_ROUNDS:
+        raise ValueError(f"FinalsPhase 는 1~4: {phase}")
+    return list(range(1, phase + 1))
+
+
+def total_rounds() -> int:
+    return sum(FINALS_PHASE_ROUNDS.values())
+
+
 # 데모 포트 → 레이어 추정(8082→1). 본선 포트는 매핑 불가할 수 있으므로 참고용.
 def layer_of_port(port: int) -> int:
     if 8082 <= port <= 8099:

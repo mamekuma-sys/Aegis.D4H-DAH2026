@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import threading
 
 FLAG_PATTERN = re.compile(r"FLAG\{[^}]*\}")
 FLAG_PLACEHOLDER = "[FLAG]"
@@ -50,8 +51,11 @@ class AuditLogger:
     def __init__(self, redactor: Redactor = None, sink=None):
         self._redactor = redactor or Redactor()
         self._sink = sink or (lambda line: print(line, file=sys.stderr, flush=True))
+        self._lock = threading.Lock()
 
     def log(self, event: str, **fields) -> None:
         record = {"event": event}
         record.update(self._redactor.scrub_obj(fields))
-        self._sink(json.dumps(record, ensure_ascii=False, sort_keys=True))
+        line = json.dumps(record, ensure_ascii=False, sort_keys=True)
+        with self._lock:  # 병렬 로그 라인 섞임 방지
+            self._sink(line)

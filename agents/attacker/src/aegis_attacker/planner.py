@@ -72,9 +72,10 @@ class Planner:
         self._max_turns = max_turns
 
     def plan_next(self, endpoint: Endpoint, banner: str, feedback: str,
-                  state: EndpointState) -> Optional[ExecutionPlan]:
+                  state: EndpointState, model: str = None) -> Optional[ExecutionPlan]:
         hints = suggest_vuln_classes(banner)
-        exploit = self._advisor.advise_exploit(banner=banner, feedback=feedback, hints=hints)
+        exploit = self._advisor.advise_exploit(banner=banner, feedback=feedback,
+                                               hints=hints, model=model)
         if not exploit:
             return None
         path = exploit.get("path")
