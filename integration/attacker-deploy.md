@@ -34,34 +34,44 @@ Dockerfile 런타임 경로(`COPY`/`WORKDIR`/`CMD`): `PYTHONPATH` 없이 `python
 `<스켈레톤-루트>`는 팀 내부 채널로 받은 공식 스켈레톤(`deploy/`의 부모) 경로. 저장소에는 이 경로를 기록하지 않는다.
 
 ```powershell
+$ErrorActionPreference = 'Stop'
+
 # (게이트 1) 공격 단위 테스트
 Set-Location agents/attacker
 python -m unittest discover -s tests -t .
+if ($LASTEXITCODE -ne 0) { throw 'attacker unit tests failed' }
 Set-Location ../..
 
 # (게이트 2) 저장소 레이아웃
 pwsh -NoProfile -File scripts/check-layout.ps1
+if ($LASTEXITCODE -ne 0) { throw 'check-layout failed' }
 
 # (게이트 3) 스켈레톤 필수 파일 존재
 pwsh -NoProfile -File scripts/validate-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>"
+if ($LASTEXITCODE -ne 0) { throw 'validate-skeleton failed' }
 
 # (게이트 4) 병합 Compose context 검증 + 로컬 이미지 빌드
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -ConfigOnly
+if ($LASTEXITCODE -ne 0) { throw 'compose context check failed' }
 docker build -t aegis/attacker:latest agents/attacker
+if ($LASTEXITCODE -ne 0) { throw 'docker build failed' }
 
 # (게이트 5) 스켈레톤 위 라이브 스모크 — 공/방 기동 후 공격 로그 확인
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>"
+if ($LASTEXITCODE -ne 0) { throw 'skeleton live smoke up failed' }
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -Logs
-# 정리:
+# 정리: named volume은 유지한다. down -v 를 쓰지 않는다.
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -Down
+if ($LASTEXITCODE -ne 0) { throw 'skeleton down failed' }
 
-# (배포) 공식 태그로 재태그 — team 번호 확인 (제14조)
-docker tag aegis/attacker:latest ligacr.azurecr.io/team{N}/attacker:latest
-
-# (배포) 팀별 레지스트리 토큰으로 로그인 후 push (제14조)
+# (배포) 팀별 레지스트리 토큰으로 로그인 후 공식 태그·push (제14조)
 # 토큰은 운영진이 개별 전달한다. Git·이미지·채팅 로그에 남기지 않는다.
 echo "<TEAM-N-TOKEN>" | docker login ligacr.azurecr.io -u team{N}-token --password-stdin
+if ($LASTEXITCODE -ne 0) { throw 'docker login failed' }
+docker tag aegis/attacker:latest ligacr.azurecr.io/team{N}/attacker:latest
+if ($LASTEXITCODE -ne 0) { throw 'docker tag failed' }
 docker push ligacr.azurecr.io/team{N}/attacker:latest
+if ($LASTEXITCODE -ne 0) { throw 'docker push failed' }
 ```
 
 `-ConfigOnly`는 `up` 없이 병합 Compose를 읽고 `team1-attacker.build.context`가 저장소 `agents/attacker`인지 검사한다. 상대경로 `../agents/attacker` 또는 `<스켈레톤-루트>/agents/attacker`이면 실패한다.

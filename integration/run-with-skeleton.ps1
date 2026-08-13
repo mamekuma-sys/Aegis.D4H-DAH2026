@@ -14,7 +14,7 @@
   공식 스켈레톤 루트(=deploy/ 의 부모).
 
 .PARAMETER Down
-  combat 프로필 스택을 종료한다.
+  combat 프로필 스택을 종료한다. named volume은 유지하며 -v 를 쓰지 않는다.
 
 .PARAMETER ConfigOnly
   up 하지 않고 병합 Compose를 검증한 뒤 team1-attacker.build.context 를 출력한다.
@@ -103,7 +103,7 @@ function Assert-Team1AttackerBuildContext {
 }
 
 if ($Down) {
-    Invoke-AgentCompose @('down', '-v')
+    Invoke-AgentCompose @('down')
     return
 }
 
