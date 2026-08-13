@@ -156,7 +156,7 @@ class TestHotPathBudget(unittest.TestCase):
                 self.assertLess(p99, BUDGET_HOT_PATH_P99, f"{rate}pkt/s p99 초과")
 
         # 실측치를 남긴다. 예산 대비 여유가 얼마나 되는지가 회귀 판단 근거다.
-        print("\n[hot path µs] " + " ".join(
+        print("\n[hot path us] " + " ".join(
             f"{rate}pkt/s p50={values[0]:.1f} p99={values[1]:.1f} max={values[2]:.1f}"
             for rate, values in report.items()
         ))
@@ -171,7 +171,7 @@ class TestHotPathBudget(unittest.TestCase):
         score = metrics.latency_summary(L_SCORE)["p99_us"]
         policy = metrics.latency_summary(L_POLICY)["p99_us"]
 
-        print(f"\n[policy µs] gate p99={gate:.1f} sig p99={sig:.1f} "
+        print(f"\n[policy us] gate p99={gate:.1f} sig p99={sig:.1f} "
               f"score p99={score:.1f} policy p99={policy:.1f}")
 
         self.assertLess(gate, BUDGET_GATE_P99 * 1e6)

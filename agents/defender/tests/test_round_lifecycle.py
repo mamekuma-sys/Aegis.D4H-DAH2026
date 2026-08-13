@@ -10,7 +10,10 @@
 
 import io
 import json
+import ntpath
 import os
+import pathlib
+import re
 import tempfile
 import threading
 import time
@@ -121,6 +124,43 @@ class TestRuntimeConfig(unittest.TestCase):
 
     def test_advisory_enabled_requires_a_key(self):
         self.assertTrue(load_config({"LLM_API_KEY": "x"}).advisory_enabled)
+
+    def test_contract_socket_path_is_accepted_on_every_host_os(self):
+        """`AGENT_SOCKET`은 컨테이너 안의 Linux 경로다.
+
+        `os.path.isabs`는 Windows에서 `ntpath`로 위임되고, Python 3.13부터
+        `ntpath.isabs('/run/agent.sock')`가 False다. 호스트 OS 규칙으로 판단하면
+        개발자가 Windows에서 테스트를 돌린다는 이유만으로 계약 기본값이 거부된다.
+        """
+        self.assertFalse(ntpath.isabs("/run/agent.sock"))  # 전제 확인
+        for path in ("/run/agent.sock", "/var/run/agent.sock", "/tmp/x/agent.sock"):
+            with self.subTest(path=path):
+                self.assertEqual(load_config({"AGENT_SOCKET": path}).agent_socket, path)
+
+    def test_windows_style_path_is_still_rejected(self):
+        for path in ("agent.sock", "./agent.sock", "run\\agent.sock"):
+            with self.subTest(path=path):
+                with self.assertRaises(ConfigError):
+                    load_config({"AGENT_SOCKET": path})
+
+
+class TestConsoleOutputPortability(unittest.TestCase):
+    """테스트 출력이 비-UTF8 콘솔에서도 깨지지 않아야 한다.
+
+    팀 문서의 명령이 전부 PowerShell이라 개발자는 Windows에서 테스트를 돌린다.
+    CP949 콘솔에서 `µ` 같은 문자를 `print`하면 `UnicodeEncodeError`로 테스트가
+    실패한다 — 측정값이 잘못돼서가 아니라 출력 인코딩 때문에.
+    """
+
+    def test_printed_output_is_ascii_only(self):
+        source = pathlib.Path(__file__).with_name("test_timing.py").read_text(encoding="utf-8")
+        printed = re.findall(r"print\((.*?)\)\n", source, re.DOTALL)
+        self.assertTrue(printed, "test_timing.py 에서 print 를 찾지 못했다")
+        for fragment in printed:
+            for literal in re.findall(r'"([^"]*)"', fragment):
+                self.assertTrue(
+                    literal.isascii(), f"콘솔 출력에 비-ASCII 문자가 있다: {literal!r}"
+                )
 
 
 class TestEndToEnd(unittest.TestCase):

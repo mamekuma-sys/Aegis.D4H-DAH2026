@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -81,7 +82,11 @@ def load_config(env: Mapping[str, str] | None = None) -> RuntimeConfig:
     source = os.environ if env is None else env
 
     socket_path = (source.get("AGENT_SOCKET") or "").strip() or DEFAULT_AGENT_SOCKET
-    if not os.path.isabs(socket_path):
+    # 컨테이너 안의 Linux 경로이므로 호스트 OS 규칙이 아니라 POSIX 규칙으로 판단한다.
+    # `os.path.isabs`는 Windows에서 `ntpath`로 위임되는데, Python 3.13부터
+    # `ntpath.isabs('/run/agent.sock')`가 False라서 계약 기본값이 거부된다.
+    # 개발자가 Windows에서 테스트를 돌린다는 이유로 런타임 계약이 달라져서는 안 된다.
+    if not posixpath.isabs(socket_path):
         raise ConfigError(f"AGENT_SOCKET 은 절대 경로여야 합니다: {socket_path!r}")
 
     base_url = (source.get("LLM_BASE_URL") or "").strip() or DEFAULT_LLM_BASE_URL

@@ -246,6 +246,156 @@ class TestSocketWriterBudget(unittest.TestCase):
         self.assertEqual(len(completions), 1)
 
 
+class TestStaleSessionResults(unittest.TestCase):
+    """blocking send 중에 재연결이 끼어드는 경쟁 상황(§4.2).
+
+    `send`는 lock 밖에서 일어나므로, 반환할 때쯤이면 수신 쪽이 EOF를 받아 이미
+    재연결했을 수 있다. 이전 session의 뒤늦은 결과가 현재 session을 끊으면 방금
+    enqueue한 verdict가 폐기되고 그 구간이 그대로 fail-open이 된다.
+    """
+
+    def setUp(self):
+        self.clock = FakeClock()
+        self.queue = OutboundQueue()
+        self.metrics = Metrics()
+        self.faults = []
+        self.writer = SocketWriter(
+            self.queue, metrics=self.metrics, clock=self.clock,
+            on_fault=self.faults.append,
+        )
+        self.sender = VerdictSender(self.queue, clock=self.clock)
+
+        self.old = FakeTransport()
+        self.old.hold = threading.Event()
+        self.old_session = self.queue.new_session()
+        self.writer.attach(self.old, self.old_session)
+
+    def _start_blocked_send(self):
+        """이전 session의 send를 시작해 transport 안에서 멈춘 상태로 둔다."""
+        self.sender.send(1, VERDICT_ACCEPT, self.clock.now)
+        box = []
+        thread = threading.Thread(target=lambda: box.append(self.writer.send_once(0.0)))
+        thread.start()
+        self.assertTrue(self.old.entered_send.wait(2.0), "send 에 진입하지 못했다")
+        return thread, box
+
+    def _reconnect(self):
+        """수신 쪽이 EOF를 받아 재연결한 상황을 재현한다."""
+        self.writer.detach(self.old, self.old_session)
+        new_transport = FakeTransport()
+        new_session = self.queue.new_session()
+        self.writer.attach(new_transport, new_session)
+        return new_transport, new_session
+
+    def _release(self, thread, outcome_error=None):
+        if outcome_error is not None:
+            self.old.error = outcome_error
+        self.old.hold.set()
+        thread.join(timeout=3.0)
+        self.assertFalse(thread.is_alive())
+
+    def test_late_timeout_does_not_kill_the_new_session(self):
+        thread, box = self._start_blocked_send()
+        new_transport, _ = self._reconnect()
+        self.assertTrue(self.sender.send(2, VERDICT_ACCEPT, self.clock.now))
+        self.assertEqual(self.queue.qsize(), 1)
+
+        self._release(thread, TimeoutError("late timeout"))
+
+        self.assertIs(box[0].outcome, SendOutcome.STALE)
+        self.assertEqual(self.queue.qsize(), 1, "새 session verdict 가 폐기됐다")
+        self.assertFalse(new_transport.closed, "새 socket 이 닫혔다")
+        self.assertIs(self.writer.state, WriterState.READY)
+        self.assertEqual(self.faults, [], "이전 session 실패가 재연결을 유발했다")
+        self.assertEqual(self.metrics.counter("outbound.send_stale"), 1)
+
+    def test_late_socket_error_does_not_kill_the_new_session(self):
+        thread, box = self._start_blocked_send()
+        new_transport, _ = self._reconnect()
+        self.sender.send(2, VERDICT_ACCEPT, self.clock.now)
+
+        self._release(thread, ConnectionResetError("late reset"))
+
+        self.assertIs(box[0].outcome, SendOutcome.STALE)
+        self.assertEqual(self.queue.qsize(), 1)
+        self.assertFalse(new_transport.closed)
+        self.assertEqual(self.faults, [])
+
+    def test_late_success_does_not_free_the_new_session_in_flight(self):
+        """뒤늦은 성공도 현재 session의 in-flight 카운트를 건드리면 안 된다."""
+        thread, box = self._start_blocked_send()
+        self._reconnect()
+        self.sender.send(2, VERDICT_ACCEPT, self.clock.now)
+        before = self.queue.in_flight()
+
+        self._release(thread)
+
+        self.assertIs(box[0].outcome, SendOutcome.STALE)
+        self.assertEqual(self.queue.in_flight(), before)
+
+    def test_late_heartbeat_success_does_not_advance_the_new_epoch(self):
+        """§4.2 — reconnect는 이전 session의 HEARTBEAT 시각을 재사용하지 않는다."""
+        completions = []
+        writer = SocketWriter(
+            self.queue, clock=self.clock, on_heartbeat_sent=completions.append,
+            on_fault=self.faults.append,
+        )
+        old = FakeTransport()
+        old.hold = threading.Event()
+        writer.attach(old, self.queue.current_session())
+
+        self.queue.offer_heartbeat(heartbeat_item(self.queue, service_deadline=2.0))
+        box = []
+        thread = threading.Thread(target=lambda: box.append(writer.send_once(0.0)))
+        thread.start()
+        self.assertTrue(old.entered_send.wait(2.0))
+
+        writer.detach(old, self.queue.current_session())
+        writer.attach(FakeTransport(), self.queue.new_session())
+
+        old.hold.set()
+        thread.join(timeout=3.0)
+
+        self.assertIs(box[0].outcome, SendOutcome.STALE)
+        self.assertEqual(completions, [], "이전 session 의 HEARTBEAT 가 epoch 를 옮겼다")
+
+    def test_late_heartbeat_does_not_reopen_the_new_pending_slot(self):
+        """뒤늦은 완료가 HEARTBEAT slot을 열면 pending 중인 것이 중복 발행된다."""
+        thread, box = self._start_blocked_send()
+        self._reconnect()
+        self.assertTrue(
+            self.queue.offer_heartbeat(heartbeat_item(self.queue, service_deadline=2.0))
+        )
+
+        # 이전 session 의 HEARTBEAT 완료를 흉내 낸다.
+        stale_heartbeat = OutboundItem(
+            absolute_send_deadline=2.0,
+            type_rank=TYPE_RANK_HEARTBEAT,
+            sequence=0,
+            frame=HEARTBEAT_FRAME,
+            session_id=self.old_session,
+        )
+        self.assertFalse(self.queue.complete(stale_heartbeat))
+        self.assertFalse(
+            self.queue.offer_heartbeat(heartbeat_item(self.queue, service_deadline=3.0)),
+            "HEARTBEAT slot 이 다시 열렸다",
+        )
+
+        self._release(thread)
+        del box
+
+    def test_detach_ignores_a_generation_that_is_no_longer_current(self):
+        new_transport, new_session = self._reconnect()
+        # 이미 지나간 generation 으로 detach 를 시도해도 현재 것을 닫지 않는다.
+        self.assertFalse(self.writer.detach(self.old, self.old_session))
+        self.assertFalse(new_transport.closed)
+        self.assertIs(self.writer.state, WriterState.READY)
+        # 현재 generation 으로는 정상 동작한다.
+        self.assertTrue(self.writer.detach(new_transport, new_session))
+        self.assertTrue(new_transport.closed)
+        self.old.hold.set()
+
+
 class TestSingleWriterOwnership(unittest.TestCase):
     """§4.2 — 소켓에 쓰는 주체는 `SocketWriter` 하나뿐이다."""
 

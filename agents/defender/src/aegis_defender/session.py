@@ -38,9 +38,11 @@ from .metrics import (
     M_FRAME_TRAILING_BYTES,
     M_FRAME_UNKNOWN_TYPE,
     M_PACKET_RECEIVED,
+    M_HEARTBEAT_EXPIRED,
     M_SEND_ERROR,
     M_SEND_OK,
     M_SEND_PARTIAL,
+    M_SEND_STALE,
     M_SEND_TIMEOUT,
     M_SESSION_CONNECTED,
     M_SESSION_FAULT,
@@ -240,13 +242,22 @@ class OutboundQueue:
                 return None
             return heapq.heappop(self._heap)[1]
 
-    def complete(self, item: OutboundItem) -> None:
-        """send 시도가 끝났다. in-flight를 줄이고 HEARTBEAT slot을 연다."""
+    def complete(self, item: OutboundItem) -> bool:
+        """send 시도가 끝났다. in-flight를 줄이고 HEARTBEAT slot을 연다.
+
+        **이전 session의 뒤늦은 완료는 무시한다.** blocking send가 진행되는 동안
+        재연결이 일어나면 그 send의 결과는 이미 없어진 session의 것이다. 그것으로
+        현재 session의 in-flight를 줄이면 실제보다 여유가 있다고 잘못 세고,
+        HEARTBEAT slot을 열면 pending 중인 HEARTBEAT가 중복 발행된다.
+        """
         with self._cv:
+            if item.session_id != self._session_id:
+                return False
             if self._in_flight > 0:
                 self._in_flight -= 1
             if item.type_rank == TYPE_RANK_HEARTBEAT:
                 self._heartbeat_pending = False
+            return True
 
     def purge_session(self) -> int:
         """현재 session의 대기 item을 모두 버린다. 새 session에 replay하지 않는다."""
@@ -362,15 +373,45 @@ class SocketWriter:
             self._session_id = session_id
             self._state = WriterState.READY
 
-    def detach(self) -> None:
+    def _current(self) -> tuple[SocketTransport | None, int]:
+        with self._lock:
+            return self._transport, self._session_id
+
+    def _is_current(self, transport: SocketTransport, session_id: int) -> bool:
+        """이 (transport, session)이 아직 현재 generation인가.
+
+        blocking send는 lock 밖에서 일어나므로, send가 반환할 때쯤이면 수신 쪽이
+        EOF를 받아 이미 재연결했을 수 있다. 그 사실을 확인하지 않고 부수효과를
+        내면 이전 session의 실패가 **현재 session을 끊는다.**
+        """
+        with self._lock:
+            return self._transport is transport and self._session_id == session_id
+
+    def detach(
+        self,
+        expected_transport: SocketTransport | None = None,
+        expected_session: int | None = None,
+    ) -> bool:
+        """socket을 닫고 현재 session의 대기 item을 폐기한다.
+
+        `expected_*`를 주면 **그 generation이 아직 현재일 때만** 수행한다. 이미
+        다른 transport가 붙어 있으면 아무것도 하지 않는다 — 그러지 않으면 뒤늦게
+        끝난 이전 send가 방금 연결된 새 socket을 닫아버린다.
+        """
         with self._lock:
             transport = self._transport
+            if transport is None:
+                return False
+            if expected_transport is not None and transport is not expected_transport:
+                return False
+            if expected_session is not None and self._session_id != expected_session:
+                return False
             self._transport = None
             if self._state is not WriterState.STOPPED:
                 self._state = WriterState.DISCONNECTED
-        if transport is not None:
-            transport.close()
+        transport.close()
         self._queue.purge_session()
+        return True
 
     def start(self) -> None:
         if self._thread is not None:
@@ -402,26 +443,15 @@ class SocketWriter:
         if item is None:
             return None
 
-        with self._lock:
-            transport = self._transport
-            session_id = self._session_id
-
+        transport, session_id = self._current()
         if transport is None or item.session_id != session_id:
             # 이전 session의 잔여 item. 새 session으로 replay하지 않는다(§4.2).
-            result = SendResult(item, SendOutcome.STALE, self._clock())
-            self._queue.complete(item)
-            self.last_result = result
-            return result
+            return self._settle_stale(item, "dequeued-stale-session")
 
         budget = self._remaining_budget(item)
         if budget <= 0.0:
-            outcome = SendOutcome.EXPIRED
-            self._count(M_VERDICT_EXPIRED if item.is_verdict else M_SEND_TIMEOUT)
-            result = SendResult(item, outcome, self._clock(), "deadline-exhausted")
-            self._queue.complete(item)
-            self.last_result = result
-            self._fault("deadline-exhausted")
-            return result
+            result = SendResult(item, SendOutcome.EXPIRED, self._clock(), "deadline-exhausted")
+            return self._settle(result, transport, session_id)
 
         self._state = WriterState.SENDING
         started = self._clock()
@@ -429,30 +459,72 @@ class SocketWriter:
             sent = transport.send(item.frame, budget)
         except TimeoutError:
             result = SendResult(item, SendOutcome.TIMEOUT, self._clock(), "send-timeout")
-            self._count(M_SEND_TIMEOUT)
         except OSError as exc:
             result = SendResult(item, SendOutcome.ERROR, self._clock(), type(exc).__name__)
-            self._count(M_SEND_ERROR)
         else:
             completed = self._clock()
             if sent != len(item.frame):
                 result = SendResult(item, SendOutcome.PARTIAL, completed, f"sent={sent}")
-                self._count(M_SEND_PARTIAL)
             else:
                 result = SendResult(item, SendOutcome.SENT, completed)
-                self._count(M_SEND_OK)
-                self._observe(L_SEND, completed - started)
-                if not item.is_verdict and self._on_heartbeat_sent is not None:
-                    # §4.2 — **전체 frame의 성공 송신이 확인된 뒤에만** epoch를 갱신한다.
-                    self._on_heartbeat_sent(completed)
 
-        self._queue.complete(item)
+        return self._settle(result, transport, session_id, started=started)
+
+    def _settle(
+        self,
+        result: SendResult,
+        transport: SocketTransport,
+        session_id: int,
+        started: float | None = None,
+    ) -> SendResult:
+        """send 시도 하나를 마무리한다.
+
+        **부수효과를 내기 전에 generation을 다시 확인한다.** blocking send가 도는
+        동안 수신 쪽이 EOF를 받아 재연결했다면 이 결과는 이미 사라진 session의
+        것이다. 그것으로 큐를 건드리거나 HEARTBEAT epoch를 옮기거나 session을
+        끊으면, 이전 session의 실패가 방금 연결된 session의 verdict를 폐기하고
+        fail-open을 만든다.
+        """
+        if not self._is_current(transport, session_id):
+            return self._settle_stale(result.item, f"superseded:{result.outcome.value}")
+
+        outcome = result.outcome
+        if outcome is SendOutcome.SENT:
+            self._count(M_SEND_OK)
+            if started is not None:
+                self._observe(L_SEND, result.completed_at - started)
+            if not result.item.is_verdict and self._on_heartbeat_sent is not None:
+                # §4.2 — **전체 frame의 성공 송신이 확인된 뒤에만** epoch를 갱신한다.
+                self._on_heartbeat_sent(result.completed_at)
+        elif outcome is SendOutcome.EXPIRED:
+            self._count(M_VERDICT_EXPIRED if result.item.is_verdict else M_HEARTBEAT_EXPIRED)
+        elif outcome is SendOutcome.TIMEOUT:
+            self._count(M_SEND_TIMEOUT)
+        elif outcome is SendOutcome.ERROR:
+            self._count(M_SEND_ERROR)
+        elif outcome is SendOutcome.PARTIAL:
+            self._count(M_SEND_PARTIAL)
+
+        self._queue.complete(result.item)
         self.last_result = result
 
-        if result.outcome.is_fault:
-            self._fault(f"send-{result.outcome.value}")
+        if outcome.is_fault:
+            reason = (
+                "deadline-exhausted" if outcome is SendOutcome.EXPIRED
+                else f"send-{outcome.value}"
+            )
+            self._fault(reason, transport, session_id)
         else:
             self._state = WriterState.READY
+        return result
+
+    def _settle_stale(self, item: OutboundItem, detail: str) -> SendResult:
+        """이전 session의 결과를 조용히 흘려보낸다. 현재 session을 건드리지 않는다."""
+        result = SendResult(item, SendOutcome.STALE, self._clock(), detail)
+        # queue 도 session 을 확인하므로 현재 session 의 in-flight 는 줄지 않는다.
+        self._queue.complete(item)
+        self._count(M_SEND_STALE)
+        self.last_result = result
         return result
 
     def _remaining_budget(self, item: OutboundItem) -> float:
@@ -478,12 +550,28 @@ class SocketWriter:
             return 0.0
         return min(self._fault_timeout, remaining)
 
-    def _fault(self, reason: str) -> None:
+    def _fault(
+        self,
+        reason: str,
+        transport: SocketTransport | None = None,
+        session_id: int | None = None,
+    ) -> None:
+        """session fault를 선언한다.
+
+        `transport`가 주어지면 그 generation이 아직 현재일 때만 진행한다.
+        이전 session의 뒤늦은 실패로 현재 session을 끊지 않기 위한 것이다.
+        transport 없이 호출되는 경우(writer 루프 자체의 예외)는 generation과
+        무관한 장애이므로 그대로 처리한다.
+        """
+        if transport is not None and not self._is_current(transport, session_id):
+            self._count(M_SEND_STALE)
+            return
+
         self._state = WriterState.FAULT
         self._count(M_SESSION_FAULT)
         if self._audit is not None:
             self._audit.log("session-fault", source="writer", reason=reason)
-        self.detach()
+        self.detach(transport, session_id)
         if self._on_fault is not None:
             self._on_fault(reason)
 
@@ -574,7 +662,9 @@ class BrokerSession:
             try:
                 self._recv_loop(transport, on_packet)
             finally:
-                self._writer.detach()
+                # 우리가 연 generation만 닫는다. writer가 이미 fault로 detach하고
+                # 다른 transport가 붙었다면 여기서 그것을 닫아서는 안 된다.
+                self._writer.detach(transport, session_id)
 
     def _connect_with_backoff(self) -> SocketTransport | None:
         """연결될 때까지 재시도한다. `stop` 이외의 이유로 포기하지 않는다."""

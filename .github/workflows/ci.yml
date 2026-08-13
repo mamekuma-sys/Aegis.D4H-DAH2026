@@ -25,3 +25,20 @@ jobs:
       - name: Test attacker Compose override contract
         shell: pwsh
         run: ./scripts/tests/test-compose-agents-override.ps1
+
+  defender-tests:
+    # 방어 런타임은 python:3.12-slim 컨테이너에서 동작하므로, 병합 게이트도 같은
+    # 플랫폼·버전에서 돌린다. 표준 라이브러리만 쓰므로 설치 단계가 없다.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run defender unit and contract tests
+        working-directory: agents/defender
+        run: python -m unittest discover -s tests -t . -v

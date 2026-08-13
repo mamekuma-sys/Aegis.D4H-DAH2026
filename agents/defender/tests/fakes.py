@@ -49,10 +49,17 @@ class FakeTransport:
         self.error: Exception | None = None
         self.partial_by = 0
         self._idle = threading.Event()
+        # `hold`를 설정하면 send가 그 이벤트가 풀릴 때까지 안에서 멈춘다. blocking
+        # send 도중에 재연결이 끼어드는 경쟁 상황을 결정론적으로 재현하기 위한 것이다.
+        self.hold: threading.Event | None = None
+        self.entered_send = threading.Event()
 
     def send(self, frame: bytes, timeout: float) -> int:
         self.callers.add(threading.current_thread().name)
         self.timeouts.append(timeout)
+        self.entered_send.set()
+        if self.hold is not None:
+            self.hold.wait(5.0)
         if self.error is not None:
             raise self.error
         if self.blocked:

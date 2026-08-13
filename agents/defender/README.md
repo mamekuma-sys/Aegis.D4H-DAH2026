@@ -8,6 +8,8 @@ PACKET 수신 → 제한된 파싱 → 300ms 이내 결정론적 판정 → VERD
 
 1. **불확실하면 빠르게 `ACCEPT`한다.** parser 예외, 미지원 protocol, queue full, LLM 장애는 어느 것도 `DROP` 사유가 아닙니다(§6.2). 파싱 실패를 차단으로 바꾸는 순간 공격자는 malformed 패킷만 보내서 우리가 정상 트래픽을 막게 만들 수 있습니다.
 2. **소켓에 쓰는 주체는 `SocketWriter` 단일 스레드 하나뿐입니다**(§4.2). 판정 스레드와 HEARTBEAT 스케줄러는 불변 item을 만들어 우선순위 큐에 `put_nowait`할 뿐 `socket.send`를 직접 호출하지 않습니다.
+
+   여기에 따라오는 불변조건이 하나 더 있습니다 — **send 결과는 그 `(transport, session_id)`가 아직 현재 generation일 때만 반영합니다.** `send`는 lock 밖에서 일어나므로 반환할 때쯤이면 수신 쪽이 EOF를 받아 이미 재연결했을 수 있고, 그 결과로 큐·HEARTBEAT epoch·session 상태를 건드리면 이전 session의 실패가 방금 연결된 session의 verdict를 폐기해 fail-open을 만듭니다. `_settle`, `_fault`, `detach`, `OutboundQueue.complete`가 모두 generation을 확인하며, `tests/test_session.py`의 `TestStaleSessionResults`가 회귀 검증합니다.
 3. **원격 LLM은 packet별 동기 판정 경로에 들어가지 않습니다**(§0.5, §12). 300ms 시한에 물리적으로 불가능하며, `contracts/defender/README.md`가 이를 계약으로 못박습니다.
 
 진짜 위험은 공격자가 아니라 우리 자신입니다(§0.3). 에이전트가 죽거나 연결이 끊기면 Broker는 fail-open으로 전 패킷을 통과시키고, 판정이 300ms를 넘으면 Broker가 그 패킷을 DROP하며, rule을 잘못 넣으면 SLA가 붕괴합니다. 구조의 절반이 이 셋을 막는 데 쓰입니다.
@@ -79,7 +81,11 @@ cd agents/defender
 python -m unittest discover -s tests -t .
 ```
 
-실제 `AF_UNIX`/`SOCK_SEQPACKET` 소켓을 쓰지 않고 fake clock·fake transport로 검증합니다. macOS는 `AF_UNIX`에서 `SOCK_SEQPACKET`을 지원하지 않고 CI는 windows-latest라, 실제 소켓 기반 테스트는 개발 환경 어디에서도 돌지 않기 때문입니다. 설계 §15.4가 fake 기반 검증을 명시한 것도 같은 이유입니다.
+CI의 `defender-tests` job이 `ubuntu-latest` + Python 3.12(= 이미지와 같은 플랫폼·버전)에서 같은 명령을 실행합니다.
+
+실제 `AF_UNIX`/`SOCK_SEQPACKET` 소켓을 쓰지 않고 fake clock·fake transport로 검증합니다. macOS는 `AF_UNIX`에서 `SOCK_SEQPACKET`을 지원하지 않고 Windows도 마찬가지라, 실제 소켓 기반 테스트는 개발 환경 어디에서도 돌지 않기 때문입니다. 설계 §15.4가 fake 기반 검증을 명시한 것도 같은 이유입니다.
+
+Windows에서도 그대로 돌아갑니다. `AGENT_SOCKET` 검증은 호스트 OS 규칙이 아니라 `posixpath`로 하고(컨테이너 안 Linux 경로이므로), 측정값 출력은 ASCII만 씁니다(CP949 콘솔에서 `µ`가 `UnicodeEncodeError`를 냅니다).
 
 가장 중요한 회귀는 `tests/test_anomaly.py`의 `TestPoisonedTrafficChangesNothing`입니다. 다섯 개 packet-derived 지표를 전부 임계 위로 올려도 promotion state, canary 비율, rule scope, verdict가 하나도 바뀌지 않음을 검증합니다(§15.6).
 
