@@ -22,6 +22,9 @@
   `hypothesis_id`에 명시 등록된 경우만 허용되며, 현 endpoint의 local 실행 근거를 대신하지 않는다.
 - 후속 요청의 기본은 읽기 전용이다. 상태 변경은 flag 획득에 필요한 유한 작업으로 범위가
   명시되고 안전 등급·선행조건·중단 조건을 모두 통과할 때만 허용한다.
+- 최초 관측은 가설·실행 근거만 면제된 typed bootstrap 계획으로 수행한다. 정확한 endpoint의 읽기 전용
+  최소 요청도 공통 범위·비용 검증과 request charge 원자적 선예약을 통과하고, 일회용 reservation token을
+  gateway가 소비해야 한다. 무계획·무과금 관측은 허용하지 않는다.
 - endpoint별 request charge 10, planner turn 6, 총 `10 * len(TARGETS × PORTS)` 상한을 넘지 않는다.
   `accepted` flag·상한 소진·결정론적 no-progress/invalid-evidence면 해당 endpoint를 중단한다.
 

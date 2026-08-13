@@ -109,7 +109,9 @@ A5(가용성 공격)는 금지행위다. 우리 공격은 flag 획득 목적에 
 Round 비밀 저장소 생성
   → 공개 환경변수 검증과 비밀 환경변수의 typed handle bootstrap
   → TARGETS × PORTS 열거·정규화
-  → 제한을 지키는 기초 관측 (배너/기본 응답)
+  → endpoint별 typed bootstrap 관측 계획 생성
+  → 공통 범위·비용 검증과 첫 request charge 원자적 예약
+  → 예약 token을 소비하는 기초 관측 (배너/기본 응답)
   → ObservedServiceProfile과 관측 증거 기록
   → 증거가 있을 때만 레이어·FinalsPhase 우선순위 힌트 선택
   → S1~S5 가설 활성화 또는 폐기 (증거 부족 시 폐기)
@@ -138,8 +140,9 @@ Round 비밀 저장소 생성
 | 설정 bootstrap·검증기 | 환경변수, 생성 완료된 비밀 저장소 | 원문 비밀 없는 검증된 설정 또는 종료 | Round 비밀 저장소 |
 | 대상 열거기·공정 스케줄러 | `TARGETS`,`PORTS` | `Endpoint` 큐, 다음 대상 선택 | 설정 검증기, rate limiter |
 | 전역/제출 rate limiter | monotonic 요청 시각 | 허용/대기(backoff) | 전역은 토큰 버킷, 제출은 공유 60초 sliding window |
-| `EgressGateway` | capability, 정규화 destination, 구조화된 요청, 인증 handle | 허용된 네트워크 호출·3xx 관측 또는 거부 | 설정 검증기, rate limiter, 비밀 저장소, 비공개 HTTP transport |
-| 관측 수집기 | `Endpoint` | 원시 응답 | `EgressGateway(ATTACK_TARGET)`만 사용 |
+| 요청 예산 관리자 | typed I/O 계획, Round 상태 | 일회용 `BudgetReservation` 또는 거부 | 공정 스케줄러, capability별 예산·제출 제한 |
+| `EgressGateway` | capability, 정규화 destination, 구조화된 요청, 인증 handle, 일회용 `BudgetReservation` | 허용된 네트워크 호출·3xx 관측 또는 거부 | 설정 검증기, rate limiter, 요청 예산 관리자, 비밀 저장소, 비공개 HTTP transport |
+| 관측 수집기 | `BootstrapObservationPlan`, `BudgetReservation` | 원시 응답 | `EgressGateway(ATTACK_TARGET)`만 사용 |
 | Profile 분류기·관측 저장소 | 원시 응답 | `ObservedServiceProfile`, 증거 | 관측 수집기 |
 | 관측 기반 우선순위 정책 | 관측 저장소, 증명된 profile hint | endpoint 우선순위 힌트(공정 pass 불변) | 관측 저장소 |
 | S1~S5 가설 플래너 | Profile, 증거 | 활성 가설·중단 이유 | 관측 저장소 |
@@ -175,6 +178,11 @@ Round 비밀 저장소 생성
   근거 결속이며 TTL이 지나면 무효다.
 - `Observation`: `{round_id, endpoint, request_fingerprint, status, redacted_header_hints, body_fingerprint, latency,
   evidence_ref}`.
+- `BootstrapObservationPlan`: `{plan_id, round_id, endpoint_id, capability=ATTACK_TARGET,
+  action=BASIC_BANNER_GET, method=GET, normalized_destination, created_at_monotonic, expires_at_monotonic,
+  side_effect_class=READ_ONLY, expected_cost=1, timeout, budget_charge=1}`. 아직 존재할 수 없는 가설 ID와
+  실행 근거만 면제한다. 목적지는 정확한 현 endpoint의 allowlisted `/`이고 인증 handle·redirect·상태 변경을
+  허용하지 않으며, 계획 하나는 gateway 요청 하나만 표현한다.
 - `ScenarioHypothesis`: `{hypothesis_id, scenario∈{S1..S5}, registered_activation_evidence_refs[],
   registered_causal_lineage_refs[], preconditions[], stop_reason?}`. `hypothesis_id`는 Round 안에서 안정적이고
   레지스트리에서 유일하다. 모든 등록 근거는 같은 `round_id`에 속하며 가설과 명시적으로 결속된다.
@@ -185,6 +193,15 @@ Round 비밀 저장소 생성
   `causal_lineage_refs`는 선택 사항이며 S4 인과 설명에만 쓴다. 다른 endpoint의 lineage는 같은 Round와
   같은 `hypothesis_id`에 명시 등록됐을 때만 허용되고 local 실행 근거를 대신할 수 없다. `args`는 비밀
   원문 대신 `SecretHandle`만 담고, `expected_cost`와 `budget_charge`는 양수다.
+- `SubmitRequestPlan`: `{plan_id, round_id, capability=SUBMIT, normalized_destination, method=POST,
+  request_fingerprint, flag_handle, submit_token_handle, created_at_monotonic, expires_at_monotonic,
+  expected_cost=1, budget_charge=1}`. 제출 시도 1회를 예약하며 공유 제출 limiter와 Round 경계를 따른다.
+- `LLMAdviceRequestPlan`: `{plan_id, round_id, capability=LLM, normalized_destination, method=POST,
+  request_fingerprint, llm_key_handle, prompt_fingerprint, max_tokens, created_at_monotonic,
+  expires_at_monotonic, expected_cost, budget_charge=1, llm_token_charge=max_tokens}`. LLM 호출 1회와 최악
+  token 사용량을 함께 예약하며, 출력은 비실행 조언만 표현한다.
+- `EgressRequestPlan = BootstrapObservationPlan | ExecutionPlan | SubmitRequestPlan | LLMAdviceRequestPlan`.
+  gateway에 도달할 수 있는 네트워크 요청은 이 닫힌 union 밖에서 만들 수 없다.
 - `ToolResult`: `{plan, outcome∈{success,fail,timeout}, observation}`.
 - `SecretHandle`: `{secret_id, round_id, kind, expires_at_monotonic}`. 비직렬화·비로그 타입이며
   `kind∈{FLAG,SESSION,SUBMIT_TOKEN,LLM_KEY}`이다. Round 종료·TTL 만료 시 원문과 handle을 즉시 폐기한다.
@@ -192,6 +209,12 @@ Round 비밀 저장소 생성
 - `RoundBudget`: `{endpoint_count=E, total_request_cap=10*E, total_reserved, endpoint_reserved[endpoint_id],
   planner_turns[endpoint_id], submit_count, llm_calls, llm_tokens}`. `E = len(TARGETS × PORTS)`이고 각
   endpoint의 request charge 상한은 10, planner turn 상한은 6이다.
+- `BudgetReservation`: `{reservation_id, round_id, capability, endpoint_id?, normalized_destination, method,
+  request_fingerprint, charges{counter:positive}, issued_at_monotonic, expires_at_monotonic}`. 공통 accounting
+  preflight만 발급할 수 있는 비직렬화 일회용 token이다. gateway는 Round·capability·destination·method·
+  fingerprint가 모두 일치하는 미사용·미만료 token만 원자적으로 소비한다. bootstrap·후속 관측·제출·LLM
+  호출을 포함한 **모든** gateway I/O는 해당 capability의 target request, submit attempt 또는 LLM call·
+  max-token counter를 선예약한 token 없이는 거부한다.
 
 불변조건: flag·세션·토큰·키 원문은 Round 비밀 저장소 메모리에만 존재한다. 계획·증거·로그·보고서·
 LLM 프롬프트에는 handle, 단방향 해시, 비민감 fingerprint 또는 완전 마스크 값만 보낸다. 소비자 권한은
@@ -213,8 +236,10 @@ bootstrap 지역 변수의 추가 복사·보존을 피하고 가능한 즉시 �
 
 - 완전 열거: 매 라운드 `TARGETS × PORTS` 조합을 누락 없이 큐에 넣는다. 누적 레이어가 늘어도 이전
   포트를 제거하지 않는다(§7.3).
-- 기초 관측: 엔드포인트당 최소 요청(포트 개방 확인 + `GET /` 배너)으로 시작한다. 배너·상태·헤더가
-  다음 관측의 근거다.
+- 기초 관측: 엔드포인트마다 `BootstrapObservationPlan`의 최소 `GET /` 요청 하나로 시작한다. TCP 연결은
+  이 요청의 transport 동작이지 별도 무과금 I/O가 아니다. 공통 accounting preflight가 정확한 endpoint·
+  `READ_ONLY`·TTL·양수 비용을 검증하고 첫 charge를 원자적으로 예약한 뒤에만 gateway를 호출한다. 이
+  응답에서 등록한 endpoint-local `EvidenceRef`가 가설 활성화와 후속 `ExecutionPlan`의 근거가 된다.
 - 정규화: 응답 상태·헤더 힌트·본문 특징·오류·지연을 `Observation`의 증거 필드로 정규화한다.
 - timeout·연결거부·비정상 응답은 **실패가 아니라 관측**으로 기록한다(인라인 필터 신호일 수 있음).
 - 결정론적 예산: `E = len(TARGETS × PORTS)`, endpoint별 request charge 상한은 10, Round 실행 창의
@@ -281,7 +306,9 @@ S1~S5마다 (안정적 `hypothesis_id`, 등록 활성화 증거, 선행조건, �
   보관하지 않는다. raw HTTP transport는 `egress.py` 내부의 private 구현으로만 존재하고, 생성·조립
   루트가 모든 네트워크 호출에 같은 gateway 인스턴스를 주입한다.
 - `EgressGateway`는 환경 프록시 비활성화, 자동 redirect 금지, method·정규화 path 검증, capability별
-  destination allowlist, 인증 handle 소비 정책을 소유한다. 3xx는 따라가지 않고 status와 redacted
+  destination allowlist, 인증 handle 소비 정책과 일회용 reservation 검증·소비를 소유한다. 유효한
+  `BudgetReservation` 없이 호출하거나 token의 Round·capability·destination·method·request fingerprint가
+  요청과 다르거나 이미 소비·만료됐으면 transport 전에 거부한다. 3xx는 따라가지 않고 status와 redacted
   location hint를 `Observation`으로 반환한다.
 
 | `EgressCapability` | 허용 destination·path | method | 허용 secret kind |
@@ -296,13 +323,21 @@ S1~S5마다 (안정적 `hypothesis_id`, 등록 활성화 증거, 선행조건, �
 - 3xx의 수동 후속 hop은 redacted location 관측에서 신선한 근거를 등록하고 **새** `ExecutionPlan`을
   만든 경우에만 검토한다. gateway가 새 scheme·host·port·path를 처음부터 정규화·검증하며 capability
   crossing은 항상 거부한다.
-- preflight 순서는 고정한다. (1) 계획의 `hypothesis_id`가 가설 레지스트리에 존재하고 같은 Round인지,
-  (2) plan binding과 capability·destination allowlist, (3) 비어 있지 않은 endpoint-local
-  `execution_evidence_refs`와 선택적 `causal_lineage_refs`의 등록·Round·endpoint 규칙, (4) 계획·근거
-  TTL, (5) 구조화된 preconditions·side-effect action registry, (6) 양수 `expected_cost`·
-  `budget_charge`를 검사한다. 하나라도 실패하면 예산을 예약하지 않고 네트워크에 접근하지 않는다.
-  모두 통과한 뒤에만 endpoint·Round charge를 원자적으로 예약하고, 그 다음 rate limiter를 획득한 후
-  gateway I/O를 수행한다.
+- preflight는 공통 accounting과 계획별 증거 검증으로 나눈다. 닫힌 `EgressRequestPlan` union에 속한
+  모든 I/O의 공통 순서는 고정한다.
+  (1) plan의 Round·capability·destination·method·request fingerprint binding, (2) 계획 TTL,
+  (3) 구조화된 preconditions·side-effect action registry, (4) 양수 `expected_cost`·`budget_charge`와
+  capability별 비용 불변조건을 검사한다. 모두 통과한 뒤에만 해당 endpoint·Round request charge,
+  제출 시도 또는 LLM call·max-token 예산을 원자적으로 예약하고 일회용 `BudgetReservation`을 발급한다.
+  그 다음 rate limiter를 획득하고
+  gateway가 token을 원자적으로 소비한 뒤 I/O를 수행한다. 어느 단계든 실패하면 transport에 접근하지
+  않으며, rate limiter나 transport보다 먼저 예약한 charge는 I/O 실패 여부와 관계없이 소비된다.
+- `ExecutionPlan`은 공통 preflight 전에 추가로 (1) `hypothesis_id`가 가설 레지스트리에 존재하고 같은
+  Round인지, (2) 비어 있지 않은 endpoint-local `execution_evidence_refs`와 선택적
+  `causal_lineage_refs`의 등록·Round·endpoint 규칙, (3) 계획·근거 TTL을 검사한다.
+  `BootstrapObservationPlan`은 이 가설·evidence 검사만 면제하며 공통 preflight·선예약·gateway token
+  검사를 그대로 통과해야 한다. 그러므로 최초 관측에도 무과금 경로가 없고, 관측 전에 근거를 요구하는
+  순환 의존도 없다.
 - `side_effect_class`의 기본값은 `READ_ONLY`다. 상태 변경 요청은
   `BOUNDED_FLAG_DIRECTED_MUTATION`으로 명시되고, flag 획득에 필요한 유한 작업·변경 범위·안전
   precondition·중단 조건이 모두 구조화된 allowlist와 일치할 때만 허용한다.
@@ -393,8 +428,8 @@ agents/attacker/src/aegis_attacker/
 ├─ models.py         # Endpoint·ObservedServiceProfile·Observation·Hypothesis·FlagCandidate 등
 ├─ secrets.py        # terminal Round 저장소, typed handle, 소비자별 resolve 정책
 ├─ egress.py         # 유일한 raw transport 소유자, capability별 정규화·method·path·인증 검증
-├─ preflight.py      # 가설·두 evidence class·TTL·precondition·cost 검증
-├─ budget.py         # endpoint pass, 10/E 상한, planner turn·원자적 charge 예약
+├─ preflight.py      # 공통 accounting, bootstrap 및 가설·두 evidence class 검증
+├─ budget.py         # endpoint pass, capability 예산, 일회용 reservation·원자적 charge 예약
 ├─ rate_limit.py     # 전역 10/s·burst20 토큰 버킷, 제출 공유 60초 sliding window
 ├─ observation.py    # EgressGateway만 사용하는 관측 수집·정규화
 ├─ profiles.py       # ObservedServiceProfile 분류, FinalsPhaseHint
@@ -435,8 +470,9 @@ HTTP client/session을 생성·주입하는 의존성 검사를 함께 둔다. �
 | 용어 분리 | `FinalsPhase`·`S4ChainStage`·`MissionState`가 다른 타입·용어 | 혼용 |
 | profile 우선순위 | 서비스 증거로 힌트 선택 | Phase 환경변수 요구 |
 | 미지 서비스 | 범용 저비용 관측 fallback | 임의 프로토콜 가정 |
-| 결정론적 Round 예산 | `E`, endpoint 10, 총 `10*E`, plan당 charge 1, endpoint당 pass 1 charge, 첫 관측 전체 선행, planner turn 6·명시적 no-progress/invalid-evidence 중단 | 0/음수 cost·charge, plan charge≠1, endpoint 11번째·총 cap 초과, 첫 pass 전 재예약 |
-| 예산 원자성 | preflight 성공 뒤 rate/I/O 전에 동시 요청 중 하나만 마지막 charge 예약 | 초과 예약, rate 획득·I/O 뒤 charge, 실패 preflight의 charge 소비 |
+| bootstrap 관측 계획 | 가설·evidence만 면제한 정확한 endpoint의 `GET /`·`READ_ONLY`·charge 1 계획이 선예약 후 첫 local evidence 생성 | 무계획·무과금 관측, 인증·상태 변경·redirect, hypothesis/evidence 면제를 후속 계획에 적용 |
+| 결정론적 Round 예산 | `E`, endpoint 10, 총 `10*E`, bootstrap·후속 plan당 charge 1, endpoint당 pass 1 charge, 모든 endpoint 첫 bootstrap 선행, planner turn 6·명시적 no-progress/invalid-evidence 중단 | 0/음수 cost·charge, plan charge≠1, endpoint 11번째·총 cap 초과, 첫 pass 전 재예약 |
+| 예산 원자성 | 공통 preflight 성공 뒤 rate/I/O 전에 동시 요청 중 하나만 마지막 charge와 일회용 token 예약 | 초과 예약, rate 획득·I/O 뒤 charge, 실패 preflight의 charge 소비 |
 | UAV→UGV | 근거 없이 UAV profile 재사용 안 함 | 무근거 재사용 |
 | rate limit | 초당 10·버스트 20 준수 | 초과 요청 |
 | 제출 limiter | fake monotonic clock으로 60초 경계·동시성을 검증해 rolling 60초 ≤30 | 31번째 전송·burst |
@@ -444,6 +480,8 @@ HTTP client/session을 생성·주입하는 의존성 검사를 함께 둔다. �
 | retry Round 경계 | authoritative monotonic deadline 이내만 대기; deadline 없음·초과 시 현 Round retry 중단 | 프로세스 시작으로 Round 경계 발명, 남은 deadline 초과 대기 |
 | 가설·계획 binding | 등록 `hypothesis_id`, 현 endpoint의 신선한 local 실행 근거, 선택적 same-Round/same-hypothesis S4 lineage | 미등록 가설·근거, local 근거 없음, TTL·Round 불일치, lineage로 local 근거 대체 |
 | typed egress destination | capability별 정규화 scheme·host·port·path와 method·secret kind, proxy 비활성, 3xx 관측 반환 | host·port·path 변경, method·secret kind·capability 교차, 자동 redirect |
+| egress reservation | bootstrap·후속 관측·제출·LLM 모두 요청과 정확히 결속된 미사용·미만료 token을 gateway가 원자 소비 | token 없음·재사용·만료, 다른 Round·capability·endpoint·method·fingerprint token |
+| capability 예산 예약 | ATTACK_TARGET request charge, SUBMIT attempt, LLM call·max-token counter를 요청별 plan에서 선예약 | 제출·LLM 무계획 호출, 일부 counter만 예약, cap 초과 token 발급 |
 | egress 우회 방지 | 모든 네트워크 객체가 단일 gateway만 의존하고 raw transport는 `egress.py` private | adapter/client의 generic HTTP transport 필드·직접 생성·주입 |
 | redirect 수동 hop | 새 계획·신선한 local 근거와 전체 destination 재검증 | 기존 plan 재사용·capability crossing |
 | 부작용 | 기본 읽기 전용, 제한 변경은 명시적 등급·precondition으로만 허용 | 등급 없는 변경·물리·가용성·지속성·파괴 작업 |
