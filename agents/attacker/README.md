@@ -56,7 +56,7 @@ pwsh -File ../../integration/run-with-skeleton.ps1 -SkeletonPath <스켈레톤-�
 ```
 
 공식 스켈레톤 파일을 수정하지 않고 `integration/compose.agents.yml`로 team1-attacker 이미지만
-교체한다. TARGETS·PORTS·SUBMIT_*·LLM_* 는 스켈레톤 compose가 주입한다.
+교체한다. 스켈레톤 compose가 주입하는 공식 변수는 TARGETS·PORTS·SUBMIT_*·LLM_BASE_URL·LLM_API_KEY 이다.
 
 ## 이미지 제출 (본선)
 

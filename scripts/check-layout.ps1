@@ -36,6 +36,10 @@ $requiredFiles = @(
     'research/defense-mapping.md'
     'scripts/validate-skeleton.ps1'
     'scripts/tests/test-validate-skeleton.ps1'
+    'scripts/tests/test-compose-agents-override.ps1'
+    'integration/compose.agents.yml'
+    'integration/run-with-skeleton.ps1'
+    'integration/attacker-deploy.md'
 )
 
 $missing = @()
