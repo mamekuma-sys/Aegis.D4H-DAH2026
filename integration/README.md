@@ -20,22 +20,22 @@ pwsh -NoProfile -File scripts/validate-skeleton.ps1 -SkeletonPath ..
 
 ## 이미지 제출 계약
 
-다음 항목은 `FINALS-RULES` 14절과 15절에서 확인한 운영 규칙입니다. `FINALS-DAY-NOTE`는 파생 팀 메모이므로 이 계약의 공식 원본으로 인용하지 않습니다.
+다음 항목은 `FINALS-RULES` 제14조와 제15조에서 확인한 운영 규칙입니다. `FINALS-DAY-NOTE`는 파생 팀 메모이므로 이 계약의 공식 원본으로 인용하지 않습니다.
 
-- `FINALS-RULES` 14절: 공격 이미지 `ligacr.azurecr.io/team{N}/attacker:latest`
-- `FINALS-RULES` 14절: 방어 이미지 `ligacr.azurecr.io/team{N}/defender:latest`
-- `FINALS-RULES` 15절: 운영진은 라운드 시작 5분 전에 `latest`를 pull하며 pull timeout은 20분입니다.
-- `FINALS-RULES` 15절: 컨테이너는 라운드마다 새로 생성되고 종료 후 삭제됩니다.
+- `FINALS-RULES` 제14조: 공격 이미지 `ligacr.azurecr.io/team{N}/attacker:latest`
+- `FINALS-RULES` 제14조: 방어 이미지 `ligacr.azurecr.io/team{N}/defender:latest`
+- `FINALS-RULES` 제15조: 운영진은 라운드 시작 5분 전에 `latest`를 pull하며 pull timeout은 20분입니다.
+- `FINALS-RULES` 제15조: 컨테이너는 라운드마다 새로 생성되고 종료 후 삭제됩니다.
 
 ## 공식 실행 제약과 스켈레톤 구현 확인
 
-`FINALS-RULES` 16절은 다음 실행 값을 공식 규칙으로 고정합니다.
+`FINALS-RULES` 제16조는 다음 실행 값을 공식 규칙으로 고정합니다.
 
 - 공통: `no-new-privileges`, memory reservation `2g`, CPU shares `2048`, PID limit `512`
 - 방어: Linux capability 전체 제거(`cap-drop ALL`)와 Broker socket mount
 - 운영 환경변수는 실행 시 주입하며 이미지에 고정하지 않음
 
-`OFFICIAL-SKELETON`과 `deploy/docs/agent-guide.md` 검증은 위 값의 공식 여부를 다시 결정하는 단계가 아닙니다. 실제 Compose 옵션, socket mount, 환경변수 주입 구현이 `FINALS-RULES` 16절과 최신 운영진 직접 안내에 맞는지 확인하는 단계입니다. 비밀값, 환경별 주소, Broker socket 경로는 이미지에 넣지 않습니다.
+`OFFICIAL-SKELETON`과 `deploy/docs/agent-guide.md` 검증은 위 값의 공식 여부를 다시 결정하는 단계가 아닙니다. 실제 Compose 옵션, socket mount, 환경변수 주입 구현이 `FINALS-RULES` 제16조와 최신 운영진 직접 안내에 맞는지 확인하는 단계입니다. 비밀값, 환경별 주소, Broker socket 경로는 이미지에 넣지 않습니다.
 
 ## 로컬 QA와 본선 배포
 

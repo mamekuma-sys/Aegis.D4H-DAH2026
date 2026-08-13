@@ -235,7 +235,7 @@ git commit -m "docs: define finals runtime constraints"
 - Modify: `integration/README.md`
 
 **Interfaces:**
-- Consumes: `FINALS-RULES` 14절의 이미지 명명 규칙, 15절의 pull·컨테이너 생명주기, 16절의 컨테이너 실행 제한
+- Consumes: `FINALS-RULES` 제14조의 이미지 명명 규칙, 제15조의 pull·컨테이너 생명주기, 제16조의 컨테이너 실행 제한
 - Produces: Docker 담당자가 이미지·smoke test·Compose 설계에 적용할 운영 계약
 
 - [ ] **Step 1: 이미지 이름과 라운드 생명주기를 추가**
@@ -245,7 +245,7 @@ git commit -m "docs: define finals runtime constraints"
 ```markdown
 ## 이미지 제출 계약
 
-- 근거: `FINALS-RULES` 14절(Registry, 이미지 경로, `latest`)과 15절(pull 시점, timeout, 라운드별 생명주기)
+- 근거: `FINALS-RULES` 제14조(Registry, 이미지 경로, `latest`)와 제15조(pull 시점, timeout, 라운드별 생명주기)
 - 공격 이미지: `ligacr.azurecr.io/team{N}/attacker:latest`
 - 방어 이미지: `ligacr.azurecr.io/team{N}/defender:latest`
 - 운영진은 라운드 시작 5분 전에 `latest`를 pull하며 pull timeout은 20분입니다.
@@ -253,7 +253,7 @@ git commit -m "docs: define finals runtime constraints"
 
 ## 실행 제한
 
-- 근거: `FINALS-RULES` 16절. 아래 값은 스켈레톤 검증 전에도 공식 규칙으로 고정됩니다.
+- 근거: `FINALS-RULES` 제16조. 아래 값은 스켈레톤 검증 전에도 공식 규칙으로 고정됩니다.
 - 공통: `no-new-privileges`, memory reservation `2g`, CPU shares `2048`, PID limit `512`
 - 방어: Linux capability 전체 제거(`cap-drop ALL`)와 Broker socket mount
 - 비밀값과 환경별 주소는 이미지에 넣지 않고 운영진이 주입하는 환경변수와 socket만 사용합니다.
@@ -261,7 +261,7 @@ git commit -m "docs: define finals runtime constraints"
 
 - [ ] **Step 2: Compose 연동 원칙을 기존 후속 단계와 연결**
 
-`compose.agents.yml`이 공식 파일을 복사하지 않고 팀 이미지, 환경변수, 방어 socket mount만 override하며 Docker 변경에는 해당 에이전트 소유자와 팀장 검토가 필요하다고 명시한다. `OFFICIAL-SKELETON`과 공식 agent guide 검증은 16절 값의 공식 여부를 결정하는 절차가 아니라 실제 Compose·mount·환경변수 주입 구현의 일치 여부를 확인하는 절차다.
+`compose.agents.yml`이 공식 파일을 복사하지 않고 팀 이미지, 환경변수, 방어 socket mount만 override하며 Docker 변경에는 해당 에이전트 소유자와 팀장 검토가 필요하다고 명시한다. `OFFICIAL-SKELETON`과 공식 agent guide 검증은 제16조 값의 공식 여부를 결정하는 절차가 아니라 실제 Compose·mount·환경변수 주입 구현의 일치 여부를 확인하는 절차다.
 
 - [ ] **Step 3: Docker 운영 계약을 검증**
 

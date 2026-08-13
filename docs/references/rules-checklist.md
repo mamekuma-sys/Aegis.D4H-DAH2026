@@ -7,7 +7,7 @@
 | 예선 안내서 | 예선 평가 목적, 제출물 범위, 평가 항목 | 본선 실행 인터페이스 추정 |
 | 예선 보고서 | A1~A5, S1~S5, 상관분석, 가용성 우선 원칙 | 합성 지표를 본선 성능으로 주장 |
 | 예선 소스 | 검증된 스키마·상관분석 아이디어와 테스트 | `AttackSimulationAgent`를 실제 공격기로 사용 |
-| 본선 운영세칙 | 14절의 제출 이미지, 15절의 pull·라운드 생명주기, 16절의 컨테이너 실행 옵션을 포함한 본선 운영 기준 | 예선 구현과의 동일성 의무를 임의로 추가 |
+| 본선 운영세칙 | 제14조의 제출 이미지, 제15조의 pull·라운드 생명주기, 제16조의 컨테이너 실행 옵션을 포함한 본선 운영 기준 | 예선 구현과의 동일성 의무를 임의로 추가 |
 | 공식 agent guide | 환경변수, 제출 API, Broker 프레임, 시간 계약 | 데모 취약점을 본선 취약점으로 간주 |
 | 파생 팀 메모 | 공식 원본과 실제 인터페이스를 찾기 위한 이해 보조 | `FINALS-DAY-NOTE`나 `SKELETON-EXPLANATION`을 공식 원본 또는 독립 근거로 인용 |
 
@@ -47,12 +47,12 @@
 
 ### 이미지 운영
 
-- `FINALS-RULES` 14절에 따라 공격·방어 이미지는 각각 `ligacr.azurecr.io/team{N}/attacker:latest`, `ligacr.azurecr.io/team{N}/defender:latest`를 사용합니다.
-- `FINALS-RULES` 15절에 따라 `latest` 이미지는 라운드 시작 5분 전에 pull되며 pull timeout은 20분입니다.
-- `FINALS-RULES` 15절에 따라 컨테이너는 라운드마다 새로 생성되고 종료 후 삭제되며 시작 시간도 라운드 시간에 포함됩니다.
-- `FINALS-RULES` 16절에 따라 공통으로 `no-new-privileges`, memory reservation `2g`, CPU shares `2048`, PID limit `512`를 적용합니다.
-- `FINALS-RULES` 16절에 따라 방어 컨테이너는 `cap-drop ALL`과 Broker socket mount를 적용하고, 운영 환경변수는 실행 시 주입합니다.
-- `OFFICIAL-SKELETON`과 공식 agent guide 검증은 Compose, mount, 환경변수 주입 구현이 16절과 최신 운영진 직접 안내에 맞는지 확인하는 절차입니다.
+- `FINALS-RULES` 제14조에 따라 공격·방어 이미지는 각각 `ligacr.azurecr.io/team{N}/attacker:latest`, `ligacr.azurecr.io/team{N}/defender:latest`를 사용합니다.
+- `FINALS-RULES` 제15조에 따라 `latest` 이미지는 라운드 시작 5분 전에 pull되며 pull timeout은 20분입니다.
+- `FINALS-RULES` 제15조에 따라 컨테이너는 라운드마다 새로 생성되고 종료 후 삭제되며 시작 시간도 라운드 시간에 포함됩니다.
+- `FINALS-RULES` 제16조에 따라 공통으로 `no-new-privileges`, memory reservation `2g`, CPU shares `2048`, PID limit `512`를 적용합니다.
+- `FINALS-RULES` 제16조에 따라 방어 컨테이너는 `cap-drop ALL`과 Broker socket mount를 적용하고, 운영 환경변수는 실행 시 주입합니다.
+- `OFFICIAL-SKELETON`과 공식 agent guide 검증은 Compose, mount, 환경변수 주입 구현이 제16조와 최신 운영진 직접 안내에 맞는지 확인하는 절차입니다.
 
 ## 아직 가정하면 안 되는 내용
 
