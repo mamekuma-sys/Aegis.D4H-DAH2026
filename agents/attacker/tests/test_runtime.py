@@ -153,6 +153,22 @@ class TestRuntimeResilience(unittest.TestCase):
         rt.run_once()
         self.assertEqual(len(arena.submits), 2)
 
+    def test_run_once_rejects_an_active_caller_owned_round(self):
+        arena = FakeArena("FLAG{caller_round}", "/x", "irrelevant")
+        rt = make_runtime(arena)
+        rt.start_round()
+        rt.run_cycle()
+        self.assertEqual(len(arena.submits), 1)
+
+        with self.assertRaisesRegex(RuntimeError, "active Round"):
+            rt.run_once()
+
+        rt.run_cycle()
+        self.assertEqual(len(arena.submits), 1)
+        self.assertNotEqual(rt._secret_store.secrets_snapshot(), set())
+        rt.finish_round()
+        self.assertEqual(rt._secret_store.secrets_snapshot(), set())
+
     def test_llm_down_does_not_stop_observation_or_submit(self):
         # LLM 장애(500)여도 관측·범위검사·제출 결정론 경로는 계속. 배너 flag는 잡힌다.
         arena = FakeArena("welcome FLAG{banner} here", "/x", "irrelevant", llm_status=500)

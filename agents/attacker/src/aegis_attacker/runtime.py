@@ -320,6 +320,8 @@ class AttackerRuntime:
 
     def run_once(self) -> RoundReport:
         """독립된 한 Round를 열고 한 번의 scan cycle을 실행한다."""
+        if self._round_active:
+            raise RuntimeError("run_once() cannot run during an active Round")
         self.start_round()
         try:
             return self.run_cycle()
