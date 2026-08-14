@@ -79,6 +79,27 @@ class TestStore(unittest.TestCase):
         s.record(h, SubmitState.ERROR)
         self.assertFalse(s.is_resolved(h))
 
+    def test_try_begin_submit_reserves_once(self):
+        s = FlagStore()
+        h = flag_fingerprint("FLAG{x}")
+        should, resolved = s.try_begin_submit(h)
+        self.assertTrue(should)       # 첫 워커가 예약
+        self.assertIsNone(resolved)
+        s.finish_submit(h, SubmitState.ACCEPTED)
+        should2, resolved2 = s.try_begin_submit(h)
+        self.assertFalse(should2)     # 종결 후 재제출 금지
+        self.assertEqual(resolved2, SubmitState.ACCEPTED)
+
+    def test_terminal_states_not_retried(self):
+        for st in (SubmitState.OWN_TEAM, SubmitState.DUPLICATE,
+                   SubmitState.CLOSED, SubmitState.REJECTED):
+            s = FlagStore()
+            h = flag_fingerprint("FLAG{x}")
+            s.finish_submit(h, st)
+            should, resolved = s.try_begin_submit(h)
+            self.assertFalse(should)
+            self.assertEqual(resolved, st)
+
 
 class TestSubmitClient(unittest.TestCase):
     def test_accepted_via_handle(self):

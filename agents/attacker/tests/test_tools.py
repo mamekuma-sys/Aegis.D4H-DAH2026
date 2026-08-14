@@ -12,10 +12,12 @@ from aegis_attacker.models import (
 )
 from aegis_attacker.observation import HttpResponse
 from aegis_attacker.rate_limit import RateLimiter
+from aegis_attacker.recon import discover_paths
 from aegis_attacker.tools import (
     ExecutionAdapter,
     PlanBindingError,
     double_encode_tokens,
+    evasion_arg_variants,
     evasion_variants,
     insert_sql_comments,
     url_encode_tokens,
@@ -166,6 +168,44 @@ class TestEvasion(unittest.TestCase):
     def test_variants_differ(self):
         variants = evasion_variants("1' UNION SELECT sql FROM sqlite_master")
         self.assertTrue(len(variants) >= 2)
+
+    def test_arg_variants_encode_path_and_body(self):
+        # path 뿐 아니라 body 의 의심 토큰도 인코딩한다(필터는 본문 시그니처로도 DROP).
+        variants = evasion_arg_variants({
+            "method": "POST", "path": "/read?f=../x",
+            "headers": {}, "body": "q=1' OR '1'='1"})
+        self.assertTrue(len(variants) >= 1)
+        first = variants[0]
+        self.assertNotEqual(first["path"], "/read?f=../x")  # path 인코딩됨
+        # 최소 한 변형은 body 도 인코딩한다
+        self.assertTrue(any(v["body"] != "q=1' OR '1'='1" for v in variants))
+
+    def test_arg_variants_empty_when_no_tokens(self):
+        # 인코딩할 의심 토큰이 없으면 변형을 만들지 않는다.
+        variants = evasion_arg_variants({"method": "GET", "path": "/x", "headers": {}, "body": ""})
+        self.assertEqual(variants, [])
+
+
+class TestReconDiscovery(unittest.TestCase):
+    def test_discover_from_robots(self):
+        paths = discover_paths("User-agent: *\nDisallow: /admin\nAllow: /public\nSitemap: /sitemap.xml")
+        self.assertIn("/admin", paths)
+        self.assertIn("/public", paths)
+
+    def test_discover_from_banner_paths(self):
+        paths = discover_paths("URL Fetcher — GET /fetch?url=<url> also see /registry")
+        self.assertIn("/fetch", paths)   # 쿼리 앞까지
+        self.assertIn("/registry", paths)
+
+    def test_static_assets_skipped(self):
+        paths = discover_paths("<link href=/style.css> <script src=/app.js> <a href=/portal>")
+        self.assertNotIn("/style.css", paths)
+        self.assertNotIn("/app.js", paths)
+        self.assertIn("/portal", paths)
+
+    def test_bounded(self):
+        text = " ".join("/p%d" % i for i in range(50))
+        self.assertLessEqual(len(discover_paths(text)), 8)
 
 
 if __name__ == "__main__":

@@ -34,9 +34,18 @@ class AttackerConfig:
     concurrency: int = DEFAULT_CONCURRENCY
 
     @property
-    def can_attack(self) -> bool:
-        """LLM 키와 표적이 있어야 공격을 수행한다. 없으면 inert(§9.13)."""
-        return bool(self.llm_api_key and self.targets and self.ports)
+    def can_run(self) -> bool:
+        """표적·포트가 있으면 런타임을 가동한다. LLM 키 유무와 무관(§9.13).
+
+        표적이 없을 때만 inert(무동작·주기적 재점검)이며, LLM 키가 없어도
+        배너/recon/playbook/제출 결정론 경로는 계속 수행한다.
+        """
+        return bool(self.targets and self.ports)
+
+    @property
+    def can_use_llm(self) -> bool:
+        """LLM 조언을 쓸 수 있는지. 키가 없으면 결정론 경로만 돈다."""
+        return bool(self.llm_api_key)
 
     @property
     def can_submit(self) -> bool:

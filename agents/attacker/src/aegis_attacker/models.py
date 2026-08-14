@@ -280,13 +280,23 @@ class RoundBudget:
             self.llm_calls += calls
             self.llm_tokens += tokens
 
-    def try_reserve_llm(self, max_calls: int) -> bool:
-        """호출 상한 검사와 예약을 원자적으로 수행(병렬 안전). 여유 없으면 False."""
+    def try_reserve_call(self, max_calls: int, max_tokens: int = 0) -> bool:
+        """호출 슬롯을 원자적으로 예약한다(check→increment 한 락). TOCTOU 방지.
+
+        예산을 넘으면 예약하지 않고 False. 병렬 워커가 동시에 호출해도 상한을 넘지 않는다.
+        토큰은 사후에 add_llm(0, tokens)로 누적하되, 예약 시점에 이미 상한을 넘겼으면 거부한다.
+        """
         with self._lock:
             if self.llm_calls >= max_calls:
                 return False
+            if max_tokens and self.llm_tokens >= max_tokens:
+                return False
             self.llm_calls += 1
             return True
+
+    def try_reserve_llm(self, max_calls: int) -> bool:
+        """호출 상한만 원자 예약한다. 기존 테스트·호출부 호환용."""
+        return self.try_reserve_call(max_calls)
 
     def reset(self) -> None:
         """Round 시작 시 사용량을 0으로 되돌린다(라운드별 예산 격리)."""

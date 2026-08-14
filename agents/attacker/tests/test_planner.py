@@ -73,6 +73,17 @@ class TestPlanner(unittest.TestCase):
         state.turn = 2
         self.assertFalse(planner.should_stop(state))
 
+    def test_should_stop_on_no_response_streak(self):
+        # 연속 무응답(필터 DROP·다운)이 누적되면 그 가설을 접는다(§9.8).
+        from aegis_attacker.planner import MAX_NO_RESPONSE_STREAK
+        planner = Planner(FakeAdvisor({"path": "/x"}), max_turns=99)
+        state = EndpointState(EP)
+        state.turn = 1
+        state.no_response_streak = MAX_NO_RESPONSE_STREAK
+        self.assertTrue(planner.should_stop(state))
+        state.no_response_streak = MAX_NO_RESPONSE_STREAK - 1
+        self.assertFalse(planner.should_stop(state))
+
 
 if __name__ == "__main__":
     unittest.main()

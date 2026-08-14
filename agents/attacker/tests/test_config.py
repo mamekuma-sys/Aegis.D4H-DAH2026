@@ -23,7 +23,8 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(cfg.ports, (80, 443))
         self.assertEqual(cfg.llm_base_url, "http://litellm.lig.internal:4000")  # trailing / 제거
         self.assertEqual(cfg.llm_model, DEFAULT_LLM_MODEL)
-        self.assertTrue(cfg.can_attack)
+        self.assertTrue(cfg.can_run)
+        self.assertTrue(cfg.can_use_llm)
         self.assertTrue(cfg.can_submit)
 
     def test_targets_x_ports_enumeration(self):
@@ -46,13 +47,20 @@ class TestLoadConfig(unittest.TestCase):
         cfg = load_config({})
         self.assertEqual(cfg.targets, ())
         self.assertEqual(cfg.ports, ())
-        self.assertFalse(cfg.can_attack)
+        self.assertFalse(cfg.can_run)   # 표적 없음 → inert
+        self.assertFalse(cfg.can_use_llm)
         self.assertFalse(cfg.can_submit)
         self.assertEqual(cfg.llm_base_url, DEFAULT_LLM_BASE_URL)
 
-    def test_no_llm_key_cannot_attack(self):
+    def test_no_llm_key_still_runs(self):
+        # 표적·포트가 있으면 LLM 키가 없어도 런타임을 가동한다(배너/recon/제출).
         cfg = load_config({"TARGETS": "a", "PORTS": "80"})
-        self.assertFalse(cfg.can_attack)  # 키 없으면 inert
+        self.assertTrue(cfg.can_run)
+        self.assertFalse(cfg.can_use_llm)  # LLM 조언만 비활성
+
+    def test_no_targets_inert(self):
+        cfg = load_config({"LLM_API_KEY": "k"})
+        self.assertFalse(cfg.can_run)  # 표적 없으면 inert
 
     def test_duplicate_targets_ports_deduped(self):
         cfg = load_config({"TARGETS": "a,a,b", "PORTS": "80,80", "LLM_API_KEY": "k"})

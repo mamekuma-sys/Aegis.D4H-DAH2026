@@ -70,14 +70,43 @@ def insert_sql_comments(payload: str) -> str:
             .replace("select", "se/**/lect"))
 
 
+_EVASION_FNS = (url_encode_tokens, vary_keyword_case, insert_sql_comments, double_encode_tokens)
+
+
 def evasion_variants(payload: str) -> list:
     """동일 의도를 유지한 회피 변형들을 우선순위 순으로 반환한다."""
     variants = []
-    for fn in (url_encode_tokens, vary_keyword_case, insert_sql_comments, double_encode_tokens):
+    for fn in _EVASION_FNS:
         v = fn(payload)
         if v != payload and v not in variants:
             variants.append(v)
     return variants
+
+
+def evasion_arg_variants(args: dict) -> list:
+    """path·query·headers·body 전반에 회피 인코딩을 적용한 args 변형들을 반환한다.
+
+    상대 방어 필터는 경로뿐 아니라 쿼리·헤더·본문의 페이로드 시그니처로도 DROP하므로,
+    같은 exploit 의도를 유지한 채 의심 토큰을 인코딩한 요청 전체 형태를 우선순위 순으로 만든다.
+    """
+    path = args.get("path", "/") or "/"
+    body = args.get("body", "") or ""
+    headers = args.get("headers") or {}
+    out = []
+    seen = set()
+    for fn in _EVASION_FNS:
+        v_path = fn(path)
+        v_body = fn(body) if body else body
+        v_headers = {k: fn(str(v)) for k, v in headers.items()} if headers else {}
+        # 변형이 원본과 동일하면(인코딩 대상 토큰 없음) 건너뛴다.
+        if v_path == path and v_body == body and v_headers == headers:
+            continue
+        key = (v_path, v_body, tuple(sorted(v_headers.items())))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({**args, "path": v_path, "body": v_body, "headers": v_headers})
+    return out
 
 
 # ---- 실행 어댑터 ----

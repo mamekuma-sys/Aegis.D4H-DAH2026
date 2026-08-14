@@ -45,7 +45,8 @@ $env:LLM_BASE_URL="http://litellm.lig.internal:4000"; $env:LLM_API_KEY="<key>"
 $env:PYTHONPATH="src"; python -m aegis_attacker
 ```
 
-LLM 키나 표적이 없으면 inert(fail-open, 공격 없음)로 동작한다.
+표적·포트가 없을 때만 inert(무동작·주기적 재점검)로 동작한다. LLM 키가 없어도 표적이 있으면
+배너/recon/playbook/제출 결정론 경로는 계속 수행한다(공격 = 컨테이너 수명 1 Round).
 
 ## 스켈레톤 데모에서 실행 (end-to-end)
 

@@ -15,6 +15,9 @@ from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
 MAX_LLM_CALLS_PER_ROUND = 200
+# 컨테이너 수명(라운드) 토큰 상한. 동점 시 토큰 비용이 적은 팀이 이기므로(운영세칙 제22조)
+# 무제한 소모를 막는다. 0 이면 토큰 상한 미적용.
+MAX_LLM_TOKENS_PER_ROUND = 400_000
 LLM_TIMEOUT = 20.0
 
 # 실패가 쌓이면 더 센 모델로 승급한다(cheap-first). 동점 시 토큰 비용이 적은 팀이
@@ -67,19 +70,22 @@ class LLMAdvisor:
     """
 
     def __init__(self, egress, config, budget: RoundBudget, secret_store,
-                 llm_key_handle, max_calls: int = MAX_LLM_CALLS_PER_ROUND):
+                 llm_key_handle, max_calls: int = MAX_LLM_CALLS_PER_ROUND,
+                 max_tokens: int = MAX_LLM_TOKENS_PER_ROUND):
         self._egress = egress
         self._config = config
         self._budget = budget
         self._store = secret_store
         self._key_handle = llm_key_handle
         self._max_calls = max_calls
+        self._max_tokens = max_tokens
 
     def advise_exploit(self, banner: str, feedback: str, hints, model: str = None):
         if self._key_handle is None:
             return None
-        if not self._budget.try_reserve_llm(self._max_calls):
-            return None  # 예산 소진 → 결정론 경로로 (검사·예약 원자적, 병렬 초과 방지)
+        # 호출 슬롯을 원자적으로 예약(check→increment 한 락). 병렬에서 상한 초과를 막는다.
+        if not self._budget.try_reserve_call(self._max_calls, self._max_tokens):
+            return None  # 예산 소진 → 결정론 경로로
 
         # 현재 저장된 모든 비밀 원문을 프롬프트에서 제거(플러스 FLAG 정규식).
         redactor = Redactor(self._store.secrets_snapshot())
@@ -106,7 +112,7 @@ class LLMAdvisor:
             },
             body=payload, timeout=LLM_TIMEOUT,
         )
-        # 호출 수는 try_reserve_llm에서 이미 원자적으로 예약됨. 여기선 토큰만 가산.
+        # 호출 수는 try_reserve_call 에서 이미 원자적으로 증가함(TOCTOU 방지). 여기선 토큰만 가산.
         if resp.status != 200:
             return None
         try:

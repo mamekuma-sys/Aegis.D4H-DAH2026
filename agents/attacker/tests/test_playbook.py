@@ -12,13 +12,25 @@ class TestPlaybook(unittest.TestCase):
         self.assertEqual(got["method"], "GET")
         self.assertEqual(got["path"], "/fetch?url=x")
 
-    def test_sanitize_drops_non_shape(self):
-        # 비밀·부가 필드는 재사용 형태에 남기지 않는다(method·path만)
+    def test_sanitize_keeps_shape_redacts_secrets(self):
+        # method·path·headers·body 형태는 보존하되 Cookie/Authorization/flag 원문은 마스크한다.
         pb = Playbook()
-        pb.record("fp", {"method": "post", "path": "/x", "headers": {"Cookie": "sess=secret"}})
+        pb.record("fp", {
+            "method": "post", "path": "/login",
+            "headers": {"Cookie": "sess=secret", "Authorization": "Bearer abc",
+                        "X-Role": "admin"},
+            "body": "user=admin&flag=FLAG{leak}"})
         got = pb.lookup("fp")
-        self.assertEqual(set(got.keys()), {"method", "path"})
+        self.assertEqual(set(got.keys()), {"method", "path", "headers", "body"})
         self.assertEqual(got["method"], "POST")
+        # 자격증명 값은 마스크(세션은 표적별이라 교차 재사용 금지)
+        self.assertNotIn("secret", str(got["headers"]))
+        self.assertNotIn("Bearer abc", str(got["headers"]))
+        # 기법 힌트 헤더(X-Role: admin)는 형태로 보존
+        self.assertEqual(got["headers"]["X-Role"], "admin")
+        # body 의 flag 원문은 제거, 형태는 유지
+        self.assertNotIn("FLAG{leak}", got["body"])
+        self.assertIn("user=admin", got["body"])
 
     def test_first_write_wins(self):
         pb = Playbook()

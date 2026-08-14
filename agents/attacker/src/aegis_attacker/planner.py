@@ -13,9 +13,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .models import Endpoint, ExecutionPlan, Scenario, VulnClass
-from .profiles import suggest_vuln_classes
+from .profiles import suggest_from_profile, suggest_vuln_classes
 
 MAX_TURNS = 6
+# 같은 가설로 연속 무응답(필터 DROP·서비스 다운)이 이만큼 쌓이면 그 가설을 중단한다(§9.8).
+MAX_NO_RESPONSE_STREAK = 3
 
 # 취약 부류 → 예선 시나리오(보고용 느슨한 대응, 실행 판단 아님).
 _VULN_TO_SCENARIO = {
@@ -72,8 +74,17 @@ class Planner:
         self._max_turns = max_turns
 
     def plan_next(self, endpoint: Endpoint, banner: str, feedback: str,
-                  state: EndpointState, model: str = None) -> Optional[ExecutionPlan]:
+                  state: EndpointState, model: str = None,
+                  profile=None) -> Optional[ExecutionPlan]:
+        # 배너 키워드 힌트에 관측 프로파일(오류 시그니처·헤더) 우선순위를 합친다.
+        # 미상 서비스여도 LLM 을 건너뛰지 않는다 — [OTHER] 힌트로 범용 관측+LLM 을 돌린다.
         hints = suggest_vuln_classes(banner)
+        if profile is not None:
+            for h in suggest_from_profile(profile):
+                if h not in hints:
+                    hints.append(h)
+            if VulnClass.OTHER in hints and len(hints) > 1:
+                hints = [h for h in hints if h != VulnClass.OTHER]
         exploit = self._advisor.advise_exploit(banner=banner, feedback=feedback,
                                                hints=hints, model=model)
         if not exploit:
@@ -106,5 +117,11 @@ class Planner:
         )
 
     def should_stop(self, state: EndpointState) -> bool:
-        """턴 소진 시 중단. 진전 없는 반복을 계속하지 않는다(§9.8)."""
-        return state.turn >= self._max_turns
+        """턴 소진 또는 연속 무응답 누적 시 중단한다(§9.8).
+
+        같은 가설로 응답을 못 받는 상태가 MAX_NO_RESPONSE_STREAK 이상 이어지면 필터 DROP·
+        서비스 다운으로 보고 그 가설을 접는다(무의미한 요청 낭비 방지).
+        """
+        if state.turn >= self._max_turns:
+            return True
+        return state.no_response_streak >= MAX_NO_RESPONSE_STREAK

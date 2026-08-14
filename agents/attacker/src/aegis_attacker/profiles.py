@@ -77,3 +77,33 @@ def suggest_vuln_classes(banner: str) -> list:
         if any(kw in low for kw in keywords):
             hints.append(vuln)
     return hints or [VulnClass.OTHER]
+
+
+# 오류 시그니처 → 취약 부류 우선순위(확정 아님, 관측 근거).
+_SIGNATURE_TO_VULN = {
+    "sqlite": VulnClass.SQLI, "mysql": VulnClass.SQLI, "postgres": VulnClass.SQLI,
+    "syntax error": VulnClass.SQLI, "error near": VulnClass.SQLI,
+    "no such": VulnClass.LFI, "traceback": VulnClass.LFI, "stack trace": VulnClass.LFI,
+    "unauthorized": VulnClass.AUTH, "forbidden": VulnClass.AUTH,
+}
+
+
+def suggest_from_profile(profile) -> list:
+    """관측 프로파일(오류 시그니처·헤더 힌트)에서 취약 부류 우선순위를 도출한다.
+
+    classify/merge_observation 로 누적한 증거를 LLM 우선순위 힌트로 승격한다. 확정이 아니라
+    우선순위이며, 근거가 없으면 빈 목록(planner 가 배너 힌트로 회귀)."""
+    if profile is None:
+        return []
+    hints = []
+    for sig in getattr(profile, "error_signatures", []) or []:
+        vuln = _SIGNATURE_TO_VULN.get(sig)
+        if vuln and vuln not in hints:
+            hints.append(vuln)
+    header_keys = {k.lower() for k in (getattr(profile, "redacted_header_hints", {}) or {})}
+    if header_keys & {"set-cookie", "www-authenticate", "x-role", "x-user"}:
+        if VulnClass.AUTH not in hints:
+            hints.append(VulnClass.AUTH)
+    if "location" in header_keys and VulnClass.SSRF not in hints:
+        hints.append(VulnClass.SSRF)
+    return hints

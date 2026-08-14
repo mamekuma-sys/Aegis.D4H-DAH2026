@@ -1,5 +1,7 @@
 import unittest
 
+import threading
+
 from aegis_attacker.models import (
     Capability,
     Endpoint,
@@ -127,24 +129,44 @@ class TestProfile(unittest.TestCase):
         self.assertIsNone(p.finals_phase_hint)
 
 
-class TestHypothesis(unittest.TestCase):
-    def test_active_requires_evidence_and_no_stop(self):
-        h = ScenarioHypothesis(Scenario.S1)
-        self.assertFalse(h.active)  # 증거 없음
-        h.activation_evidence.append("Set-Cookie 관측")
-        self.assertTrue(h.active)
-        h.stop_reason = "예산 소진"
-        self.assertFalse(h.active)
-
-
 class TestRoundBudget(unittest.TestCase):
+    def test_try_reserve_respects_call_cap(self):
+        b = RoundBudget()
+        self.assertTrue(b.try_reserve_call(max_calls=2))
+        self.assertTrue(b.try_reserve_call(max_calls=2))
+        self.assertFalse(b.try_reserve_call(max_calls=2))  # 상한 도달
+        self.assertEqual(b.llm_calls, 2)
+
+    def test_try_reserve_respects_token_cap(self):
+        b = RoundBudget(llm_tokens=100)
+        self.assertFalse(b.try_reserve_call(max_calls=100, max_tokens=100))
+
+    def test_try_reserve_atomic_under_threads(self):
+        # TOCTOU 검증: 50 스레드가 동시에 예약해도 상한(10)을 넘지 않는다.
+        b = RoundBudget()
+        granted = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(50)
+
+        def worker():
+            barrier.wait()
+            if b.try_reserve_call(max_calls=10):
+                with lock:
+                    granted.append(1)
+
+        threads = [threading.Thread(target=worker) for _ in range(50)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(granted), 10)  # 정확히 상한만큼만 통과
+        self.assertEqual(b.llm_calls, 10)
+
     def test_try_reserve_llm_enforces_cap_atomically(self):
         b = RoundBudget()
-        # 상한까지는 예약 성공하며 호출 수를 증가시킨다
         self.assertTrue(b.try_reserve_llm(2))
         self.assertTrue(b.try_reserve_llm(2))
         self.assertEqual(b.llm_calls, 2)
-        # 상한 도달 후에는 실패하고 카운터를 더 올리지 않는다
         self.assertFalse(b.try_reserve_llm(2))
         self.assertEqual(b.llm_calls, 2)
 
@@ -159,8 +181,17 @@ class TestRoundBudget(unittest.TestCase):
             (b.request_count, b.submit_count, b.llm_calls, b.llm_tokens),
             (0, 0, 0, 0),
         )
-        # 리셋 후 다시 상한만큼 예약 가능(라운드별 격리)
         self.assertTrue(b.try_reserve_llm(1))
+
+
+class TestHypothesis(unittest.TestCase):
+    def test_active_requires_evidence_and_no_stop(self):
+        h = ScenarioHypothesis(Scenario.S1)
+        self.assertFalse(h.active)  # 증거 없음
+        h.activation_evidence.append("Set-Cookie 관측")
+        self.assertTrue(h.active)
+        h.stop_reason = "예산 소진"
+        self.assertFalse(h.active)
 
 
 if __name__ == "__main__":

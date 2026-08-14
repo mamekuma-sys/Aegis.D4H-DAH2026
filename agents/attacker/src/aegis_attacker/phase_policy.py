@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from .models import Endpoint
 
 # 본선 구조(운영세칙 제4·5조, 당일안내 §1): 4 FinalsPhase, Round 수 2·4·4·4, 총 14.
@@ -51,19 +53,25 @@ def allocate_budget(endpoints, total_budget: int) -> dict:
 
 
 class FairScheduler:
-    """표적별 예산을 지키며 라운드로빈으로 다음 표적을 고른다."""
+    """표적별 예산을 지키며 라운드로빈으로 다음 표적을 고르는 공유 작업 큐.
+
+    병렬 워커가 하나의 인스턴스를 공유하며 `next_and_charge()`로 원자적으로 다음
+    표적을 꺼낸다. 모든 표적을 큐에 한꺼번에 쏟지 않고 워커 수만큼만 in-flight로 두어
+    공정성과 전역 rate limit 준수를 함께 지킨다(§7.3·§9.9).
+    """
 
     def __init__(self, endpoints, per_target_budget: int, boost_extra: int = 3):
         self._order = list(endpoints)
         self._budget = {e: per_target_budget for e in self._order}
         self._idx = 0
         self._boost_extra = boost_extra
+        self._lock = threading.Lock()
 
     def remaining(self, endpoint: Endpoint) -> int:
-        return self._budget.get(endpoint, 0)
+        with self._lock:
+            return self._budget.get(endpoint, 0)
 
-    def next(self):
-        """예산이 남은 다음 표적을 라운드로빈으로 반환. 모두 소진이면 None."""
+    def _next_locked(self):
         n = len(self._order)
         for _ in range(n):
             e = self._order[self._idx % n]
@@ -72,21 +80,38 @@ class FairScheduler:
                 return e
         return None
 
+    def next(self):
+        """예산이 남은 다음 표적을 라운드로빈으로 반환. 모두 소진이면 None."""
+        with self._lock:
+            return self._next_locked()
+
+    def next_and_charge(self, n: int = 1):
+        """다음 표적을 고르고 예산을 원자적으로 차감한다(병렬 워커 공유 안전)."""
+        with self._lock:
+            e = self._next_locked()
+            if e is not None:
+                self._budget[e] = max(0, self._budget[e] - n)
+            return e
+
     def charge(self, endpoint: Endpoint, n: int = 1) -> None:
-        if endpoint in self._budget:
-            self._budget[endpoint] = max(0, self._budget[endpoint] - n)
+        with self._lock:
+            if endpoint in self._budget:
+                self._budget[endpoint] = max(0, self._budget[endpoint] - n)
 
     def boost(self, endpoint: Endpoint) -> None:
         """성공 가능성이 확인된 표적에 제한 안에서 예산을 더 준다."""
-        if endpoint in self._budget:
-            self._budget[endpoint] += self._boost_extra
+        with self._lock:
+            if endpoint in self._budget:
+                self._budget[endpoint] += self._boost_extra
 
     def all_exhausted(self) -> bool:
-        return all(v <= 0 for v in self._budget.values())
+        with self._lock:
+            return all(v <= 0 for v in self._budget.values())
 
     def add_endpoints(self, endpoints, per_target_budget: int) -> None:
         """새 레이어 개방 시 표적을 추가한다. 기존 표적 예산은 유지."""
-        for e in endpoints:
-            if e not in self._budget:
-                self._order.append(e)
-                self._budget[e] = per_target_budget
+        with self._lock:
+            for e in endpoints:
+                if e not in self._budget:
+                    self._order.append(e)
+                    self._budget[e] = per_target_budget
