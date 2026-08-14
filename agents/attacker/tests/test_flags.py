@@ -140,6 +140,17 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(pipe.process("nothing"), [])
         self.assertEqual(len(transport.calls), 0)
 
+    def test_error_allows_later_retry(self):
+        client, store, transport = make_client([
+            HttpResponse(0, ""),
+            HttpResponse(200, '{"status":"accepted"}'),
+        ])
+        pipe = FlagPipeline(client, store)
+
+        self.assertEqual(pipe.process("FLAG{retry}")[0][1], SubmitState.ERROR)
+        self.assertEqual(pipe.process("FLAG{retry}")[0][1], SubmitState.ACCEPTED)
+        self.assertEqual(len(transport.calls), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

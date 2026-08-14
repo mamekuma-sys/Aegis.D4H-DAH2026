@@ -1,4 +1,5 @@
 import json
+import threading
 import unittest
 from urllib.parse import urlsplit
 
@@ -232,6 +233,26 @@ class MultiPortArena:
         return HttpResponse(200, "no flag yet")
 
 
+class ConcurrentDuplicateArena(FakeArena):
+    """두 worker의 submit 진입을 barrier로 맞춰 중복 제출 경합을 재현한다."""
+
+    def __init__(self):
+        super().__init__("FLAG{shared}", "/unused", "irrelevant")
+        self._submit_barrier = threading.Barrier(2)
+        self._submit_lock = threading.Lock()
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        if not url.endswith("/submit"):
+            return super().request(method, url, headers, body, timeout)
+        with self._submit_lock:
+            self.submits.append(json.loads(body))
+        try:
+            self._submit_barrier.wait(timeout=1.0)
+        except threading.BrokenBarrierError:
+            pass  # dedup이 동작하면 실제 submit caller는 하나뿐이다.
+        return HttpResponse(200, json.dumps({"status": "accepted"}))
+
+
 class TestPlaybookReuse(unittest.TestCase):
     def test_second_target_solved_via_playbook_without_llm(self):
         arena = MultiPortArena("URL Fetcher — GET /fetch?url=<url>", "/fetch")
@@ -247,6 +268,17 @@ class TestPlaybookReuse(unittest.TestCase):
 
 
 class TestParallelAttack(unittest.TestCase):
+    def test_same_flag_from_concurrent_endpoints_submits_once_per_round(self):
+        arena = ConcurrentDuplicateArena()
+        cfg = make_cfg(ports=(8082, 8083), concurrency=2)
+        from aegis_attacker.rate_limit import RateLimiter
+        rt = AttackerRuntime(cfg, http=arena,
+                             rate=RateLimiter(request_burst=10000, submit_max=10000))
+
+        rt.run_once()
+
+        self.assertEqual(len(arena.submits), 1)
+
     def test_parallel_captures_all_targets(self):
         # concurrency>1: 여러 포트를 동시에 공격, 공유 상태(락)로 안전하게 집계
         arena = MultiPortArena("URL Fetcher — GET /fetch?url=<url>", "/fetch")

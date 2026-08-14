@@ -49,11 +49,27 @@ def extract_flags(text: str) -> list:
 
 
 class FlagStore:
-    """제출한 flag의 해시별 결과를 라운드 한정으로 보관한다(원문 없음)."""
+    """flag 결과와 제출 중 claim을 라운드 한정으로 보관한다(원문 없음)."""
 
     def __init__(self):
         self._states = {}  # fingerprint -> SubmitState
+        self._in_flight = set()
         self._lock = threading.Lock()
+
+    def try_claim(self, flag_hash: str) -> bool:
+        """미해결 fingerprint의 제출 권한을 한 worker에게만 원자적으로 부여한다."""
+        with self._lock:
+            state = self._states.get(flag_hash)
+            if flag_hash in self._in_flight or (
+                    state is not None and state != SubmitState.ERROR):
+                return False
+            self._in_flight.add(flag_hash)
+            return True
+
+    def release_claim(self, flag_hash: str) -> None:
+        """제출 예외 뒤 후속 발견이 다시 시도할 수 있도록 claim을 해제한다."""
+        with self._lock:
+            self._in_flight.discard(flag_hash)
 
     def is_resolved(self, flag_hash: str) -> bool:
         with self._lock:
@@ -67,6 +83,7 @@ class FlagStore:
     def record(self, flag_hash: str, state: SubmitState) -> None:
         with self._lock:
             self._states[flag_hash] = state
+            self._in_flight.discard(flag_hash)
 
     def accepted_count(self) -> int:
         with self._lock:
@@ -139,11 +156,17 @@ class FlagPipeline:
             if not is_valid_flag(flag):
                 continue
             fp = flag_fingerprint(flag)
-            if self.store.is_resolved(fp):
-                results.append((fp, self.store.state_of(fp)))  # 재제출 안 함
+            if not self.store.try_claim(fp):
+                state = self.store.state_of(fp)
+                if state is not None and state != SubmitState.ERROR:
+                    results.append((fp, state))  # 완료된 결과는 재제출 안 함
                 continue
             handle = self._secret_store.put(KIND_FLAG, flag)  # 원문은 저장소로
-            state = self._client.submit(handle)
+            try:
+                state = self._client.submit(handle)
+            except Exception:
+                self.store.release_claim(fp)
+                raise
             self.store.record(fp, state)
             results.append((fp, state))
         return results
