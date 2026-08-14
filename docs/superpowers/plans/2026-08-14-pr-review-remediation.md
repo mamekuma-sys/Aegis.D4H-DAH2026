@@ -574,7 +574,10 @@ while IFS= read -r rel; do
     *.md|*.ps1|*.py|*.yml|*.yaml|*.json|*.toml|*.txt|*.example) portable+=("$rel") ;;
   esac
 done < <(git ls-files)
-if (( ${#portable[@]} > 0 )) && rg -l '(?i)[A-Z]:\\Users\\[^\\\r\n]+\\|/Users/[^/[:space:]]+/|/home/[^/[:space:]]+/' "${portable[@]}"; then
+escaped_backslash='\\'
+escaped_slash='/'
+forbidden_home_pattern="(?i)[A-Z]:${escaped_backslash}Users${escaped_backslash}[^${escaped_backslash}\r\n]+${escaped_backslash}|${escaped_slash}Users${escaped_slash}[^${escaped_slash}[:space:]]+${escaped_slash}|${escaped_slash}home${escaped_slash}[^${escaped_slash}[:space:]]+${escaped_slash}"
+if (( ${#portable[@]} > 0 )) && rg -l "$forbidden_home_pattern" "${portable[@]}"; then
   exit 1
 fi
 print 'Repository layout check passed (macOS equivalent).'
