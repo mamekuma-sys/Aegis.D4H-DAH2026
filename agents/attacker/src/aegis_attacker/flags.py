@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import threading
+from dataclasses import dataclass
 
 from .models import Capability, SubmitState
 from .rate_limit import Backoff, parse_retry_after
@@ -26,6 +27,12 @@ _STATE_MAP = {
     "rejected": SubmitState.REJECTED,
     "closed": SubmitState.CLOSED,
 }
+
+
+@dataclass(frozen=True)
+class SubmitResult:
+    state: SubmitState
+    attempted: bool
 
 
 def flag_fingerprint(flag: str) -> str:
@@ -106,9 +113,9 @@ class SubmitClient:
         self._backoff = backoff or Backoff()
         self._round_deadline = round_deadline
 
-    def submit(self, flag_handle) -> SubmitState:
+    def submit(self, flag_handle) -> SubmitResult:
         if not self._url or self._token_handle is None:
-            return SubmitState.ERROR
+            return SubmitResult(SubmitState.ERROR, attempted=False)
         flag = self._store.resolve(flag_handle)          # 원문은 여기서만 해석
         token = self._store.resolve(self._token_handle)
         body = json.dumps({"flag": flag, "token": token})
@@ -122,12 +129,12 @@ class SubmitClient:
                 if wait is None:
                     wait = self._backoff.next_delay()  # header 없거나 무효
                 if self._clock() + wait > self._round_deadline:
-                    return SubmitState.ERROR  # 현 Round 재시도 안 함
+                    return SubmitResult(SubmitState.ERROR, attempted=True)  # 현 Round 재시도 안 함
                 self._sleep(wait)
                 continue
             self._backoff.reset()
-            return self._parse_state(resp)
-        return SubmitState.ERROR
+            return SubmitResult(self._parse_state(resp), attempted=True)
+        return SubmitResult(SubmitState.ERROR, attempted=True)
 
     @staticmethod
     def _parse_state(resp) -> SubmitState:
@@ -163,10 +170,10 @@ class FlagPipeline:
                 continue
             handle = self._secret_store.put(KIND_FLAG, flag)  # 원문은 저장소로
             try:
-                state = self._client.submit(handle)
+                result = self._client.submit(handle)
             except Exception:
                 self.store.release_claim(fp)
                 raise
-            self.store.record(fp, state)
-            results.append((fp, state, True))
+            self.store.record(fp, result.state)
+            results.append((fp, result.state, result.attempted))
         return results

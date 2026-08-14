@@ -81,6 +81,23 @@ def make_runtime(arena):
 
 
 class TestRuntimeEndToEnd(unittest.TestCase):
+    def test_missing_submit_config_does_not_increment_submit_report(self):
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8082,),
+            submit_url="", submit_token="",
+            llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
+            llm_model="gpt-4o-mini",
+        )
+        arena = FakeArena("FLAG{offline}", "/unused", "irrelevant")
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk,
+                             sleep=lambda dt: clk.advance(dt))
+
+        report = rt.run_once()
+
+        self.assertEqual(report.summary()["submit_states"], {})
+        self.assertEqual(arena.submits, [])
+
     def test_captures_and_submits_flag(self):
         # flag는 LLM exploit 경로(/fetch)에서만 — recon 경로로는 안 나오게 해 LLM 경로를 검증
         arena = FakeArena("URL Fetcher — GET /fetch?url=<url>", "/fetch?url=x", "FLAG{ssrf_win}",
