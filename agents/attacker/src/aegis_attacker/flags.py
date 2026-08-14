@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import threading
+from dataclasses import dataclass
 
 from .models import Capability, SubmitState
 from .rate_limit import Backoff, parse_retry_after
@@ -26,6 +27,12 @@ _STATE_MAP = {
     "rejected": SubmitState.REJECTED,
     "closed": SubmitState.CLOSED,
 }
+
+
+@dataclass(frozen=True)
+class SubmitResult:
+    state: SubmitState
+    attempted: bool
 
 
 def flag_fingerprint(flag: str) -> str:
@@ -49,11 +56,27 @@ def extract_flags(text: str) -> list:
 
 
 class FlagStore:
-    """제출한 flag의 해시별 결과를 라운드 한정으로 보관한다(원문 없음)."""
+    """flag 결과와 제출 중 claim을 라운드 한정으로 보관한다(원문 없음)."""
 
     def __init__(self):
         self._states = {}  # fingerprint -> SubmitState
+        self._in_flight = set()
         self._lock = threading.Lock()
+
+    def try_claim(self, flag_hash: str) -> bool:
+        """미해결 fingerprint의 제출 권한을 한 worker에게만 원자적으로 부여한다."""
+        with self._lock:
+            state = self._states.get(flag_hash)
+            if flag_hash in self._in_flight or (
+                    state is not None and state != SubmitState.ERROR):
+                return False
+            self._in_flight.add(flag_hash)
+            return True
+
+    def release_claim(self, flag_hash: str) -> None:
+        """제출 예외 뒤 후속 발견이 다시 시도할 수 있도록 claim을 해제한다."""
+        with self._lock:
+            self._in_flight.discard(flag_hash)
 
     def is_resolved(self, flag_hash: str) -> bool:
         with self._lock:
@@ -67,6 +90,7 @@ class FlagStore:
     def record(self, flag_hash: str, state: SubmitState) -> None:
         with self._lock:
             self._states[flag_hash] = state
+            self._in_flight.discard(flag_hash)
 
     def accepted_count(self) -> int:
         with self._lock:
@@ -89,9 +113,9 @@ class SubmitClient:
         self._backoff = backoff or Backoff()
         self._round_deadline = round_deadline
 
-    def submit(self, flag_handle) -> SubmitState:
+    def submit(self, flag_handle) -> SubmitResult:
         if not self._url or self._token_handle is None:
-            return SubmitState.ERROR
+            return SubmitResult(SubmitState.ERROR, attempted=False)
         flag = self._store.resolve(flag_handle)          # 원문은 여기서만 해석
         token = self._store.resolve(self._token_handle)
         body = json.dumps({"flag": flag, "token": token})
@@ -105,12 +129,12 @@ class SubmitClient:
                 if wait is None:
                     wait = self._backoff.next_delay()  # header 없거나 무효
                 if self._clock() + wait > self._round_deadline:
-                    return SubmitState.ERROR  # 현 Round 재시도 안 함
+                    return SubmitResult(SubmitState.ERROR, attempted=True)  # 현 Round 재시도 안 함
                 self._sleep(wait)
                 continue
             self._backoff.reset()
-            return self._parse_state(resp)
-        return SubmitState.ERROR
+            return SubmitResult(self._parse_state(resp), attempted=True)
+        return SubmitResult(SubmitState.ERROR, attempted=True)
 
     @staticmethod
     def _parse_state(resp) -> SubmitState:
@@ -133,17 +157,23 @@ class FlagPipeline:
         self.store = store or FlagStore()
 
     def process(self, text: str) -> list:
-        """응답 텍스트에서 flag를 처리하고 (fingerprint, SubmitState) 목록을 반환한다."""
+        """응답의 flag를 처리해 (fingerprint, state, submitted) 목록을 반환한다."""
         results = []
         for flag in extract_flags(text):
             if not is_valid_flag(flag):
                 continue
             fp = flag_fingerprint(flag)
-            if self.store.is_resolved(fp):
-                results.append((fp, self.store.state_of(fp)))  # 재제출 안 함
+            if not self.store.try_claim(fp):
+                state = self.store.state_of(fp)
+                if state is not None and state != SubmitState.ERROR:
+                    results.append((fp, state, False))  # 완료된 결과는 재제출 안 함
                 continue
             handle = self._secret_store.put(KIND_FLAG, flag)  # 원문은 저장소로
-            state = self._client.submit(handle)
-            self.store.record(fp, state)
-            results.append((fp, state))
+            try:
+                result = self._client.submit(handle)
+            except Exception:
+                self.store.release_claim(fp)
+                raise
+            self.store.record(fp, result.state)
+            results.append((fp, result.state, result.attempted))
         return results

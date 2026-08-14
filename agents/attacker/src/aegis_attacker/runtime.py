@@ -51,12 +51,15 @@ class AttackerRuntime:
         self._round_seq = 0
         # run_once에서 설정하는 Round 한정 컴포넌트
         self._round_id = ""
+        self._round_deadline = 0.0
         self._secret_store = None
         self._observer = None
         self._adapter = None
         self._pipeline = None
         self._planner = None
         self._report = None
+        self._playbook = None
+        self._round_active = False
 
     # ---- Round 컨텍스트 구성 ----
 
@@ -65,6 +68,7 @@ class AttackerRuntime:
         self._round_id = f"round-{self._round_seq}"
         self.budget.reset()  # 라운드별 예산 격리 — 누적 상한/보고 왜곡 방지
         now = self.clock()
+        self._round_deadline = now + ROUND_DURATION
         store = RoundSecretStore(self._round_id, clock=self.clock)
         submit_handle = (store.put(KIND_SUBMIT_TOKEN, self.config.submit_token)
                          if self.config.submit_token else None)
@@ -81,10 +85,28 @@ class AttackerRuntime:
         self._planner = Planner(advisor)
         submit_client = SubmitClient(
             egress, self.rate, self.config.submit_url, submit_handle, store,
-            clock=self.clock, sleep=self.sleep, round_deadline=now + ROUND_DURATION)
+            clock=self.clock, sleep=self.sleep, round_deadline=self._round_deadline)
         self._pipeline = FlagPipeline(submit_client, store)
         self._report = RoundReport(budget=self.budget)
         self._playbook = Playbook()  # Round 한정 교차 재사용(비밀 없음)
+
+    def start_round(self) -> RoundReport:
+        """공식 Round를 연다. 이미 열려 있으면 같은 Round를 유지한다."""
+        if not self._round_active:
+            self._build_round()
+            self._round_active = True
+        return self._report
+
+    def _finish_round(self) -> None:
+        """Round 비밀을 폐기한다. 반복 호출해도 안전하다."""
+        if not self._round_active:
+            return
+        self._secret_store.expire_all()
+        self._round_active = False
+
+    def finish_round(self) -> None:
+        """공식 Round를 종료하고 비밀 원문을 폐기한다."""
+        self._finish_round()
 
     def _bind_plan(self, plan: ExecutionPlan, endpoint, evidence_ref) -> ExecutionPlan:
         now = self.clock()
@@ -103,8 +125,9 @@ class AttackerRuntime:
 
     def _process_flags(self, body: str) -> bool:
         captured = False
-        for fp, state in self._pipeline.process(body):
-            self._report.record_submit(fp, state)
+        for fp, state, submitted in self._pipeline.process(body):
+            if submitted:
+                self._report.record_submit(fp, state)
             if state == SubmitState.ACCEPTED:
                 captured = True
         return captured
@@ -273,34 +296,42 @@ class AttackerRuntime:
         except Exception as exc:  # 표적 단위 격리
             self.audit.log("error", target=endpoint.key(), error=type(exc).__name__)
 
-    def run_once(self) -> RoundReport:
-        """엔드포인트 전체를 공격한다(병렬, 전역 rate limit 공유). Round 종료 시 비밀 폐기.
+    def run_cycle(self) -> RoundReport:
+        """열린 Round에서 엔드포인트 전체를 한 번 공격한다(병렬, 전역 rate limit 공유).
 
         concurrency<=1 이거나 표적이 1개면 결정론적 순차 경로를 쓴다.
         """
-        self._build_round()
-        try:
-            endpoints = self.config.endpoints()
-            workers = min(self.config.concurrency, max(1, len(endpoints)))
-            if workers <= 1:
-                # 순차(결정론) — 공정 스케줄러로 순회
-                sched = FairScheduler(endpoints, per_target_budget=PER_TARGET_BUDGET)
-                while True:
-                    endpoint = sched.next()
-                    if endpoint is None:
-                        break
-                    sched.charge(endpoint)
-                    self._attack_isolated(endpoint)
-            else:
-                # 병렬 — 표적별 스레드가 전역 rate limit·공유 상태(락)를 공유
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    for fut in [pool.submit(self._attack_isolated, e) for e in endpoints]:
-                        fut.result()
-            return self._report
-        finally:
-            self._secret_store.expire_all()  # Round 종료 시 원문 폐기
+        if not self._round_active:
+            raise RuntimeError("start_round() must be called before run_cycle()")
+        endpoints = self.config.endpoints()
+        workers = min(self.config.concurrency, max(1, len(endpoints)))
+        if workers <= 1:
+            # 순차(결정론) — 공정 스케줄러로 순회
+            sched = FairScheduler(endpoints, per_target_budget=PER_TARGET_BUDGET)
+            while True:
+                endpoint = sched.next()
+                if endpoint is None:
+                    break
+                sched.charge(endpoint)
+                self._attack_isolated(endpoint)
+        else:
+            # 병렬 — 표적별 스레드가 전역 rate limit·공유 상태(락)를 공유
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for fut in [pool.submit(self._attack_isolated, e) for e in endpoints]:
+                    fut.result()
+        return self._report
 
-    def run_forever(self) -> None:
+    def run_once(self) -> RoundReport:
+        """독립된 한 Round를 열고 한 번의 scan cycle을 실행한다."""
+        if self._round_active:
+            raise RuntimeError("run_once() cannot run during an active Round")
+        self.start_round()
+        try:
+            return self.run_cycle()
+        finally:
+            self.finish_round()
+
+    def run_forever(self, max_cycles=None) -> None:
         self.audit.log("startup", targets=len(self.config.targets),
                        ports=len(self.config.ports), can_attack=self.config.can_attack,
                        can_submit=self.config.can_submit, model=self.config.llm_model)
@@ -309,7 +340,17 @@ class AttackerRuntime:
             return
         if not self.config.can_submit:
             self.audit.log("warn", reason="제출 설정 없음 — flag 획득해도 제출 불가")
-        while True:
-            report = self.run_once()
-            self.audit.log("round-summary", **report.summary())
-            self.sleep(LOOP_SLEEP)
+        self.start_round()
+        try:
+            cycles = 0
+            while ((max_cycles is None or cycles < max_cycles)
+                   and self.clock() < self._round_deadline):
+                report = self.run_cycle()
+                self.audit.log("round-summary", **report.summary())
+                cycles += 1
+                cycles_remaining = max_cycles is None or cycles < max_cycles
+                remaining = self._round_deadline - self.clock()
+                if cycles_remaining and remaining > 0:
+                    self.sleep(min(LOOP_SLEEP, remaining))
+        finally:
+            self.finish_round()

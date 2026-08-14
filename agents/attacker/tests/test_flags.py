@@ -81,10 +81,25 @@ class TestStore(unittest.TestCase):
 
 
 class TestSubmitClient(unittest.TestCase):
+    def test_missing_submit_config_is_not_a_transport_attempt(self):
+        clk = FakeClock()
+        rate = RateLimiter(clock=clk, sleep=lambda dt: clk.advance(dt))
+        transport = ScriptedTransport([HttpResponse(200, '{"status":"accepted"}')])
+        gateway = EgressGateway(transport, ALLOW)
+        store = RoundSecretStore("r1", clock=clk)
+        flag_handle = store.put(KIND_FLAG, "FLAG{x}")
+        result = SubmitClient(gateway, rate, "", None, store, clock=clk).submit(flag_handle)
+
+        self.assertEqual(getattr(result, "state", result), SubmitState.ERROR)
+        self.assertFalse(getattr(result, "attempted", True))
+        self.assertEqual(transport.calls, [])
+
     def test_accepted_via_handle(self):
         client, store, transport = make_client([HttpResponse(200, '{"status":"accepted"}')])
         fh = store.put(KIND_FLAG, "FLAG{x}")
-        self.assertEqual(client.submit(fh), SubmitState.ACCEPTED)
+        result = client.submit(fh)
+        self.assertEqual(result.state, SubmitState.ACCEPTED)
+        self.assertTrue(result.attempted)
         # 제출 본문에 원문 flag·token이 실려 전송됨(제출 클라이언트만 원문 소비)
         self.assertIn("FLAG{x}", transport.calls[0])
         self.assertIn("tok-team1", transport.calls[0])
@@ -96,7 +111,9 @@ class TestSubmitClient(unittest.TestCase):
                                ("closed", SubmitState.CLOSED)]:
             client, store, _ = make_client([HttpResponse(200, '{"status":"%s"}' % status)])
             fh = store.put(KIND_FLAG, "FLAG{x}")
-            self.assertEqual(client.submit(fh), expect)
+            result = client.submit(fh)
+            self.assertEqual(result.state, expect)
+            self.assertTrue(result.attempted)
 
     def test_429_retry_after_honored(self):
         client, store, transport = make_client([
@@ -104,14 +121,18 @@ class TestSubmitClient(unittest.TestCase):
             HttpResponse(200, '{"status":"accepted"}'),
         ])
         fh = store.put(KIND_FLAG, "FLAG{x}")
-        self.assertEqual(client.submit(fh), SubmitState.ACCEPTED)
+        result = client.submit(fh)
+        self.assertEqual(result.state, SubmitState.ACCEPTED)
+        self.assertTrue(result.attempted)
         self.assertEqual(len(transport.calls), 2)
 
     def test_429_beyond_round_deadline_no_retry(self):
         client, store, transport = make_client(
             [HttpResponse(429, "rate", {"Retry-After": "50"})], round_deadline=1.0)
         fh = store.put(KIND_FLAG, "FLAG{x}")
-        self.assertEqual(client.submit(fh), SubmitState.ERROR)  # 현 Round 재시도 안 함
+        result = client.submit(fh)
+        self.assertEqual(result.state, SubmitState.ERROR)  # 현 Round 재시도 안 함
+        self.assertTrue(result.attempted)
         self.assertEqual(len(transport.calls), 1)
 
     def test_429_no_header_uses_backoff(self):
@@ -120,10 +141,25 @@ class TestSubmitClient(unittest.TestCase):
             HttpResponse(200, '{"status":"accepted"}'),
         ])
         fh = store.put(KIND_FLAG, "FLAG{x}")
-        self.assertEqual(client.submit(fh), SubmitState.ACCEPTED)
+        result = client.submit(fh)
+        self.assertEqual(result.state, SubmitState.ACCEPTED)
+        self.assertTrue(result.attempted)
 
 
 class TestPipeline(unittest.TestCase):
+    def test_missing_submit_config_returns_unattempted_error(self):
+        clk = FakeClock()
+        rate = RateLimiter(clock=clk, sleep=lambda dt: clk.advance(dt))
+        transport = ScriptedTransport([HttpResponse(200, '{"status":"accepted"}')])
+        gateway = EgressGateway(transport, ALLOW)
+        store = RoundSecretStore("r1", clock=clk)
+        client = SubmitClient(gateway, rate, "", None, store, clock=clk)
+
+        result = FlagPipeline(client, store).process("FLAG{offline}")
+
+        self.assertEqual(result[0][1:], (SubmitState.ERROR, False))
+        self.assertEqual(transport.calls, [])
+
     def test_submits_once_per_flag(self):
         client, store, transport = make_client([HttpResponse(200, '{"status":"accepted"}')])
         pipe = FlagPipeline(client, store)
@@ -139,6 +175,17 @@ class TestPipeline(unittest.TestCase):
         pipe = FlagPipeline(client, store)
         self.assertEqual(pipe.process("nothing"), [])
         self.assertEqual(len(transport.calls), 0)
+
+    def test_error_allows_later_retry(self):
+        client, store, transport = make_client([
+            HttpResponse(0, ""),
+            HttpResponse(200, '{"status":"accepted"}'),
+        ])
+        pipe = FlagPipeline(client, store)
+
+        self.assertEqual(pipe.process("FLAG{retry}")[0][1], SubmitState.ERROR)
+        self.assertEqual(pipe.process("FLAG{retry}")[0][1], SubmitState.ACCEPTED)
+        self.assertEqual(len(transport.calls), 2)
 
 
 if __name__ == "__main__":

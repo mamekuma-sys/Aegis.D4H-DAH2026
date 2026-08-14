@@ -1,5 +1,7 @@
 import json
+import threading
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from aegis_attacker.config import AttackerConfig
@@ -80,6 +82,23 @@ def make_runtime(arena):
 
 
 class TestRuntimeEndToEnd(unittest.TestCase):
+    def test_missing_submit_config_does_not_increment_submit_report(self):
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8082,),
+            submit_url="", submit_token="",
+            llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
+            llm_model="gpt-4o-mini",
+        )
+        arena = FakeArena("FLAG{offline}", "/unused", "irrelevant")
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk,
+                             sleep=lambda dt: clk.advance(dt))
+
+        report = rt.run_once()
+
+        self.assertEqual(report.summary()["submit_states"], {})
+        self.assertEqual(arena.submits, [])
+
     def test_captures_and_submits_flag(self):
         # flag는 LLM exploit 경로(/fetch)에서만 — recon 경로로는 안 나오게 해 LLM 경로를 검증
         arena = FakeArena("URL Fetcher — GET /fetch?url=<url>", "/fetch?url=x", "FLAG{ssrf_win}",
@@ -140,6 +159,65 @@ class TestRuntimeEndToEnd(unittest.TestCase):
 
 
 class TestRuntimeResilience(unittest.TestCase):
+    def test_run_forever_stops_at_round_deadline_and_wipes_secrets(self):
+        class CycleOnlyRuntime(AttackerRuntime):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.cycles = 0
+
+            def run_cycle(self):
+                if not self._round_active:
+                    raise RuntimeError("inactive Round")
+                self.cycles += 1
+                return self._report
+
+        clk = FakeClock()
+        sleeps = []
+
+        def sleep(dt):
+            sleeps.append(dt)
+            clk.advance(dt)
+
+        with patch("aegis_attacker.runtime.ROUND_DURATION", 5.0):
+            rt = CycleOnlyRuntime(make_cfg(), http=FakeArena("b", "/x", "FLAG{x}"),
+                                  clock=clk, sleep=sleep)
+            rt.run_forever(max_cycles=3)
+
+        self.assertEqual(rt.cycles, 2)
+        self.assertEqual(sleeps, [4.0, 1.0])
+        self.assertEqual(clk.t, 5.0)
+        self.assertEqual(rt._secret_store.secrets_snapshot(), set())
+
+    def test_run_forever_reuses_flag_store_across_scan_cycles(self):
+        arena = FakeArena("FLAG{same_round}", "/x", "irrelevant")
+        rt = make_runtime(arena)
+        rt.run_forever(max_cycles=2)
+        self.assertEqual(len(arena.submits), 1)
+        self.assertEqual(rt._report.summary()["submit_states"]["accepted"], 1)
+
+    def test_separate_run_once_calls_are_separate_rounds(self):
+        arena = FakeArena("FLAG{new_round}", "/x", "irrelevant")
+        rt = make_runtime(arena)
+        rt.run_once()
+        rt.run_once()
+        self.assertEqual(len(arena.submits), 2)
+
+    def test_run_once_rejects_an_active_caller_owned_round(self):
+        arena = FakeArena("FLAG{caller_round}", "/x", "irrelevant")
+        rt = make_runtime(arena)
+        rt.start_round()
+        rt.run_cycle()
+        self.assertEqual(len(arena.submits), 1)
+
+        with self.assertRaisesRegex(RuntimeError, "active Round"):
+            rt.run_once()
+
+        rt.run_cycle()
+        self.assertEqual(len(arena.submits), 1)
+        self.assertNotEqual(rt._secret_store.secrets_snapshot(), set())
+        rt.finish_round()
+        self.assertEqual(rt._secret_store.secrets_snapshot(), set())
+
     def test_llm_down_does_not_stop_observation_or_submit(self):
         # LLM 장애(500)여도 관측·범위검사·제출 결정론 경로는 계속. 배너 flag는 잡힌다.
         arena = FakeArena("welcome FLAG{banner} here", "/x", "irrelevant", llm_status=500)
@@ -203,6 +281,26 @@ class MultiPortArena:
         return HttpResponse(200, "no flag yet")
 
 
+class ConcurrentDuplicateArena(FakeArena):
+    """두 worker의 submit 진입을 barrier로 맞춰 중복 제출 경합을 재현한다."""
+
+    def __init__(self):
+        super().__init__("FLAG{shared}", "/unused", "irrelevant")
+        self._submit_barrier = threading.Barrier(2)
+        self._submit_lock = threading.Lock()
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        if not url.endswith("/submit"):
+            return super().request(method, url, headers, body, timeout)
+        with self._submit_lock:
+            self.submits.append(json.loads(body))
+        try:
+            self._submit_barrier.wait(timeout=1.0)
+        except threading.BrokenBarrierError:
+            pass  # dedup이 동작하면 실제 submit caller는 하나뿐이다.
+        return HttpResponse(200, json.dumps({"status": "accepted"}))
+
+
 class TestPlaybookReuse(unittest.TestCase):
     def test_second_target_solved_via_playbook_without_llm(self):
         arena = MultiPortArena("URL Fetcher — GET /fetch?url=<url>", "/fetch")
@@ -218,6 +316,17 @@ class TestPlaybookReuse(unittest.TestCase):
 
 
 class TestParallelAttack(unittest.TestCase):
+    def test_same_flag_from_concurrent_endpoints_submits_once_per_round(self):
+        arena = ConcurrentDuplicateArena()
+        cfg = make_cfg(ports=(8082, 8083), concurrency=2)
+        from aegis_attacker.rate_limit import RateLimiter
+        rt = AttackerRuntime(cfg, http=arena,
+                             rate=RateLimiter(request_burst=10000, submit_max=10000))
+
+        rt.run_once()
+
+        self.assertEqual(len(arena.submits), 1)
+
     def test_parallel_captures_all_targets(self):
         # concurrency>1: 여러 포트를 동시에 공격, 공유 상태(락)로 안전하게 집계
         arena = MultiPortArena("URL Fetcher — GET /fetch?url=<url>", "/fetch")
