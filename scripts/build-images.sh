@@ -20,6 +20,22 @@ worktree_state="$("$git_bin" -C "$repo_root" status --porcelain)"
 
 command -v "$docker_bin" >/dev/null 2>&1 || fail 'docker executable not found'
 
+tar_bin="${TAR_BIN:-tar}"
+command -v "$tar_bin" >/dev/null 2>&1 || fail 'tar executable not found'
+
+staging_root="$(mktemp -d "${TMPDIR:-/tmp}/aegis-image-context.XXXXXX")" \
+    || fail 'temporary build context creation failed'
+cleanup() {
+    rm -rf -- "$staging_root"
+}
+trap cleanup EXIT
+
+if ! "$git_bin" -C "$repo_root" archive --format=tar "$revision" \
+        agents/attacker agents/defender \
+        | "$tar_bin" -xf - -C "$staging_root"; then
+    fail 'git archive extraction failed'
+fi
+
 short_revision="${revision:0:12}"
 attacker_image="aegis/attacker:verify-$short_revision"
 defender_image="aegis/defender:verify-$short_revision"
@@ -88,8 +104,8 @@ verify_image() {
     printf 'Verified %s revision=%s platform=%s\n' "$image" "$actual_revision" "$actual_platform"
 }
 
-build_image "$attacker_image" "$repo_root/agents/attacker"
-build_image "$defender_image" "$repo_root/agents/defender"
+build_image "$attacker_image" "$staging_root/agents/attacker"
+build_image "$defender_image" "$staging_root/agents/defender"
 
 verify_image "$attacker_image" '["python","-u","-m","aegis_attacker"]' ''
 verify_image "$defender_image" '["python","-u","-m","aegis_defender"]' '65534'

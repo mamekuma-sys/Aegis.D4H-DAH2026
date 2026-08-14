@@ -4,9 +4,16 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 build_script="$repo_root/scripts/build-images.sh"
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/aegis-build-images.XXXXXX")"
-trap 'rm -rf -- "$fixture_dir"' EXIT
+real_git="$(command -v git)"
+revision="$($real_git -C "$repo_root" rev-parse HEAD)"
+ignored_marker="$repo_root/agents/attacker/src/aegis_attacker/review-secret.log"
 
-revision="0123456789abcdef0123456789abcdef01234567"
+cleanup() {
+    rm -rf -- "$fixture_dir"
+    rm -f -- "$ignored_marker"
+}
+trap cleanup EXIT
+
 short_revision="${revision:0:12}"
 docker_log="$fixture_dir/docker.log"
 
@@ -24,6 +31,11 @@ elif [[ "$*" == *"status --porcelain"* ]]; then
     if [[ "${FAKE_GIT_DIRTY:-0}" == "1" ]]; then
         printf '%s\n' ' M agents/attacker/Dockerfile'
     fi
+elif [[ "$*" == *" archive --format=tar "* ]]; then
+    if [[ "${FAKE_ARCHIVE_FAIL:-0}" == "1" ]]; then
+        exit 7
+    fi
+    exec "$REAL_GIT_BIN" "$@"
 else
     printf 'unexpected git arguments: %s\n' "$*" >&2
     exit 2
@@ -36,6 +48,18 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
 
 if [[ "$1" == "buildx" && "$2" == "build" ]]; then
+    context="${!#}"
+    case "$context" in
+        "$REAL_REPO_ROOT"/agents/attacker|"$REAL_REPO_ROOT"/agents/defender)
+            printf '%s\n' 'live worktree used as build context' >&2
+            exit 8
+            ;;
+    esac
+    if [[ "$context" == */agents/attacker && \
+          -e "$context/src/aegis_attacker/review-secret.log" ]]; then
+        printf '%s\n' 'ignored marker entered build context' >&2
+        exit 9
+    fi
     exit 0
 fi
 
@@ -84,12 +108,15 @@ run_build() {
     env \
         GIT_BIN="$fixture_dir/git" \
         DOCKER_BIN="$fixture_dir/docker" \
+        REAL_GIT_BIN="$real_git" \
+        REAL_REPO_ROOT="$repo_root" \
         FAKE_GIT_REVISION="$revision" \
         FAKE_DOCKER_LOG="$docker_log" \
         "$@" \
         bash "$build_script"
 }
 
+printf '%s\n' 'must-not-enter-image' >"$ignored_marker"
 : >"$docker_log"
 run_build >"$fixture_dir/stdout" 2>"$fixture_dir/stderr" \
     || fail 'matching revision build should pass'
@@ -126,5 +153,13 @@ grep -F -- 'revision mismatch' "$fixture_dir/stderr" >/dev/null \
 if run_build FAKE_ENV_INSPECT_FAIL=1 >"$fixture_dir/stdout" 2>"$fixture_dir/stderr"; then
     fail 'environment inspect failure must fail verification'
 fi
+
+: >"$docker_log"
+if run_build FAKE_ARCHIVE_FAIL=1 >"$fixture_dir/stdout" 2>"$fixture_dir/stderr"; then
+    fail 'archive failure must stop the build'
+fi
+[[ ! -s "$docker_log" ]] || fail 'archive failure invoked docker'
+grep -F -- 'git archive extraction failed' "$fixture_dir/stderr" >/dev/null \
+    || fail 'archive failure reason is missing'
 
 printf '%s\n' 'test-build-images.sh passed'
