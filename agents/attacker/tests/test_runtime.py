@@ -1,6 +1,7 @@
 import json
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from aegis_attacker.config import AttackerConfig
@@ -158,6 +159,35 @@ class TestRuntimeEndToEnd(unittest.TestCase):
 
 
 class TestRuntimeResilience(unittest.TestCase):
+    def test_run_forever_stops_at_round_deadline_and_wipes_secrets(self):
+        class CycleOnlyRuntime(AttackerRuntime):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.cycles = 0
+
+            def run_cycle(self):
+                if not self._round_active:
+                    raise RuntimeError("inactive Round")
+                self.cycles += 1
+                return self._report
+
+        clk = FakeClock()
+        sleeps = []
+
+        def sleep(dt):
+            sleeps.append(dt)
+            clk.advance(dt)
+
+        with patch("aegis_attacker.runtime.ROUND_DURATION", 5.0):
+            rt = CycleOnlyRuntime(make_cfg(), http=FakeArena("b", "/x", "FLAG{x}"),
+                                  clock=clk, sleep=sleep)
+            rt.run_forever(max_cycles=3)
+
+        self.assertEqual(rt.cycles, 2)
+        self.assertEqual(sleeps, [4.0, 1.0])
+        self.assertEqual(clk.t, 5.0)
+        self.assertEqual(rt._secret_store.secrets_snapshot(), set())
+
     def test_run_forever_reuses_flag_store_across_scan_cycles(self):
         arena = FakeArena("FLAG{same_round}", "/x", "irrelevant")
         rt = make_runtime(arena)

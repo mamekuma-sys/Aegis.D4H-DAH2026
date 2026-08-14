@@ -51,6 +51,7 @@ class AttackerRuntime:
         self._round_seq = 0
         # run_once에서 설정하는 Round 한정 컴포넌트
         self._round_id = ""
+        self._round_deadline = 0.0
         self._secret_store = None
         self._observer = None
         self._adapter = None
@@ -67,6 +68,7 @@ class AttackerRuntime:
         self._round_id = f"round-{self._round_seq}"
         self.budget.reset()  # 라운드별 예산 격리 — 누적 상한/보고 왜곡 방지
         now = self.clock()
+        self._round_deadline = now + ROUND_DURATION
         store = RoundSecretStore(self._round_id, clock=self.clock)
         submit_handle = (store.put(KIND_SUBMIT_TOKEN, self.config.submit_token)
                          if self.config.submit_token else None)
@@ -83,7 +85,7 @@ class AttackerRuntime:
         self._planner = Planner(advisor)
         submit_client = SubmitClient(
             egress, self.rate, self.config.submit_url, submit_handle, store,
-            clock=self.clock, sleep=self.sleep, round_deadline=now + ROUND_DURATION)
+            clock=self.clock, sleep=self.sleep, round_deadline=self._round_deadline)
         self._pipeline = FlagPipeline(submit_client, store)
         self._report = RoundReport(budget=self.budget)
         self._playbook = Playbook()  # Round 한정 교차 재사용(비밀 없음)
@@ -341,11 +343,14 @@ class AttackerRuntime:
         self.start_round()
         try:
             cycles = 0
-            while max_cycles is None or cycles < max_cycles:
+            while ((max_cycles is None or cycles < max_cycles)
+                   and self.clock() < self._round_deadline):
                 report = self.run_cycle()
                 self.audit.log("round-summary", **report.summary())
                 cycles += 1
-                if max_cycles is None or cycles < max_cycles:
-                    self.sleep(LOOP_SLEEP)
+                cycles_remaining = max_cycles is None or cycles < max_cycles
+                remaining = self._round_deadline - self.clock()
+                if cycles_remaining and remaining > 0:
+                    self.sleep(min(LOOP_SLEEP, remaining))
         finally:
             self.finish_round()
