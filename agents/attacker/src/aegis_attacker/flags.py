@@ -150,7 +150,7 @@ class FlagPipeline:
         self.store = store or FlagStore()
 
     def process(self, text: str) -> list:
-        """응답 텍스트에서 flag를 처리하고 (fingerprint, SubmitState) 목록을 반환한다."""
+        """응답의 flag를 처리해 (fingerprint, state, submitted) 목록을 반환한다."""
         results = []
         for flag in extract_flags(text):
             if not is_valid_flag(flag):
@@ -159,7 +159,7 @@ class FlagPipeline:
             if not self.store.try_claim(fp):
                 state = self.store.state_of(fp)
                 if state is not None and state != SubmitState.ERROR:
-                    results.append((fp, state))  # 완료된 결과는 재제출 안 함
+                    results.append((fp, state, False))  # 완료된 결과는 재제출 안 함
                 continue
             handle = self._secret_store.put(KIND_FLAG, flag)  # 원문은 저장소로
             try:
@@ -168,5 +168,5 @@ class FlagPipeline:
                 self.store.release_claim(fp)
                 raise
             self.store.record(fp, state)
-            results.append((fp, state))
+            results.append((fp, state, True))
         return results

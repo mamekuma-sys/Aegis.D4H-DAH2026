@@ -123,8 +123,9 @@ class AttackerRuntime:
 
     def _process_flags(self, body: str) -> bool:
         captured = False
-        for fp, state in self._pipeline.process(body):
-            self._report.record_submit(fp, state)
+        for fp, state, submitted in self._pipeline.process(body):
+            if submitted:
+                self._report.record_submit(fp, state)
             if state == SubmitState.ACCEPTED:
                 captured = True
         return captured

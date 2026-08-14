@@ -146,6 +146,7 @@ class TestRuntimeResilience(unittest.TestCase):
         rt = make_runtime(arena)
         rt.run_forever(max_cycles=2)
         self.assertEqual(len(arena.submits), 1)
+        self.assertEqual(rt._report.summary()["submit_states"]["accepted"], 1)
 
     def test_separate_run_once_calls_are_separate_rounds(self):
         arena = FakeArena("FLAG{new_round}", "/x", "irrelevant")
