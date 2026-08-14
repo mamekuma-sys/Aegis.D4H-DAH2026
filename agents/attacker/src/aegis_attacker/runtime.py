@@ -57,6 +57,8 @@ class AttackerRuntime:
         self._pipeline = None
         self._planner = None
         self._report = None
+        self._playbook = None
+        self._round_active = False
 
     # ---- Round 컨텍스트 구성 ----
 
@@ -85,6 +87,24 @@ class AttackerRuntime:
         self._pipeline = FlagPipeline(submit_client, store)
         self._report = RoundReport(budget=self.budget)
         self._playbook = Playbook()  # Round 한정 교차 재사용(비밀 없음)
+
+    def start_round(self) -> RoundReport:
+        """공식 Round를 연다. 이미 열려 있으면 같은 Round를 유지한다."""
+        if not self._round_active:
+            self._build_round()
+            self._round_active = True
+        return self._report
+
+    def _finish_round(self) -> None:
+        """Round 비밀을 폐기한다. 반복 호출해도 안전하다."""
+        if not self._round_active:
+            return
+        self._secret_store.expire_all()
+        self._round_active = False
+
+    def finish_round(self) -> None:
+        """공식 Round를 종료하고 비밀 원문을 폐기한다."""
+        self._finish_round()
 
     def _bind_plan(self, plan: ExecutionPlan, endpoint, evidence_ref) -> ExecutionPlan:
         now = self.clock()
@@ -273,34 +293,40 @@ class AttackerRuntime:
         except Exception as exc:  # 표적 단위 격리
             self.audit.log("error", target=endpoint.key(), error=type(exc).__name__)
 
-    def run_once(self) -> RoundReport:
-        """엔드포인트 전체를 공격한다(병렬, 전역 rate limit 공유). Round 종료 시 비밀 폐기.
+    def run_cycle(self) -> RoundReport:
+        """열린 Round에서 엔드포인트 전체를 한 번 공격한다(병렬, 전역 rate limit 공유).
 
         concurrency<=1 이거나 표적이 1개면 결정론적 순차 경로를 쓴다.
         """
-        self._build_round()
-        try:
-            endpoints = self.config.endpoints()
-            workers = min(self.config.concurrency, max(1, len(endpoints)))
-            if workers <= 1:
-                # 순차(결정론) — 공정 스케줄러로 순회
-                sched = FairScheduler(endpoints, per_target_budget=PER_TARGET_BUDGET)
-                while True:
-                    endpoint = sched.next()
-                    if endpoint is None:
-                        break
-                    sched.charge(endpoint)
-                    self._attack_isolated(endpoint)
-            else:
-                # 병렬 — 표적별 스레드가 전역 rate limit·공유 상태(락)를 공유
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    for fut in [pool.submit(self._attack_isolated, e) for e in endpoints]:
-                        fut.result()
-            return self._report
-        finally:
-            self._secret_store.expire_all()  # Round 종료 시 원문 폐기
+        if not self._round_active:
+            raise RuntimeError("start_round() must be called before run_cycle()")
+        endpoints = self.config.endpoints()
+        workers = min(self.config.concurrency, max(1, len(endpoints)))
+        if workers <= 1:
+            # 순차(결정론) — 공정 스케줄러로 순회
+            sched = FairScheduler(endpoints, per_target_budget=PER_TARGET_BUDGET)
+            while True:
+                endpoint = sched.next()
+                if endpoint is None:
+                    break
+                sched.charge(endpoint)
+                self._attack_isolated(endpoint)
+        else:
+            # 병렬 — 표적별 스레드가 전역 rate limit·공유 상태(락)를 공유
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for fut in [pool.submit(self._attack_isolated, e) for e in endpoints]:
+                    fut.result()
+        return self._report
 
-    def run_forever(self) -> None:
+    def run_once(self) -> RoundReport:
+        """독립된 한 Round를 열고 한 번의 scan cycle을 실행한다."""
+        self.start_round()
+        try:
+            return self.run_cycle()
+        finally:
+            self.finish_round()
+
+    def run_forever(self, max_cycles=None) -> None:
         self.audit.log("startup", targets=len(self.config.targets),
                        ports=len(self.config.ports), can_attack=self.config.can_attack,
                        can_submit=self.config.can_submit, model=self.config.llm_model)
@@ -309,7 +335,14 @@ class AttackerRuntime:
             return
         if not self.config.can_submit:
             self.audit.log("warn", reason="제출 설정 없음 — flag 획득해도 제출 불가")
-        while True:
-            report = self.run_once()
-            self.audit.log("round-summary", **report.summary())
-            self.sleep(LOOP_SLEEP)
+        self.start_round()
+        try:
+            cycles = 0
+            while max_cycles is None or cycles < max_cycles:
+                report = self.run_cycle()
+                self.audit.log("round-summary", **report.summary())
+                cycles += 1
+                if max_cycles is None or cycles < max_cycles:
+                    self.sleep(LOOP_SLEEP)
+        finally:
+            self.finish_round()

@@ -140,6 +140,19 @@ class TestRuntimeEndToEnd(unittest.TestCase):
 
 
 class TestRuntimeResilience(unittest.TestCase):
+    def test_run_forever_reuses_flag_store_across_scan_cycles(self):
+        arena = FakeArena("FLAG{same_round}", "/x", "irrelevant")
+        rt = make_runtime(arena)
+        rt.run_forever(max_cycles=2)
+        self.assertEqual(len(arena.submits), 1)
+
+    def test_separate_run_once_calls_are_separate_rounds(self):
+        arena = FakeArena("FLAG{new_round}", "/x", "irrelevant")
+        rt = make_runtime(arena)
+        rt.run_once()
+        rt.run_once()
+        self.assertEqual(len(arena.submits), 2)
+
     def test_llm_down_does_not_stop_observation_or_submit(self):
         # LLM 장애(500)여도 관측·범위검사·제출 결정론 경로는 계속. 배너 flag는 잡힌다.
         arena = FakeArena("welcome FLAG{banner} here", "/x", "irrelevant", llm_status=500)
