@@ -1,6 +1,9 @@
 # 방어 에이전트 이미지. 표준 라이브러리 전용 — pip install 없음.
 # 이미지 시작 시간이 라운드 시간에 포함되므로 시작 경로를 짧게 유지한다.
 FROM python:3.12-slim
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision=$VCS_REF
+
 WORKDIR /app
 
 # 판정 코드와 versioned PolicyBundle. policy/ 는 host volume 이나 런타임 다운로드가
