@@ -6,11 +6,13 @@ build_script="$repo_root/scripts/build-images.sh"
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/aegis-build-images.XXXXXX")"
 real_git="$(command -v git)"
 revision="$($real_git -C "$repo_root" rev-parse HEAD)"
-ignored_marker="$repo_root/agents/attacker/src/aegis_attacker/review-secret.log"
+marker_dir="$(mktemp -d "$repo_root/agents/attacker/src/aegis_attacker/.build-image-marker.XXXXXX")"
+ignored_marker="$marker_dir/review-secret.log"
+ignored_marker_relative="src/aegis_attacker/${marker_dir##*/}/review-secret.log"
 
 cleanup() {
     rm -rf -- "$fixture_dir"
-    rm -f -- "$ignored_marker"
+    rm -rf -- "$marker_dir"
 }
 trap cleanup EXIT
 
@@ -56,7 +58,7 @@ if [[ "$1" == "buildx" && "$2" == "build" ]]; then
             ;;
     esac
     if [[ "$context" == */agents/attacker && \
-          -e "$context/src/aegis_attacker/review-secret.log" ]]; then
+          -e "$context/$IGNORED_MARKER_RELATIVE" ]]; then
         printf '%s\n' 'ignored marker entered build context' >&2
         exit 9
     fi
@@ -110,6 +112,7 @@ run_build() {
         DOCKER_BIN="$fixture_dir/docker" \
         REAL_GIT_BIN="$real_git" \
         REAL_REPO_ROOT="$repo_root" \
+        IGNORED_MARKER_RELATIVE="$ignored_marker_relative" \
         FAKE_GIT_REVISION="$revision" \
         FAKE_DOCKER_LOG="$docker_log" \
         "$@" \
