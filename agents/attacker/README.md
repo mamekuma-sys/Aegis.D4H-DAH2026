@@ -12,6 +12,13 @@ probe 응답이 실제로 노출한 route·parameter만 bounded discovery text�
 새 UGV 레이어를 초반에 시작하면서도 이전 세 레이어를 모두 같은 wave에 유지합니다. 데모 포트가
 아닌 경우 운영 측 입력 순서를 그대로 보존합니다.
 
+R17 이후에는 응답 본문 전체 hash가 아니라 status 계열·route·form parameter·문서 구조·오류 표식으로
+만든 구조 fingerprint를 사용해 같은 서비스 구현을 팀 간 공유합니다. 성공 playbook은 고정된 최초
+요청이 아니라 실제 flag를 회수한 최신 delivery로 교체됩니다. stale evidence는 root 재관측 후 한 번
+재결속하고, 실패 endpoint는 30초 cooldown 또는 새 playbook generation 전에는 반복 소모하지 않습니다.
+LLM은 대표 서비스 solver에 집중하도록 Round 48회·endpoint 4 turn으로 제한하며, 완전 target encoding,
+중첩 SSRF, SQL 주석·제어 공백·bracket identifier 등 R17 관측 우회는 최대 6개 bounded 후보로 실행합니다.
+
 표준 라이브러리만 사용한다(런타임 외부 의존성 없음).
 
 ## 구조

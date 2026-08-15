@@ -6,8 +6,8 @@
 
 | 구분 | 파일 | 크기 | tree SHA-256 |
 |---|---:|---:|---|
-| gzip 원본 | 91개 | 12,133,321 bytes | `CC30BFED3D69600597A5E83EF0307F49AABCB6650CDDB2D71D0199A70A7875BE` |
-| 해제본 | PCAP 63개 + 로그 28개 | 59,350,840 bytes | `DB00EA74F3ABB99B5C53C368F803ACA9C24F485A0AB0184FC626FAF975AE0952` |
+| gzip 원본 | 96개 | 13,650,363 bytes | `EFF271CD4428DD71E290B2CE76C95FFD50E7F03A543B1C004B07FDEC5449ECBE` |
+| 해제본 | PCAP 66개 + 로그 30개 | 66,885,643 bytes | `3291315A1EABAB20D750415E39C8AF590191E7B4A83171ACD2659778C56AE8FF` |
 
 tree hash는 `docs/references/README.md`의 상대경로·NUL·파일 SHA-256 방식으로 계산했다. 먼저 풀려 있던 `TEAM1-P3-R14-attacker.log` 사본은 해제본과 SHA-256이 같아 분석 입력에서는 중복 제외했다.
 
@@ -46,10 +46,26 @@ bundle `defender-2026-08-15-team1-capture-enforce`를 63개 PCAP에 재생한 �
 
 `coalesced` 21건은 하나의 TCP payload에 여러 HTTP request line이 있고 그중 하나가 exact exploit인 경우다. Broker verdict는 IP packet 단위이므로 같은 packet의 일부만 통과시킬 수 없다. 이 수치는 rollback 판단 시 별도 관찰한다.
 
+## R17 증분 관측과 재생
+
+R17 원본 gzip SHA-256은 attacker log `C51F72D0...1C7F4`, defender log
+`32EC4CD1...51FD2`, L1 PCAP `1CD38A9E...FC6DF`, L2 PCAP `223935C0...D6D9D`,
+L3 PCAP `B30CAA67...F3603`이다. 공격 로그에는 33 endpoint·1,600 request·111 LLM call·93,427
+token과 한 팀 L1/L2의 accepted flag 두 건이 기록됐다. 원문 flag는 문서화하지 않았다.
+
+R17 성공 우회는 완전 request-target encoding·중첩/이중 인코딩 SSRF·trailing-dot 및 대소문자
+host·0-padding port·repeated slash, `/admin?`·중복/분할 Cookie, SQL control whitespace·block
+comment·`[app_meta]`였다. bundle `defender-2026-08-15-r17-stream-canonical`은 기존 exact rule 네
+개와 canonical HTTP 의미 rule 세 개를 함께 사용한다.
+
+세 R17 PCAP을 순서대로 재생한 packet verdict 결과는 L1 549, L2 625, L3 217 DROP이다. 관측된
+성공 우회 형태가 모두 해당 계층 rule에 포함됐으며, 이는 packet-local offline replay 수치이지 flag
+개수·공식 SLA·물리 socket E2E 결과가 아니다.
+
 ## 운영 경계
 
 - 기존 및 원격에서 병합된 휴리스틱 13개는 계속 `SHADOW`다.
-- 새 ACTIVE rule 네 개는 protocol·port·request shape·logical evidence에 묶고 `2026-08-16T00:00:00Z`에 만료한다.
+- ACTIVE rule 일곱 개는 protocol·port·request shape·logical evidence에 묶고 `2026-08-16T00:00:00Z`에 만료한다.
 - runtime은 packet-derived 지표로 rule을 승격·rollback하지 않는다.
 - 실제 SLA 저하 또는 negative fixture 실패 시 직전 검증 이미지로 되돌린다.
-- flow 재조립 부재와 물리 송신 E2E 계측은 이번 변경으로 해결되지 않는다.
+- bounded HTTP header stitching은 연결했지만 일반 TCP/body 재조립과 물리 송신 E2E 계측은 범위 밖이다.

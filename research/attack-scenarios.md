@@ -26,7 +26,8 @@
   최소 요청도 공통 범위·비용 검증과 request charge 원자적 선예약을 통과하고, 일회용 reservation token을
   gateway가 소비해야 한다. 무계획·무과금 관측은 허용하지 않는다.
 - endpoint별 PCAP-confirmed fast path 10회, 배너 기반 결정론 후보 44회, bounded recon 목록,
-  planner turn 6의 개별 상한을 둔다. 모든 요청은 공통 rate limiter와 Round deadline을 통과한다.
+  planner turn 4의 개별 상한을 둔다. Round 전체 LLM 호출은 48회로 제한하고, 모든 요청은 공통
+  rate limiter와 Round deadline을 통과한다.
   `accepted` flag·상한 소진·결정론적 no-progress/invalid-evidence면 해당 endpoint를 중단한다.
 
 ## 2026-08-15 TEAM1 관측 기반 실행 우선순위
@@ -45,6 +46,25 @@ SHA-256 및 분석 방법을 공동 근거로 사용한다. 공격 런타임에�
 Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한다. 알려진 데모 포트는
 `L4→L1→L2→L3` 순환으로 섞어 새 UGV 레이어를 초반에 시작하면서도 기존 레이어를 굶기지 않는다.
 포트 매핑이 관측되지 않으면 입력 순서를 보존한다.
+
+### R17 피드백에 따른 적응 전략
+
+R17 공격 로그는 33개 endpoint에 1,600회 요청과 111회 LLM 호출(93,427 token)을 사용했지만,
+accepted flag는 한 팀의 L1·L2 두 개뿐이었다. 같은 서비스가 팀별 동적 문자열 때문에 서로 다른
+배너로 인식됐고, 신선도가 지난 계획은 `PlanBindingError` 뒤에 복구되지 않았으며, 성공한 기본
+delivery를 다른 팀 방어가 막아도 더 강한 우회 delivery가 playbook을 갱신하지 못했다.
+
+이에 따라 런타임은 서비스 내용과 delivery 표현을 분리한다. 상태군·route·form parameter·HTML
+구조·오류 표식으로 만든 구조 fingerprint를 팀 간 playbook key로 사용하고, 성공한 더 강한
+delivery는 generation을 올려 기존 값을 대체한다. 완료 endpoint는 같은 Round에 재공격하지 않고,
+실패 endpoint는 30초 cooldown 뒤 또는 새 playbook generation이 생겼을 때만 재시도한다.
+
+실행 근거가 오래되면 요청을 억지로 재결속하지 않는다. 해당 endpoint의 root를 읽기 전용으로 한 번
+재관측해 새 evidence를 만든 뒤 같은 계획을 다시 검증한다. R17에서 확인된 완전 request-target
+percent encoding, trailing-dot·대소문자 host, 0-padding port, repeated slash, 중첩 SSRF, SQL control
+whitespace·block comment·bracket identifier를 최대 6개의 bounded delivery 후보로 생성한다. 후보 하나가
+HTTP 응답을 받았지만 flag가 없더라도 나머지 후보를 계속 시도하며, 실제 flag를 만든 delivery만
+playbook에 저장한다.
 
 ## S1~S5 표
 

@@ -140,6 +140,7 @@ class ParsedPacket:
     src_port: int = 0
     dst_port: int = 0
     tcp_flags: int = 0
+    tcp_sequence: int = 0
     total_length: int = 0
     payload: bytes = b""
     payload_truncated: bool = False
@@ -240,6 +241,7 @@ def _make(
     total_length: int,
     payload: bytes,
     truncated: bool,
+    tcp_sequence: int = 0,
 ) -> ParsedPacket:
     flow_key = FlowKey(src_ip, src_port, dst_ip, dst_port, protocol)
     profile = ObservedTrafficProfile(
@@ -256,6 +258,7 @@ def _make(
         src_port=src_port,
         dst_port=dst_port,
         tcp_flags=tcp_flags,
+        tcp_sequence=tcp_sequence,
         total_length=total_length,
         payload=payload,
         payload_truncated=truncated,
@@ -278,6 +281,7 @@ def _parse_tcp(
         )
 
     src_port, dst_port = _PORTS.unpack_from(raw, ihl)
+    tcp_sequence = struct.unpack_from(">I", raw, ihl + 4)[0]
     data_offset = (raw[ihl + 12] >> 4) * 4
     tcp_flags = raw[ihl + 13]
 
@@ -286,13 +290,13 @@ def _parse_tcp(
         # 경계를 신뢰할 수 없으므로 payload 없이 판정을 포기한다.
         return _make(
             ParseStatus.TRUNCATED_L4, IPPROTO_TCP, src_ip, dst_ip, src_port, dst_port,
-            tcp_flags, total_length, b"", False,
+            tcp_flags, total_length, b"", False, tcp_sequence,
         )
 
     payload, truncated = _bounded_payload(raw, ihl + data_offset, body_end)
     return _make(
         ParseStatus.OK, IPPROTO_TCP, src_ip, dst_ip, src_port, dst_port,
-        tcp_flags, total_length, payload, truncated,
+        tcp_flags, total_length, payload, truncated, tcp_sequence,
     )
 
 

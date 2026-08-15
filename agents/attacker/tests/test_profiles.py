@@ -5,6 +5,7 @@ from aegis_attacker.profiles import (
     classify,
     latency_band,
     merge_observation,
+    service_fingerprint,
     suggest_vuln_classes,
 )
 
@@ -72,6 +73,22 @@ class TestSuggestVulnClasses(unittest.TestCase):
 
     def test_unknown_banner_returns_other(self):
         self.assertEqual(suggest_vuln_classes("hello world"), [VulnClass.OTHER])
+
+
+class TestServiceFingerprint(unittest.TestCase):
+    def test_team_specific_text_does_not_split_same_interface(self):
+        first = '<html><form action="/fetch"><input name="url"></form> team2 nonce 123</html>'
+        second = '<html><form action="/fetch"><input name="url"></form> team9 nonce 999</html>'
+        self.assertEqual(
+            service_fingerprint(200, first, {"Content-Type": "text/html; charset=utf-8"}),
+            service_fingerprint(200, second, {"Content-Type": "text/html"}),
+        )
+
+    def test_different_routes_split_service_families(self):
+        self.assertNotEqual(
+            service_fingerprint(200, "GET /fetch?url=<url>", {}),
+            service_fingerprint(200, "GET /product?id=<n>", {}),
+        )
 
 
 if __name__ == "__main__":

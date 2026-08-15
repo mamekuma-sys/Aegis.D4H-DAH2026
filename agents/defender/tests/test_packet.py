@@ -29,12 +29,13 @@ from .fakes import http_request, ipv4_tcp, ipv4_udp
 
 class TestIpv4Tcp(unittest.TestCase):
     def test_positive_fixture(self):
-        parsed = parse_ip(ipv4_tcp(http_request("/index.html"), dst_port=8080))
+        parsed = parse_ip(ipv4_tcp(http_request("/index.html"), dst_port=8080, sequence=12345))
         self.assertIs(parsed.status, ParseStatus.OK)
         self.assertEqual(parsed.ip_version, 4)
         self.assertEqual(parsed.protocol, IPPROTO_TCP)
         self.assertEqual(parsed.dst_port, 8080)
         self.assertEqual(parsed.src_port, 51234)
+        self.assertEqual(parsed.tcp_sequence, 12345)
         self.assertTrue(parsed.payload.startswith(b"GET /index.html"))
         self.assertIsNotNone(parsed.flow_key)
         self.assertEqual(parsed.flow_key.protocol, IPPROTO_TCP)

@@ -15,7 +15,7 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ## 현재 상태
 
-`baseline_profiles`에는 실측 profile `6/8082`, `6/8083`, `6/8084`가 등록되어 있습니다. TEAM1의 63개 PCAP에서 flag 응답과 연결된 공격에 한정한 rule 네 개가 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 `SHADOW`입니다.
+`baseline_profiles`에는 실측 profile `6/8082`, `6/8083`, `6/8084`가 등록되어 있습니다. TEAM1의 66개 PCAP에서 flag 응답과 연결된 공격에 한정한 rule 일곱 개가 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 `SHADOW`입니다. 기존 exact rule 네 개에 R17 우회를 의미적으로 묶는 canonical rule 세 개가 추가됐습니다.
 
 활성 범위는 L1 `helper-box[.]?:8080/secret` SSRF, L2 Base64-JSON `session`의 관리자 claim 위조와 loopback secret SSRF, L3 `app_meta` 대상 UNION SQLi입니다. payload 정규식은 HTTP request line에만 적용하며 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. 분석 근거와 전체 PCAP 재생 결과는 `docs/references/team1-capture-defense-map.md`에 있습니다.
 
@@ -39,7 +39,7 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 | 필드 | 의미 |
 |---|---|
 | `rule_id` | 불변 ID. 중복이면 bundle 전체를 거부합니다 |
-| `kind` | `payload_regex` / `http_json_cookie_claim` / `tcp_flags` / `flow_score` / `allow_profile` |
+| `kind` | `payload_regex` / `http_json_cookie_claim` / `http_ssrf_target` / `http_sqli_source` / `tcp_flags` / `flow_score` / `allow_profile` |
 | `category` | `Sig` 카테고리. `CausalMatcher`의 관측 단계 매핑에도 쓰입니다 |
 | `reason_code` | 로그에 남는 비민감 사유. payload나 rule 내용을 드러내지 않아야 합니다 |
 | `protocol`, `ports` | `ports`가 비면 해당 protocol 전체(포트 무관 matcher) |
@@ -47,6 +47,8 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 | `ignore_case` | 같은 scope의 rule 중 하나라도 true면 그 scope의 결합 정규식 전체가 대소문자 무시로 컴파일됩니다 |
 | `http_method`, `http_path` | `http_json_cookie_claim` 전용. percent-decoding과 absolute-form 정규화 뒤 정확히 일치해야 합니다 |
 | `cookie_name`, `claim_key`, `claim_values` | `http_json_cookie_claim` 전용. 완전한 header 안의 bounded Base64-JSON scalar claim만 비교합니다 |
+| `http_paths`, `query_names`, `target_hosts`, `target_ports`, `target_path` | `http_ssrf_target` 전용. bounded 반복 decoding·중첩 query URL 정규화 뒤 목적지를 비교합니다 |
+| `http_paths`, `query_names`, `sql_source` | `http_sqli_source` 전용. bounded decoding·주석 제거·공백 정규화 뒤 `UNION SELECT FROM <source>` 순서를 비교합니다 |
 | `tcp_flags_name` | `tcp_flags` 전용. `tcp-null` / `tcp-fin` / `tcp-xmas` |
 | `min_score` | `flow_score` 전용. `CorrelationSnapshot`의 flow 점수 임계 |
 | `promotion_state` | `SHADOW` → `CANARY` → `ACTIVE` |
@@ -71,7 +73,11 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ### HTTP JSON cookie 제약
 
-`http_json_cookie_claim`은 TCP와 명시적 port를 요구합니다. 한 packet의 2KB payload view 안에 request line과 header 종결자가 모두 있어야 하며, cookie 값은 512 bytes, JSON text는 512 bytes, key는 16개로 제한합니다. 불완전 header, 잘못된 Base64·JSON, 중첩 claim, 상한 초과는 매치하지 않고 `ACCEPT` 경로를 유지합니다. cookie 원문이나 claim 값은 로그·snapshot·LLM에 전달하지 않습니다.
+HTTP 의미 rule은 TCP와 명시적 port를 요구합니다. packet-local payload 또는 bounded in-order header
+stitching으로 완성된 요청만 파싱합니다. stitcher는 4KB·2,048 flows·5초 TTL이고 gap·과대·불완전
+요청은 버리고 `ACCEPT`합니다. cookie 값은 512 bytes, JSON text는 512 bytes, key는 16개로 제한합니다.
+잘못된 Base64·JSON, 중첩 claim, 상한 초과는 매치하지 않습니다. percent decoding과 nested URL 순회는
+각각 최대 3회/3단계입니다. cookie 원문이나 claim 값은 로그·snapshot·LLM에 전달하지 않습니다.
 
 ## 강등과 거부의 차이
 

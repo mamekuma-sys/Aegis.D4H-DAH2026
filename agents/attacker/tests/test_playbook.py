@@ -31,11 +31,16 @@ class TestPlaybook(unittest.TestCase):
         self.assertEqual(got["headers"], {})
         self.assertEqual(got["body"], "")
 
-    def test_first_write_wins(self):
+    def test_stricter_successful_delivery_supersedes_raw_form(self):
         pb = Playbook()
+        self.assertEqual(pb.generation, 0)
         pb.record("fp", {"path": "/a"})
+        self.assertEqual(pb.generation, 1)
         pb.record("fp", {"path": "/b"})
-        self.assertEqual(pb.lookup("fp")["path"], "/a")
+        self.assertEqual(pb.lookup("fp")["path"], "/b")
+        self.assertEqual(pb.generation, 2)
+        pb.record("fp", {"path": "/b"})
+        self.assertEqual(pb.generation, 2)
 
     def test_missing_and_empty(self):
         pb = Playbook()
@@ -48,6 +53,7 @@ class TestPlaybook(unittest.TestCase):
         pb.record("fp", {"path": "/x"})
         pb.clear()
         self.assertIsNone(pb.lookup("fp"))
+        self.assertEqual(pb.generation, 0)
 
 
 class TestSingleFlight(unittest.TestCase):

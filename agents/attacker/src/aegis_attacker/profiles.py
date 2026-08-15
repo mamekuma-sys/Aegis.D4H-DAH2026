@@ -7,6 +7,10 @@ FinalsPhaseHint는 증거가 특정 레이어를 강하게 가리킬 때만 생�
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
+
 from .models import Endpoint, ObservedServiceProfile, VulnClass
 from .observation import fingerprint, notable_headers
 
@@ -23,6 +27,57 @@ _VULN_KEYWORDS = {
     VulnClass.AUTH: ("login", "admin", "session", "account", "auth", "cookie", "token", "portal", "private"),
     VulnClass.SQLI: ("product", "id=", "search", "query", "sql", "shop", "item", "user="),
 }
+
+_STRUCTURAL_PATH_RE = re.compile(r"/[A-Za-z][A-Za-z0-9_./-]{0,63}")
+_STRUCTURAL_PARAM_RE = re.compile(r"[?&]([A-Za-z_][A-Za-z0-9_-]{0,63})=")
+_FORM_ACTION_RE = re.compile(r"\baction\s*=\s*['\"]([^'\"]{1,128})", re.IGNORECASE)
+_HTML_TAG_RE = re.compile(r"<([A-Za-z][A-Za-z0-9-]{0,31})(?:\s|>)")
+
+
+def service_fingerprint(status: int, body: str, headers) -> str:
+    """Return a structural service-family fingerprint, excluding team-specific values.
+
+    The previous raw body hash split the same challenge into one family per team when a
+    banner contained a team name, nonce, or timestamp.  Only observable interface shape
+    is retained here: route/parameter/form/tag sets, coarse status, notable header names,
+    content type, error signatures, and vulnerability markers.
+    """
+    text = body or ""
+    low = text.lower()
+    routes = sorted(set(_STRUCTURAL_PATH_RE.findall(text)))[:32]
+    routes.extend(
+        value for value in sorted(set(_FORM_ACTION_RE.findall(text)))[:16]
+        if value not in routes
+    )
+    params = sorted(set(_STRUCTURAL_PARAM_RE.findall(text)))[:32]
+    tags = sorted(set(tag.lower() for tag in _HTML_TAG_RE.findall(text)))[:24]
+    errors = sorted(sig for sig in ERROR_SIGNATURES if sig in low)
+    markers = sorted(
+        vuln.value
+        for vuln, keywords in _VULN_KEYWORDS.items()
+        if any(keyword in low for keyword in keywords)
+    )
+    notable = notable_headers(headers)
+    content_type = ""
+    for key, value in (headers or {}).items():
+        if key.lower() == "content-type":
+            content_type = str(value).split(";", 1)[0].strip().lower()[:64]
+            break
+    material = json.dumps(
+        {
+            "status_class": int(status) // 100 if status else 0,
+            "routes": routes,
+            "params": params,
+            "tags": tags,
+            "errors": errors,
+            "markers": markers,
+            "header_names": sorted(key.lower() for key in notable),
+            "content_type": content_type,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
 
 
 def latency_band(ms: float) -> str:

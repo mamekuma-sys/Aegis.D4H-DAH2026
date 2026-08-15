@@ -36,6 +36,7 @@ agents/defender/
 │   ├── session.py       BrokerSession(재연결), SocketWriter, VerdictSender, OutboundQueue
 │   ├── heartbeat.py     HeartbeatScheduler (세션별 epoch)
 │   ├── packet.py        PacketParser (상한 있는 IP/L4)
+│   ├── stream.py        producer-owned bounded HTTP header stitcher
 │   ├── http_semantics.py bounded HTTP request·Base64-JSON cookie 의미 파서
 │   ├── policy.py        HotPolicy (Gate · Sig · Score)
 │   ├── rules.py         PolicyLoader, schema 검증, matcher 사전 컴파일
@@ -57,27 +58,27 @@ agents/defender/
 
 | 구간 | 목표 | 실측(개발 머신) |
 |---|---:|---:|
-| Gate | p99 25μs | p99 ~0.6μs |
-| Sig | p99 100μs | p99 ~17μs |
-| Score | p99 25μs | p99 ~0.1μs |
-| policy 합계 | p99 150μs | p99 ~20μs |
-| **hot path 합계** | **p50 150μs, p99 500μs** | **p50 ~17μs, p99 ~28μs** |
+| Gate | p99 25μs | p99 ~2.6μs |
+| Sig | p99 100μs | p99 ~63.4μs |
+| Score | p99 25μs | p99 ~0.3μs |
+| policy 합계 | p99 150μs | p99 ~73.6μs |
+| **hot path 합계** | **p50 150μs, p99 500μs** | **1100 pkt/s p50 ~33.5μs, p99 ~128.3μs** |
 | 판정 soft cutoff | 5ms — 분석 포기하고 `ACCEPT` | — |
 | 내부 send hard cutoff | 200ms — 로컬 만료·재연결 | — |
 | Broker deadline | 300ms | 초과 0건 |
 | socket fault timeout | 최대 50ms(정상 예산 아님) | — |
 
-실측은 `python -m unittest tests.test_timing`이 1·100·550·1100 pkt/s 프로파일로 측정해 출력합니다. **측정 환경이 공식 컨테이너와 다르므로**(macOS / Python 3.13 개발 머신), 공식 이미지(`python:3.12-slim`, cpu-shares 2048)에서 다시 측정해 Docker 담당자 인계 자료에 넣어야 합니다(§15.4).
+실측은 `python -m unittest tests.test_timing`이 1·100·550·1100 pkt/s 프로파일로 측정해 출력합니다. **측정 환경이 공식 컨테이너와 다르므로**(Windows / Python 3.14 개발 머신), 공식 이미지(`python:3.12-slim`, cpu-shares 2048)에서 다시 측정해 Docker 담당자 인계 자료에 넣어야 합니다(§15.4).
 
 모든 시간은 벽시계가 아니라 monotonic clock으로 잽니다. NTP 보정 한 번이면 "수신 후 300ms" 계산이 통째로 어긋납니다.
 
 ## 현재 정책 상태
 
-TEAM1 본선 자료 63개 PCAP과 28개 로그를 분석해 `6/8082`, `6/8083`, `6/8084`를 baseline profile로 등록했습니다. flag 응답과 연결된 L1 SSRF, L2 관리자 session 위조·loopback SSRF, L3 `app_meta` SQLi에 대응하는 네 rule만 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 계속 `SHADOW`입니다.
+TEAM1 본선 자료 66개 PCAP과 30개 로그를 분석해 `6/8082`, `6/8083`, `6/8084`를 baseline profile로 등록했습니다. flag 응답과 연결된 L1 SSRF, L2 관리자 session 위조·loopback SSRF, L3 `app_meta` SQLi에 대응하는 exact rule 네 개와 canonical HTTP 의미 rule 세 개만 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 계속 `SHADOW`입니다.
 
-L2 cookie rule은 raw Base64 문자열을 나열하지 않고 2KB packet payload 안의 완전한 HTTP header와 bounded JSON scalar claim만 해석합니다. 오류·분할·상한 초과는 차단 사유가 아닙니다. 정규식 rule은 HTTP request line에 한정해 header나 body의 같은 문자열을 오탐하지 않습니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
+L2 cookie rule은 raw Base64 문자열을 나열하지 않고 packet-local 또는 최대 4KB in-order stitching으로 완성된 HTTP header와 bounded JSON scalar claim만 해석합니다. gap·불완전·상한 초과는 차단 사유가 아닙니다. 정규식 rule은 HTTP request line에 한정해 header나 body의 같은 문자열을 오탐하지 않습니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
 
-63개 PCAP의 HTTP 요청 43,580건을 새 bundle에 재생한 결과 확인된 exploit shape 4,814건을 전부 차단했고, 공격이 없는 packet의 예상 밖 차단 그룹은 0개였습니다. 상세 근거는 `docs/references/team1-capture-defense-map.md`를 보십시오.
+초기 63개 PCAP의 HTTP 요청 43,580건에서는 확인된 exploit shape 4,814건을 전부 차단했고, 공격이 없는 packet의 예상 밖 차단 그룹은 0개였습니다. 추가 R17 세 PCAP에서는 관련 packet L1 549·L2 625·L3 217건이 승인 rule에 의해 DROP됐습니다. 상세 근거는 `docs/references/team1-capture-defense-map.md`를 보십시오.
 
 승격 절차와 필드 의미는 `policy/README.md`를 보십시오.
 
@@ -108,13 +109,17 @@ $env:PYTHONPATH="src"; python -m aegis_defender
 
 `LLM_API_KEY`가 없으면 advisory worker를 아예 기동하지 않습니다. 장애가 아니라 정상 동작이며 HEARTBEAT·verdict에 영향이 없습니다.
 
-## 알려진 설계 간극
+## bounded HTTP header stitching
 
-**flow별 재조립 `Sig` 매칭이 아직 배선되지 않았습니다.**
+R17에서 request line과 Cookie header가 여러 TCP segment로 나뉜 우회를 확인해 `HttpStreamStitcher`를
+`Sig` 경로에 연결했습니다. 이 상태는 correlation worker와 공유하지 않고 단일 producer만 소유하므로
+lock이나 대기가 없습니다. HTTP method로 시작한 in-order flow만 최대 4KB·2,048 flows·5초 TTL로
+보관하고, header 종결 시 현재 packet에서 완성된 요청을 판정합니다. gap·과대·불완전·알 수 없는
+시작은 버리고 `ACCEPT`하므로 일반 TCP 재조립기나 애플리케이션 세션 추적기로 확대하지 않습니다.
 
-§9.3은 여러 패킷에 걸친 요청을 잡기 위해 flow별 재조립 버퍼를 두라고 하지만, §8은 `CorrelationEvent`가 원본 payload를 참조하는 것을 금지합니다. 두 조건을 동시에 만족하려면 재조립을 hot path의 공유 상태에 두어야 하는데, 그것은 "builder state를 hot path에 노출하지 않는다"는 §11 경계를 깹니다.
-
-현재는 §8.1의 16KB 상한을 지키는 `FlowReassemblyBuffer`를 검증된 자료구조로만 제공하고 판정 경로에 연결하지 않았습니다. 어느 쪽으로 해결할지는 설계 보완 사항입니다. 현재 ACTIVE rule 네 개도 exploit 문자열이나 HTTP header가 여러 TCP segment로 분할되면 packet-local matcher가 놓칠 수 있으므로 팀장 검토 시 이 항목을 함께 결정해야 합니다.
+`state.py`의 16KB `FlowReassemblyBuffer`는 비동기 상관분석용 원시 컨테이너로 계속 판정 경로 밖에
+있습니다. producer-owned HTTP header stitching과 worker-owned correlation state는 수명·소유권·목적이
+서로 다릅니다.
 
 `CausalMatcher`의 단계 이름도 관련 결정입니다. 예선 보고서 S4의 1~5 번호를 관측된 증거에 임의로 붙이지 않기 위해(§2), 단계를 `observed-*`로만 명명했습니다. 보고서 단계와의 대응은 본선 PCAP과 fixture 확보 후 `research/defense-mapping.md`에 기록합니다.
 
@@ -126,6 +131,6 @@ $env:PYTHONPATH="src"; python -m aegis_defender
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
-- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-15-team1-capture-enforce", "drop_capable_rules":4, "demotions":[], ...}`
+- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-15-r17-stream-canonical", "drop_capable_rules":7, "demotions":[], ...}`
 - 종료: SIGTERM에서 2초 내 정리 종료, 종료 코드 0
 - 비밀 비출력: `FLAG{...}`, API key, Bearer 토큰, raw payload가 로그에 나오지 않음을 `tests/test_advisory.py`의 `TestAuditRedaction`이 검증

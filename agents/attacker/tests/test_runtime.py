@@ -199,6 +199,42 @@ class TestRuntimeResilience(unittest.TestCase):
         rt.run_forever(max_cycles=2)
         self.assertEqual(len(arena.submits), 1)
         self.assertEqual(rt._report.summary()["submit_states"]["accepted"], 1)
+        self.assertEqual(rt._report.summary()["requests_made"], 1)
+
+    def test_unsolved_endpoint_waits_for_cooldown_without_new_playbook(self):
+        arena = FakeArena(
+            "plain service", "/never", "FLAG{never}",
+            flag_when=lambda full: False, llm_status=500,
+        )
+        rt = make_runtime(arena)
+        rt.start_round()
+        try:
+            rt.run_cycle()
+            after_first = rt._report.summary()["requests_made"]
+            rt.run_cycle()
+            self.assertEqual(rt._report.summary()["requests_made"], after_first)
+        finally:
+            rt.finish_round()
+
+    def test_expired_evidence_is_refreshed_before_llm_plan_execution(self):
+        clk = FakeClock()
+
+        class SlowLlmArena(FakeArena):
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if "/v1/chat/completions" in url:
+                    clk.advance(100.0)
+                return super().request(method, url, headers, body, timeout)
+
+        arena = SlowLlmArena(
+            "plain service", "/magic", "FLAG{fresh_evidence}",
+            flag_when=lambda full: full == "/magic",
+        )
+        rt = AttackerRuntime(
+            make_cfg(), http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        )
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{fresh_evidence}")
 
     def test_separate_run_once_calls_are_separate_rounds(self):
         arena = FakeArena("FLAG{new_round}", "/x", "irrelevant")
@@ -319,6 +355,56 @@ class TestPlaybookReuse(unittest.TestCase):
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 2)          # 두 포트 다 flag
         self.assertEqual(arena.llm_calls, 1)                   # 두 번째는 playbook 재사용(LLM 0)
+
+    def test_dynamic_team_text_shares_structural_service_solver(self):
+        class DynamicTeamArena:
+            def __init__(self):
+                self.llm_calls = 0
+                self.submits = []
+                self._lock = threading.Lock()
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    with self._lock:
+                        self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    with self._lock:
+                        self.llm_calls += 1
+                    content = json.dumps({
+                        "vuln": "OTHER", "method": "GET",
+                        "path": "/magic?probe=unlock", "headers": {}, "body": "",
+                        "reason": "structural family solver",
+                    })
+                    return HttpResponse(200, json.dumps({
+                        "choices": [{"message": {"content": content}}],
+                        "usage": {"total_tokens": 10},
+                    }))
+                parts = urlsplit(url)
+                if parts.path == "/" and not parts.query:
+                    return HttpResponse(
+                        200,
+                        f'<html><form action="/magic?probe=<value>">service for {parts.hostname}</form></html>',
+                        {"Content-Type": "text/html"},
+                    )
+                if parts.path == "/magic" and parts.query == "probe=unlock":
+                    return HttpResponse(200, "FLAG{%s}" % parts.hostname.replace(".", "_"))
+                return HttpResponse(200, "no flag")
+
+        arena = DynamicTeamArena()
+        cfg = AttackerConfig(
+            targets=("team2.lig.internal", "team3.lig.internal"), ports=(9001,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
+            llm_model="gpt-4o-mini", concurrency=2,
+        )
+        from aegis_attacker.rate_limit import RateLimiter
+        rt = AttackerRuntime(
+            cfg, http=arena, rate=RateLimiter(request_burst=10000, submit_max=10000)
+        )
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 2)
+        self.assertEqual(arena.llm_calls, 1)
 
 
 class TestParallelAttack(unittest.TestCase):
