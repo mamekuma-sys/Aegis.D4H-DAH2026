@@ -160,7 +160,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
 
     def test_shipped_bundle_activates_only_observed_exact_rules(self):
         self.assertEqual(self.report.source, "active")
-        self.assertEqual(self.report.bundle_id, "defender-2026-08-15-r17-stream-canonical")
+        self.assertEqual(self.report.bundle_id, "defender-2026-08-15-finals-validity")
         self.assertEqual(self.report.drop_capable_rules, 7)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
