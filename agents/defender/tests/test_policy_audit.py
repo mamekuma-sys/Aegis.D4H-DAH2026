@@ -309,8 +309,8 @@ class TestLoadOrder(unittest.TestCase):
     def test_shipped_bundle_activates_only_reviewed_observed_rules(self):
         compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertEqual(report.bundle_id, "defender-2026-08-15-finals-validity")
-        self.assertEqual(report.drop_capable_rules, 7)
+        self.assertEqual(report.bundle_id, "defender-2026-08-15-full-corpus-hardening")
+        self.assertEqual(report.drop_capable_rules, 9)
         self.assertEqual(report.demotions, ())
         self.assertEqual(
             compiled.baseline_profiles, frozenset({"6/8082", "6/8083", "6/8084"})
@@ -323,6 +323,8 @@ class TestLoadOrder(unittest.TestCase):
             "http-l1-helper-secret-canonical-001",
             "http-l2-loopback-secret-canonical-001",
             "http-l3-app-meta-canonical-001",
+            "sig-l1-config-flag-traversal-001",
+            "http-l2-loopback-registry-canonical-001",
         }
         for rule_id, rule in compiled.rules_by_id.items():
             expected = PromotionState.ACTIVE if rule_id in active_ids else PromotionState.SHADOW
@@ -330,14 +332,14 @@ class TestLoadOrder(unittest.TestCase):
 
     def test_shipped_bundle_keeps_reviewed_rules_active_during_finals_week(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1787356800.0)
-        self.assertEqual(report.bundle_id, "defender-2026-08-15-finals-validity")
-        self.assertEqual(report.drop_capable_rules, 7)
+        self.assertEqual(report.bundle_id, "defender-2026-08-15-full-corpus-hardening")
+        self.assertEqual(report.drop_capable_rules, 9)
         self.assertEqual(report.demotions, ())
 
     def test_shipped_bundle_expires_after_finals_validity_window(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1788220800.0)
         self.assertEqual(report.drop_capable_rules, 0)
-        self.assertEqual(len(report.demotions), 7)
+        self.assertEqual(len(report.demotions), 9)
         self.assertTrue(all(entry.endswith(":expired") for entry in report.demotions))
 
     def test_shipped_fallback_is_valid(self):

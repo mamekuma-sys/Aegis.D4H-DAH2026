@@ -281,6 +281,8 @@ class HotPolicy:
         if not payload:
             return None
 
+        deferred_shadow: tuple[Rule, str] | None = None
+
         stitched = self._http_stream.feed(parsed, self._clock())
         payload_views = [payload]
         if stitched is not None and stitched != payload:
@@ -301,6 +303,10 @@ class HotPolicy:
                 rule = matcher.rules_by_group.get(found.lastgroup or "")
                 if rule is None or not self._scope_allows(rule, parsed):
                     continue
+                if rule.promotion_state is PromotionState.SHADOW:
+                    if deferred_shadow is None:
+                        deferred_shadow = (rule, rule.category)
+                    continue
                 self._http_stream.discard(parsed.flow_key)
                 return self._enforce(
                     pkt_id, rule, parsed, received_at, STAGE_SIG,
@@ -319,6 +325,10 @@ class HotPolicy:
                     if request.cookie_claim_matches(
                         rule.cookie_name, rule.claim_key, rule.claim_values
                     ):
+                        if rule.promotion_state is PromotionState.SHADOW:
+                            if deferred_shadow is None:
+                                deferred_shadow = (rule, rule.category)
+                            continue
                         return self._enforce(
                             pkt_id, rule, parsed, received_at, STAGE_SIG,
                             allowed_by, rule.category, baseline,
@@ -340,11 +350,21 @@ class HotPolicy:
                     elif rule.kind is MatchKind.HTTP_SQLI_SOURCE:
                         matched = request.sql_source_matches(rule.query_names, rule.sql_source)
                     if matched:
+                        if rule.promotion_state is PromotionState.SHADOW:
+                            if deferred_shadow is None:
+                                deferred_shadow = (rule, rule.category)
+                            continue
                         self._http_stream.discard(parsed.flow_key)
                         return self._enforce(
                             pkt_id, rule, parsed, received_at, STAGE_SIG,
                             allowed_by, rule.category, baseline,
                         )
+        if deferred_shadow is not None:
+            rule, evidence = deferred_shadow
+            return self._enforce(
+                pkt_id, rule, parsed, received_at, STAGE_SIG,
+                allowed_by, evidence, baseline,
+            )
         return None
 
     def _score(

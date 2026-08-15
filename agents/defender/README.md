@@ -74,11 +74,11 @@ agents/defender/
 
 ## 현재 정책 상태
 
-TEAM1 본선 자료 66개 PCAP과 30개 로그를 분석해 `6/8082`, `6/8083`, `6/8084`를 baseline profile로 등록했습니다. flag 응답과 연결된 L1 SSRF, L2 관리자 session 위조·loopback SSRF, L3 `app_meta` SQLi에 대응하는 exact rule 네 개와 canonical HTTP 의미 rule 세 개만 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 계속 `SHADOW`입니다.
+TEAM1 전체 104개 PCAP과 고유 로그 30개를 분석해 `6/8082`, `6/8083`, `6/8084`를 baseline profile로 등록했습니다. flag 응답과 연결된 L1 SSRF·config traversal, L2 관리자 session 위조·loopback secret/registry SSRF, L3 `app_meta` SQLi에 대응하는 request-line rule 네 개와 canonical HTTP 의미 rule 다섯 개만 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 계속 `SHADOW`입니다.
 
 L2 cookie rule은 raw Base64 문자열을 나열하지 않고 packet-local 또는 최대 4KB in-order stitching으로 완성된 HTTP header와 bounded JSON scalar claim만 해석합니다. gap·불완전·상한 초과는 차단 사유가 아닙니다. 정규식 rule은 HTTP request line에 한정해 header나 body의 같은 문자열을 오탐하지 않습니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
 
-초기 63개 PCAP의 HTTP 요청 43,580건에서는 확인된 exploit shape 4,814건을 전부 차단했고, 공격이 없는 packet의 예상 밖 차단 그룹은 0개였습니다. 추가 R17 세 PCAP에서는 관련 packet L1 549·L2 625·L3 217건이 승인 rule에 의해 DROP됐습니다. 상세 근거는 `docs/references/team1-capture-defense-map.md`를 보십시오.
+전체 104개 PCAP의 HTTP 요청 79,507건에서는 확인된 exploit shape 14,388건을 전부 차단했고, 공격이 없는 packet의 예상 밖 차단 그룹은 0개였습니다. FLAG 응답 연계 요청 2,134건 중 2,121건이 새 정책에 매치됐고, 남은 13건은 경로만으로 차단할 수 없는 직접 노출 또는 관리자 claim이 증명되지 않은 요청입니다. 상세 근거는 `docs/references/team1-capture-defense-map.md`를 보십시오.
 
 승격 절차와 필드 의미는 `policy/README.md`를 보십시오.
 
@@ -131,6 +131,6 @@ lock이나 대기가 없습니다. HTTP method로 시작한 in-order flow만 최
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
-- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-15-finals-validity", "drop_capable_rules":7, "demotions":[], ...}`
+- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-15-full-corpus-hardening", "drop_capable_rules":9, "demotions":[], ...}`
 - 종료: SIGTERM에서 2초 내 정리 종료, 종료 코드 0
 - 비밀 비출력: `FLAG{...}`, API key, Bearer 토큰, raw payload가 로그에 나오지 않음을 `tests/test_advisory.py`의 `TestAuditRedaction`이 검증

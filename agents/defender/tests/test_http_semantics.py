@@ -49,6 +49,19 @@ class TestHttpRequestView(unittest.TestCase):
         self.assertTrue(view.cookie_claim_matches("session", "role", ("admin",)))
         self.assertTrue(view.cookie_claim_matches("session", "admin", ("true",)))
 
+    def test_observed_lenient_base64_noise_and_padding_are_canonicalized(self):
+        value = encoded({"role": "admin", "user": "guest"})
+        variants = (
+            value + "==",
+            value.rstrip("=") + "====",
+            value[:8] + "..*~.." + value[8:],
+            value[:12] + " " + value[12:],
+        )
+        for variant in variants:
+            with self.subTest(length=len(variant)):
+                view = parse_http_request(request(cookie=f"session={variant}"))
+                self.assertTrue(view.cookie_claim_matches("session", "role", ("admin",)))
+
     def test_guest_and_nested_claims_do_not_match_admin_role(self):
         for document in ({"role": "user"}, {"role": {"name": "admin"}}):
             with self.subTest(document=document):
