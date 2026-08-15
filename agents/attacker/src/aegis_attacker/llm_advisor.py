@@ -14,7 +14,8 @@ from .audit import Redactor
 from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
-MAX_LLM_CALLS_PER_ROUND = 80  # 라운드 LLM 호출 안전 상한. single-flight·결정론 우선으로 실사용은 훨씬 낮다.
+MAX_LLM_CALLS_PER_ROUND = 160  # 라운드 LLM 호출 안전 상한(주최 상한 200 이하). single-flight·결정론
+# 우선으로 실사용은 훨씬 낮지만(관측 ~52회), 어려운 표적을 더 공략할 여유를 남긴다.
 LLM_TIMEOUT = 20.0
 
 # 실패가 쌓이면 더 센 모델로 승급한다(cheap-first). 동점 시 토큰 비용이 적은 팀이
