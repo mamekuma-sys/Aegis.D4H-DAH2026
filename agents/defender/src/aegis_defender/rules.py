@@ -620,6 +620,18 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
         else:
             allow_rules.append(rule)
 
+    promotion_rank = {
+        PromotionState.ACTIVE: 0,
+        PromotionState.CANARY: 1,
+        PromotionState.SHADOW: 2,
+    }
+    for buckets in (
+        payload_buckets.values(), wildcard_buckets.values(),
+        http_json_buckets.values(), http_semantic_buckets.values(),
+    ):
+        for bucket in buckets:
+            bucket.sort(key=lambda rule: promotion_rank[rule.promotion_state])
+
     payload_matchers = {
         key: _compile_matcher(bucket) for key, bucket in payload_buckets.items()
     }

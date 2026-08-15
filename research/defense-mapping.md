@@ -105,11 +105,11 @@
 
 ## 2026-08-15 TEAM1 본선 관측 반영
 
-TEAM1의 63개 PCAP과 28개 로그에서 Broker가 전달하는 것과 같은 packet-local HTTP 증거로 L1 SSRF, L2 Base64-JSON 관리자 session 위조·loopback SSRF, L3 `app_meta` UNION SQLi를 확인했다. 원본과 분석 출력은 Git 제외 경로에 두고 tree hash, aggregate count, logical evidence와 정책 매핑만 `docs/references/team1-capture-defense-map.md`에 기록한다.
+TEAM1의 전체 104개 PCAP과 고유 로그 30개에서 Broker가 전달하는 것과 같은 packet-local HTTP 증거로 L1 SSRF·config traversal, L2 Base64-JSON 관리자 session 위조·loopback secret/registry SSRF, L3 `app_meta` UNION SQLi를 확인했다. 원본과 분석 출력은 Git 제외 경로에 두고 tree hash, aggregate count, logical evidence와 정책 매핑만 `docs/references/team1-capture-defense-map.md`에 기록한다.
 
-초기 관측으로 A 전략의 고신뢰 exact signature 네 개를 `ACTIVE`로 승인했다. L2 cookie는 raw Base64 문자열 11종을 나열하지 않고 bounded HTTP 의미 parser와 versioned rule 필드로 검사한다. parser는 애플리케이션 세션의 진위를 일반화하지 않으며, 정확히 관측된 `/admin`·`session`·`role=admin` 조합만 판정한다.
+전체 관측으로 A 전략의 고신뢰 request-line rule 네 개와 canonical HTTP 의미 rule 다섯 개를 `ACTIVE`로 승인했다. L2 cookie는 raw Base64 문자열을 나열하지 않고 bounded HTTP 의미 parser와 versioned rule 필드로 검사한다. parser는 관측된 lenient Base64 noise만 canonicalize하며, 정확히 `/admin`·`session`·`role=admin` 조합만 판정한다.
 
-63개 PCAP 재생에서 확인된 exploit-shape 4,814건을 모두 차단했고 공격이 없는 packet의 예상 밖 차단 그룹은 없었다. 이 결과는 offline packet replay이며 300ms 물리 송신 E2E 또는 공식 SLA 결과로 표현하지 않는다.
+104개 PCAP 재생에서 확인된 exploit-shape 14,388건을 모두 차단했고 공격이 없는 packet의 예상 밖 차단 그룹은 없었다. FLAG 응답 연계 2,134건 중 2,121건이 매치됐으며 직접 경로·불투명 session 13건은 SLA 오탐 위험 때문에 경로만으로 차단하지 않는다. 이 결과는 offline packet replay이며 300ms 물리 송신 E2E 또는 공식 SLA 결과로 표현하지 않는다.
 
 R17에서는 packet-local 문자열 규칙을 피하는 완전 target encoding, trailing-dot·대소문자 host,
 0-padding port, repeated slash, 중첩 SSRF, SQL control whitespace·block comment·bracket identifier와
@@ -124,7 +124,7 @@ flag 수나 공식 SLA 결과가 아니다. hot-path 회귀의 1,100 pkt/s profi
 
 ## DROP 영향이 있는 항목의 승인 조건
 
-위 S1~S5 및 파이프라인 매핑 표의 예선 개념 자체는 runtime `ACCEPT`/`DROP`에 직접 연결하지 않는다. 정상 트래픽 기준선과 packet-derived 충돌률은 metric·경보·Break 분석에만 쓰이며 runtime rollback이나 effective-policy 변경을 일으키지 않는다. 실제 DROP은 앞의 A~H 검토에서 채택한 A에 따라 본선 PCAP에서 성공 응답과 직접 연결되고 정상 negative·SLA 성격 회귀를 통과한 네 exact rule과 세 canonical HTTP 의미 rule에서 나온다.
+위 S1~S5 및 파이프라인 매핑 표의 예선 개념 자체는 runtime `ACCEPT`/`DROP`에 직접 연결하지 않는다. 정상 트래픽 기준선과 packet-derived 충돌률은 metric·경보·Break 분석에만 쓰이며 runtime rollback이나 effective-policy 변경을 일으키지 않는다. 실제 DROP은 앞의 A~H 검토에서 채택한 A에 따라 본선 PCAP에서 성공 응답과 직접 연결되고 정상 negative·SLA 성격 회귀를 통과한 네 request-line rule과 다섯 canonical HTTP 의미 rule에서 나온다.
 
 실제 `DROP` rule은 `FinalsPhase 1`의 관측 이후에 개별로 추가되며, 각 rule은 설계 §6.1의 6조건과 §10.2의 기록 항목을 모두 충족해야 한다. 최소 요건은 다음과 같다.
 

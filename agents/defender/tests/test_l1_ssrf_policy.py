@@ -21,9 +21,12 @@ _L3_RULE_ID = "sig-l3-app-meta-union-001"
 _L1_CANONICAL_RULE_ID = "http-l1-helper-secret-canonical-001"
 _L2_CANONICAL_RULE_ID = "http-l2-loopback-secret-canonical-001"
 _L3_CANONICAL_RULE_ID = "http-l3-app-meta-canonical-001"
+_L1_CONFIG_RULE_ID = "sig-l1-config-flag-traversal-001"
+_L2_REGISTRY_RULE_ID = "http-l2-loopback-registry-canonical-001"
 _ACTIVE_RULES = {
     _L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID,
     _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
+    _L1_CONFIG_RULE_ID, _L2_REGISTRY_RULE_ID,
 }
 
 _POSITIVE_PATHS = (
@@ -110,6 +113,25 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(decision.verdict, VERDICT_DROP)
         self.assertEqual(decision.rule_id, _L2_ADMIN_RULE_ID)
 
+    def test_l2_observed_lenient_base64_admin_cookie_drops(self):
+        encoded = base64.urlsafe_b64encode(
+            b'{"role":"admin","user":"guest"}'
+        ).decode("ascii")
+        variants = (
+            encoded + "==",
+            encoded.rstrip("=") + "====",
+            encoded[:8] + "..*~.." + encoded[8:],
+            encoded[:12] + " " + encoded[12:],
+        )
+        for variant in variants:
+            with self.subTest(length=len(variant)):
+                decision = self._decide(
+                    "/admin", dst_port=8083,
+                    headers=f"Cookie: session={variant}\r\n",
+                )
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, _L2_ADMIN_RULE_ID)
+
     def test_l2_guest_malformed_and_cookie_free_admin_requests_accept(self):
         guest = base64.b64encode(b'{"user":"guest","role":"user"}').decode("ascii")
         cases = ("", f"Cookie: session={guest}\r\n", "Cookie: session=not-base64!\r\n")
@@ -125,6 +147,56 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         decision = self._decide(path, dst_port=8083)
         self.assertEqual(decision.verdict, VERDICT_DROP)
         self.assertEqual(decision.rule_id, _L2_SSRF_RULE_ID)
+
+    def test_full_corpus_l1_alternate_host_and_config_traversal_drop(self):
+        alternate_hosts = (
+            "172.18.0.2", "0xac120002", "2886860802", "[::ffff:ac12:2]",
+        )
+        for index, host in enumerate(alternate_hosts):
+            path = f"/fetch?url=http%3A%2F%2F{host}%3A8080%2Fsecret"
+            with self.subTest(host=host):
+                decision = self._decide(path, pkt_id=600 + index)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, _L1_CANONICAL_RULE_ID)
+
+        traversal_paths = (
+            "/config?file=../../../../flag",
+            "/config?file=..%2f..%2f..%2f..%2fflag",
+            "/config?file=%252e%252e%252f%252e%252e%252fflag",
+        )
+        for index, path in enumerate(traversal_paths):
+            with self.subTest(path=path):
+                decision = self._decide(path, pkt_id=610 + index)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, _L1_CONFIG_RULE_ID)
+
+    def test_full_corpus_l2_loopback_registry_drops(self):
+        paths = (
+            "/fetch?host=http%3A%2F%2F127.1%3A8083%2Fregistry",
+            "/proxy?url=http%3A%2F%2F127.0.0.1%3A8083%2Fregistry",
+        )
+        for index, path in enumerate(paths):
+            with self.subTest(path=path):
+                decision = self._decide(path, dst_port=8083, pkt_id=620 + index)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, _L2_REGISTRY_RULE_ID)
+
+    def test_full_corpus_rule_negative_and_cross_layer_requests_accept(self):
+        cases = (
+            (8082, "/config?file=config.json"),
+            (8082, "/config?file=../settings.json"),
+            (8082, "/config?file=flag"),
+            (8082, "/fetch?url=http%3A%2F%2F172.18.0.2%3A8080%2Fhealth"),
+            (8083, "/fetch?url=http%3A%2F%2Fexample.invalid%3A8083%2Fregistry"),
+            (8084, "/config?file=../../../../flag"),
+        )
+        for index in range(100):
+            port, path = cases[index % len(cases)]
+            with self.subTest(index=index, port=port, path=path):
+                self.assertEqual(
+                    self._decide(path, dst_port=port, pkt_id=700 + index).verdict,
+                    VERDICT_ACCEPT,
+                )
 
     def test_l3_observed_app_meta_union_variants_drop(self):
         paths = (
@@ -160,8 +232,8 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
 
     def test_shipped_bundle_activates_only_observed_exact_rules(self):
         self.assertEqual(self.report.source, "active")
-        self.assertEqual(self.report.bundle_id, "defender-2026-08-15-finals-validity")
-        self.assertEqual(self.report.drop_capable_rules, 7)
+        self.assertEqual(self.report.bundle_id, "defender-2026-08-15-full-corpus-hardening")
+        self.assertEqual(self.report.drop_capable_rules, 9)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles, frozenset({"6/8082", "6/8083", "6/8084"})

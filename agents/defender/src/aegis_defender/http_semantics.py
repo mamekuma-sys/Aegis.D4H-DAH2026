@@ -23,6 +23,8 @@ MAX_JSON_TEXT = 512
 MAX_PERCENT_DECODE_ROUNDS = 3
 MAX_NESTED_URL_DEPTH = 3
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+_BASE64_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_-=")
+_OBSERVED_BASE64_NOISE = frozenset(b" \t.*~")
 
 
 def _normalize_scalar(value: object) -> str | None:
@@ -133,7 +135,18 @@ def _decode_json_cookie(value: bytes) -> tuple[tuple[str, str], ...] | None:
         return None
     try:
         value = urllib.parse.unquote_to_bytes(value)
-        padded = value + b"=" * ((4 - len(value) % 4) % 4)
+        # Finals P3 captures show the protected application using a lenient Base64
+        # decoder: redundant padding and a small observed set of ignored characters
+        # (space, dot, asterisk, tilde) still produced an admin JSON document. Mirror
+        # only that bounded alphabet before strict decoding; other bytes still fail.
+        if any(
+            byte not in _BASE64_BYTES and byte not in _OBSERVED_BASE64_NOISE
+            for byte in value
+        ):
+            return None
+        value = bytes(byte for byte in value if byte not in _OBSERVED_BASE64_NOISE)
+        unpadded = value.rstrip(b"=")
+        padded = unpadded + b"=" * ((4 - len(unpadded) % 4) % 4)
         decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
     except (ValueError, binascii.Error):
         return None

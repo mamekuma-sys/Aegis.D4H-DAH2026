@@ -25,7 +25,7 @@
 - 최초 관측은 가설·실행 근거만 면제된 typed bootstrap 계획으로 수행한다. 정확한 endpoint의 읽기 전용
   최소 요청도 공통 범위·비용 검증과 request charge 원자적 선예약을 통과하고, 일회용 reservation token을
   gateway가 소비해야 한다. 무계획·무과금 관측은 허용하지 않는다.
-- endpoint별 PCAP-confirmed fast path 10회, 배너 기반 결정론 후보 44회, bounded recon 목록,
+- endpoint별 PCAP-confirmed fast path 20회, 배너 기반 결정론 후보 44회, bounded recon 목록,
   planner turn 4의 개별 상한을 둔다. Round 전체 LLM 호출은 48회로 제한하고, 모든 요청은 공통
   rate limiter와 Round deadline을 통과한다.
   `accepted` flag·상한 소진·결정론적 no-progress/invalid-evidence면 해당 endpoint를 중단한다.
@@ -38,9 +38,9 @@ SHA-256 및 분석 방법을 공동 근거로 사용한다. 공격 런타임에�
 
 | 레이어 | 관측된 성공 형태 | 런타임 처리 |
 |---|---|---|
-| L1 / 8082 | `helper-box:8080/secret` SSRF와 trailing-dot 변형 | `/fetch`·`/proxy`의 관측 파라미터 조합을 먼저 실행 |
-| L2 / 8083 | Base64-JSON `session`의 `role=admin`, loopback `/secret` SSRF | 원본 cookie를 복사하지 않고 비민감 claim 구조를 재생성; loopback exact target도 실행 |
-| L3 / 8084 | `/product?id=... UNION SELECT ... FROM app_meta` | 성공 응답과 연결된 `app_meta` projection을 먼저 실행 |
+| L1 / 8082 | `helper-box:8080/secret`, Docker IP의 IPv4·정수·16진수·IPv4-mapped IPv6 표현, `/config?file=../../../../flag` | 관측된 SSRF target 표현과 exact config traversal을 먼저 실행 |
+| L2 / 8083 | Base64-JSON `session`의 `role=admin`, loopback `/secret`·`/registry` SSRF | 비민감 claim 구조와 관측된 느슨한 padding 한 종을 재생성; `127.0.0.1`·`127.1` exact target 실행 |
+| L3 / 8084 | `/product?id=... UNION SELECT ... FROM app_meta`, `/rc/status`·`/teleop/status`·`/debug`·`/admin` 직접 노출 | SQLi projection 뒤에 네 route를 읽기 전용으로 확인하고 flag가 있을 때만 제출 |
 | L4 / UGV | Phase 4 도메인과 L1~L4 누적 개방만 공식 확인, 취약 route 미관측 | UGV 이름만으로 endpoint를 추측하지 않음. 실제 root·probe 응답이 노출한 path·parameter만 공격 후보로 승격 |
 
 Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한다. 알려진 데모 포트는

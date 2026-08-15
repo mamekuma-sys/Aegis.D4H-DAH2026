@@ -3,8 +3,9 @@
 본선 공격 에이전트. 관측 → 계획 → 실행 → flag 제출의 누적 적응형 런타임.
 설계 근거: `docs/superpowers/specs/2026-08-11-attacker-runtime-design.md`
 
-TEAM1 PCAP에서 성공이 확인된 L1 `helper-box` SSRF, L2 관리자 session 위조·loopback
-SSRF, L3 `app_meta` SQLi는 일반 정찰보다 먼저 zero-token fast path로 실행합니다. Phase 4
+TEAM1 전체 104개 PCAP에서 성공이 확인된 L1 `helper-box`·대체 IP SSRF와 config traversal,
+L2 관리자 session 위조·loopback secret/registry SSRF, L3 `app_meta` SQLi와 직접 노출 route는
+endpoint당 최대 20회의 zero-token fast path로 일반 정찰보다 먼저 실행합니다. Phase 4
 UGV는 구체 인터페이스가 아직 관측되지 않았으므로 경로를 하드코딩하지 않습니다. root와 읽기 전용
 probe 응답이 실제로 노출한 route·parameter만 bounded discovery text로 다음 결정론 공격에 전달합니다.
 
@@ -18,6 +19,7 @@ R17 이후에는 응답 본문 전체 hash가 아니라 status 계열·route·fo
 재결속하고, 실패 endpoint는 30초 cooldown 또는 새 playbook generation 전에는 반복 소모하지 않습니다.
 LLM은 대표 서비스 solver에 집중하도록 Round 48회·endpoint 4 turn으로 제한하며, 완전 target encoding,
 중첩 SSRF, SQL 주석·제어 공백·bracket identifier 등 R17 관측 우회는 최대 6개 bounded 후보로 실행합니다.
+관측 fast path 역시 `TARGETS`를 그대로 순회하므로 특정 팀 주소를 코드에 고정하지 않습니다.
 
 표준 라이브러리만 사용한다(런타임 외부 의존성 없음).
 
