@@ -215,15 +215,22 @@ class TestLoadOrder(unittest.TestCase):
             self.assertEqual(compiled.drop_capable_rule_count, 0)
             self.assertEqual(report.errors, ("active:missing", "fallback:missing"))
 
-    def test_shipped_bundle_ships_no_drop_rules(self):
-        """현재 이미지는 어떤 패킷도 차단하지 않는다(§16.2 FinalsPhase 1 관측)."""
+    def test_shipped_bundle_enforces_l2_after_breach(self):
+        """Phase 2 L2 유출 이후 승격된 태세(§16.2 관측기 종료). 로드 시 강등 없이
+        차단 규칙이 켜지고, 정상 baseline과 zero-FP ACTIVE 규칙이 준비돼 있어야 한다.
+        """
         compiled, report = load_policy(_POLICY_DIR)
         self.assertEqual(report.source, "active")
-        self.assertGreater(report.rule_count, 0)
-        self.assertEqual(report.drop_capable_rules, 0)
-        self.assertEqual(compiled.baseline_profiles, frozenset())
-        for rule in compiled.rules_by_id.values():
-            self.assertIs(rule.promotion_state, PromotionState.SHADOW)
+        self.assertEqual(report.demotions, ())  # 승인·baseline·미만료 → 강등 없이 집행
+        self.assertGreater(report.drop_capable_rules, 0)
+        self.assertEqual(compiled.baseline_profiles, frozenset({"6/8083", "6/8084"}))
+        # zero-FP 서명은 ACTIVE, 중간 위험은 CANARY로만 승격한다.
+        active_ids = {r.rule_id for r in compiled.rules_by_id.values()
+                      if r.promotion_state is PromotionState.ACTIVE}
+        self.assertEqual(active_ids, {"sig-file-read-001", "sig-sensitive-path-001"})
+        # tcp 스캔 게이트와 flow-score는 본선 fixture 보정 전까지 SHADOW 유지.
+        for rid in ("gate-tcp-null-001", "score-flow-risk-001"):
+            self.assertIs(compiled.rules_by_id[rid].promotion_state, PromotionState.SHADOW)
 
     def test_shipped_fallback_is_valid(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -233,6 +240,64 @@ class TestLoadOrder(unittest.TestCase):
             _, report = load_policy(directory)
             self.assertEqual(report.source, "fallback")
             self.assertEqual(report.drop_capable_rules, 0)
+
+
+class TestShippedBundleEnforcement(unittest.TestCase):
+    """승격된 shipped bundle이 실제 hot path에서 공격은 DROP, 정상은 ACCEPT하는가."""
+
+    def setUp(self):
+        from aegis_defender.policy import HotPolicy
+        compiled, _ = load_policy(_POLICY_DIR)
+        self.policy = HotPolicy(policy=compiled, clock=lambda: 0.0)
+
+    def _verdict(self, payload, dst_port=8083, src_port=51234):
+        from aegis_defender.packet import parse_ip
+        from .fakes import ipv4_tcp
+        parsed = parse_ip(ipv4_tcp(payload, src_port=src_port, dst_port=dst_port))
+        return self.policy.decide(1, parsed, 0.0)
+
+    def test_active_rules_drop_attacks(self):
+        from aegis_defender.protocol import VERDICT_DROP
+        drops = [
+            b"GET /read?file=/etc/passwd HTTP/1.1\r\n\r\n",       # LFI (file-read)
+            b"GET /fetch?url=file:///flag HTTP/1.1\r\n\r\n",       # SSRF file:// (file-read)
+            b"GET /.git/config HTTP/1.1\r\n\r\n",                  # 소스 유출 (sensitive-path)
+            b"GET /flag HTTP/1.1\r\n\r\n",                          # flag 경로 (sensitive-path)
+        ]
+        for payload in drops:
+            self.assertEqual(self._verdict(payload).verdict, VERDICT_DROP, payload)
+
+    def test_normal_traffic_accepts(self):
+        from aegis_defender.protocol import VERDICT_ACCEPT
+        normal = [
+            b"GET / HTTP/1.1\r\nHost: team1.lig.internal\r\n\r\n",
+            b"GET /admin HTTP/1.1\r\nCookie: session=abc123\r\n\r\n",     # 정상 admin+쿠키
+            b"POST /login HTTP/1.1\r\n\r\nuser=bob&password=hunter2",     # 정상 로그인
+            b"GET /proxy?target=report HTTP/1.1\r\n\r\n",                 # 내부 IP 없는 정상 proxy
+        ]
+        for payload in normal:
+            self.assertEqual(self._verdict(payload).verdict, VERDICT_ACCEPT, payload)
+
+    def test_canary_rules_drop_a_fraction(self):
+        from aegis_defender.protocol import VERDICT_DROP
+        # CANARY는 flow별 결정론 bucket이므로 여러 flow 중 일부만 DROP된다(전부도 0도 아님).
+        drops = sum(
+            1 for i in range(200)
+            if self._verdict(b"GET /item?id=1 union select 1,2,3 HTTP/1.1\r\n\r\n",
+                             src_port=20000 + i).verdict == VERDICT_DROP
+        )
+        self.assertGreater(drops, 0)
+        self.assertLess(drops, 200)
+
+    def test_flag_egress_blocks_some_exfil_responses(self):
+        from aegis_defender.protocol import VERDICT_DROP
+        # 응답(src_port=8083)에 담긴 FLAG{...} 유출을 wildcard 규칙이 일부 flow에서 DROP.
+        drops = sum(
+            1 for i in range(200)
+            if self._verdict(b"HTTP/1.1 200 OK\r\n\r\nFLAG{leaked_%d}" % i,
+                             src_port=8083, dst_port=40000 + i).verdict == VERDICT_DROP
+        )
+        self.assertGreater(drops, 0)
 
 
 class TestRuntimeCannotMutatePolicy(unittest.TestCase):

@@ -247,7 +247,8 @@ class TestEndToEnd(unittest.TestCase):
         startup = [line for line in lines if line["event"] == "startup"]
         self.assertEqual(len(startup), 1)
         self.assertEqual(startup[0]["policy_source"], "active")
-        self.assertEqual(startup[0]["drop_capable_rules"], 0)
+        # Phase 2 L2 승격 이후 shipped bundle은 차단 규칙을 켠 채 기동한다.
+        self.assertEqual(startup[0]["drop_capable_rules"], 6)
         self.assertFalse(startup[0]["advisory_enabled"])
 
 
