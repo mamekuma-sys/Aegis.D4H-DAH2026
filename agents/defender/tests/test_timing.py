@@ -67,6 +67,15 @@ def build_policy(metrics):
         rule_document("r-cmd", pattern=";\\s*ls\\s|\\$\\(", category="command-injection", ports=[]),
         rule_document("r-tpl", pattern="\\{\\{|<%=", category="template-injection", ports=[]),
         rule_document("r-file", pattern="/etc/passwd|/proc/self/", category="file-read", ports=[]),
+        rule_document(
+            "r-l1-ssrf",
+            pattern=(
+                "helper-box(?::|%3a)8080(?:/|%2f)secret|"
+                "%68%65%6c%70%65%72%2d%62%6f%78%3a%38%30%38%30%2f%73%65%63%72%65%74"
+            ),
+            category="ssrf",
+            ports=[8082],
+        ),
     ]
     compiled, _ = compile_bundle(minimal_bundle(rules=rules, baseline_profiles=["6/80"]))
     return HotPolicy(policy=compiled, metrics=metrics)
@@ -77,14 +86,23 @@ def sample_frames(count: int) -> list[bytes]:
     frames = []
     for index in range(count):
         if index % 20 == 0:
-            payload = b"GET /a/../../etc/passwd HTTP/1.1\r\nHost: t\r\n\r\n"
+            payload = (
+                b"GET /fetch?url=http://helper-box:8080/secret HTTP/1.1\r\n"
+                b"Host: team1.lig.internal:8082\r\n\r\n"
+            )
+            dst_port = 8082
         else:
             payload = (
                 b"GET /index.html?page=" + str(index).encode() +
                 b" HTTP/1.1\r\nHost: team1.lig.internal\r\nUser-Agent: sla-check\r\n"
                 b"Accept: text/html\r\n\r\n" + b"B" * 200
             )
-        raw = ipv4_tcp(payload, src_port=1024 + (index % 4096))
+            dst_port = 80
+        raw = ipv4_tcp(
+            payload,
+            src_port=1024 + (index % 4096),
+            dst_port=dst_port,
+        )
         frames.append(packet_frame(index, raw))
     return frames
 

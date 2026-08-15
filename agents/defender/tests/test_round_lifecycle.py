@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from aegis_defender.config import (
     UNCONTRACTED_ENV_NAMES,
@@ -238,7 +239,8 @@ class TestEndToEnd(unittest.TestCase):
         self.assertGreaterEqual(len(harness.heartbeats()), 1)
 
     def test_startup_is_logged_with_policy_provenance(self):
-        harness = RuntimeHarness([])
+        with mock.patch("aegis_defender.rules.time.time", return_value=1786764000.0):
+            harness = RuntimeHarness([])
         harness.start()
         time.sleep(0.2)
         harness.stop()
@@ -247,7 +249,12 @@ class TestEndToEnd(unittest.TestCase):
         startup = [line for line in lines if line["event"] == "startup"]
         self.assertEqual(len(startup), 1)
         self.assertEqual(startup[0]["policy_source"], "active")
-        self.assertEqual(startup[0]["drop_capable_rules"], 0)
+        self.assertEqual(
+            startup[0]["bundle_id"],
+            "defender-2026-08-15-l1-ssrf-hotfix",
+        )
+        self.assertEqual(startup[0]["drop_capable_rules"], 1)
+        self.assertEqual(startup[0]["demotions"], [])
         self.assertFalse(startup[0]["advisory_enabled"])
 
 

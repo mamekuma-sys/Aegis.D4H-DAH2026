@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-13-shadow-baseline",
-  "generated_at": "2026-08-13T00:00:00Z",
-  "baseline_profiles": [],
+  "bundle_id": "defender-2026-08-15-l1-ssrf-hotfix",
+  "generated_at": "2026-08-15T03:20:00Z",
+  "baseline_profiles": ["6/8082"],
   "rules": [
     {
       "rule_id": "sig-path-traversal-001",
@@ -274,6 +274,31 @@
       "rollback_condition": "RiskModel 가중치가 본선 fixture로 보정되기 전에는 승격 금지",
       "owner_review": "pending",
       "lead_review": "pending"
+    },
+    {
+      "rule_id": "sig-l1-helper-secret-001",
+      "kind": "payload_regex",
+      "category": "ssrf",
+      "reason_code": "sig-l1-helper-secret",
+      "protocol": "tcp",
+      "ports": [8082],
+      "pattern": "helper-box(?::|%3a)8080(?:/|%2f)secret|%68%65%6c%70%65%72%2d%62%6f%78%3a%38%30%38%30%2f%73%65%63%72%65%74",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "p1-r4-l1-helper-ssrf",
+      "promoted_in_bundle": "defender-2026-08-15-l1-ssrf-hotfix",
+      "parser_version": 1,
+      "profile_scope": ["6/8082"],
+      "evidence_id": "PCAP-P1-R4-L1-20260815-030005",
+      "positive_fixture_id": "P1-R4-L1-HELPER-SECRET-POS-001",
+      "negative_fixture_id": "P1-R1-L1-HTTP-NEG-001",
+      "sla_fixture_id": "P1-R1-L1-SLA-100-001",
+      "expires_at": "2026-08-15T10:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 negative fixture가 하나라도 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
     }
   ],
   "alert_profiles": [

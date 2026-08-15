@@ -215,15 +215,20 @@ class TestLoadOrder(unittest.TestCase):
             self.assertEqual(compiled.drop_capable_rule_count, 0)
             self.assertEqual(report.errors, ("active:missing", "fallback:missing"))
 
-    def test_shipped_bundle_ships_no_drop_rules(self):
-        """현재 이미지는 어떤 패킷도 차단하지 않는다(§16.2 FinalsPhase 1 관측)."""
-        compiled, report = load_policy(_POLICY_DIR)
+    def test_shipped_bundle_activates_only_reviewed_l1_hotfix(self):
+        compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertGreater(report.rule_count, 0)
-        self.assertEqual(report.drop_capable_rules, 0)
-        self.assertEqual(compiled.baseline_profiles, frozenset())
-        for rule in compiled.rules_by_id.values():
-            self.assertIs(rule.promotion_state, PromotionState.SHADOW)
+        self.assertEqual(report.bundle_id, "defender-2026-08-15-l1-ssrf-hotfix")
+        self.assertEqual(report.drop_capable_rules, 1)
+        self.assertEqual(report.demotions, ())
+        self.assertEqual(compiled.baseline_profiles, frozenset({"6/8082"}))
+        for rule_id, rule in compiled.rules_by_id.items():
+            expected = (
+                PromotionState.ACTIVE
+                if rule_id == "sig-l1-helper-secret-001"
+                else PromotionState.SHADOW
+            )
+            self.assertIs(rule.promotion_state, expected)
 
     def test_shipped_fallback_is_valid(self):
         with tempfile.TemporaryDirectory() as directory:
