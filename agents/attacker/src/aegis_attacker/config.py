@@ -35,8 +35,8 @@ class AttackerConfig:
 
     @property
     def can_attack(self) -> bool:
-        """LLM 키와 표적이 있어야 공격을 수행한다. 없으면 inert(§9.13)."""
-        return bool(self.llm_api_key and self.targets and self.ports)
+        """표적만 있으면 결정론 정찰을 수행한다. LLM 키 부재는 inert가 아니다(§9.12)."""
+        return bool(self.targets and self.ports)
 
     @property
     def can_submit(self) -> bool:

@@ -50,9 +50,10 @@ class TestLoadConfig(unittest.TestCase):
         self.assertFalse(cfg.can_submit)
         self.assertEqual(cfg.llm_base_url, DEFAULT_LLM_BASE_URL)
 
-    def test_no_llm_key_cannot_attack(self):
+    def test_no_llm_key_can_still_attack(self):
         cfg = load_config({"TARGETS": "a", "PORTS": "80"})
-        self.assertFalse(cfg.can_attack)  # 키 없으면 inert
+        self.assertTrue(cfg.can_attack)
+        self.assertEqual(cfg.llm_api_key, "")
 
     def test_duplicate_targets_ports_deduped(self):
         cfg = load_config({"TARGETS": "a,a,b", "PORTS": "80,80", "LLM_API_KEY": "k"})

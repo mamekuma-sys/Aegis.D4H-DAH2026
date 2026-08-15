@@ -336,7 +336,7 @@ class AttackerRuntime:
                        ports=len(self.config.ports), can_attack=self.config.can_attack,
                        can_submit=self.config.can_submit, model=self.config.llm_model)
         if not self.config.can_attack:
-            self.audit.log("inert", reason="LLM 키 또는 표적 없음 — fail-open, 공격 없음")
+            self.audit.log("inert", reason="표적 없음 — fail-open, 공격 없음")
             return
         if not self.config.can_submit:
             self.audit.log("warn", reason="제출 설정 없음 — flag 획득해도 제출 불가")
