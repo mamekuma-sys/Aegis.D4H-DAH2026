@@ -15,11 +15,11 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ## 현재 상태
 
-**모든 rule이 `SHADOW`이고 `baseline_profiles`가 비어 있습니다.** 즉 현재 이미지는 어떤 패킷도 차단하지 않습니다.
+`baseline_profiles`에는 실측 정상 profile `6/8082`가 등록되어 있습니다. `sig-l1-helper-secret-001`만 `ACTIVE`이고 기존 휴리스틱 11개는 `SHADOW`입니다.
 
-의도된 상태입니다. §16.2에 따라 `FinalsPhase 1`의 2개 Round는 관측에 씁니다. 정상 트래픽 baseline과 포트 인벤토리를 확보하기 전에 켠 DROP rule은 오탐 여부조차 판정할 수 없습니다. 시그니처 목록(§9.3)은 **가설**이며, parser가 field를 실제로 추출할 수 있음이 fixture로 증명되고 정상 negative fixture를 통과한 뒤에만 차단 rule이 됩니다.
+활성 rule은 TCP/8082 payload에서 관측된 L1 SSRF 대상 `helper-box:8080/secret`의 plain·percent-encoded 표현만 차단합니다. `/fetch` 자체, User-Agent, NAT source IP, 다른 내부 URL은 차단하지 않습니다. 이 범위는 공격 positive, Round 1 정상 negative, 100회 SLA 성격 fixture로 검증합니다.
 
-로더가 이를 구조적으로도 강제합니다 — `baseline_profiles`가 비어 있으면 차단 권한을 가진 rule을 기동 시 전부 `SHADOW`로 강등합니다(§15.6 마지막 항목).
+로더는 안전 조건을 구조적으로 강제합니다. `baseline_profiles`가 비거나 rule이 만료되거나 두 review 중 하나라도 미승인이면 차단 권한을 가진 rule을 기동 시 `SHADOW`로 강등합니다(§15.6 마지막 항목).
 
 ## 필드
 

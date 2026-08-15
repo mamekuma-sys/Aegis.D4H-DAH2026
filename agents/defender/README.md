@@ -72,9 +72,9 @@ agents/defender/
 
 ## 현재 정책 상태
 
-**모든 rule이 `SHADOW`이고 `baseline_profiles`가 비어 있어 현재 이미지는 어떤 패킷도 차단하지 않습니다.**
+관측된 정상 profile `6/8082`를 baseline으로 등록했고, 실측 L1 SSRF 대상 `helper-box:8080/secret`만 탐지하는 `sig-l1-helper-secret-001`이 유일한 `ACTIVE` rule입니다. 기존 휴리스틱 11개는 계속 `SHADOW`입니다.
 
-의도된 상태입니다. §16.2에 따라 `FinalsPhase 1`의 2개 Round는 관측에 씁니다. 정상 트래픽 baseline과 포트 인벤토리를 확보하기 전에 켠 DROP rule은 오탐 여부조차 판정할 수 없습니다. 로더가 이를 구조적으로도 강제합니다 — `baseline_profiles`가 비면 차단 권한을 가진 rule을 기동 시 전부 `SHADOW`로 강등합니다.
+이 rule은 TCP 목적지 포트 `8082`에서 plain·percent-encoded 대상 문자열만 차단합니다. `/fetch` 자체, User-Agent, NAT source IP, 다른 내부 URL은 차단 근거로 쓰지 않으므로 정상 요청은 계속 통과합니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
 
 승격 절차와 필드 의미는 `policy/README.md`를 보십시오.
 
@@ -123,6 +123,6 @@ $env:PYTHONPATH="src"; python -m aegis_defender
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
-- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "drop_capable_rules":0, ...}`
+- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-15-l1-ssrf-hotfix", "drop_capable_rules":1, "demotions":[], ...}`
 - 종료: SIGTERM에서 2초 내 정리 종료, 종료 코드 0
 - 비밀 비출력: `FLAG{...}`, API key, Bearer 토큰, raw payload가 로그에 나오지 않음을 `tests/test_advisory.py`의 `TestAuditRedaction`이 검증
