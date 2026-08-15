@@ -100,9 +100,9 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(arena.submits, [])
 
     def test_captures_and_submits_flag(self):
-        # flag는 LLM exploit 경로(/fetch)에서만 — recon 경로로는 안 나오게 해 LLM 경로를 검증
+        # flag는 query가 있는 /fetch? 경로에서만 — 기본 recon GET /fetch 와 구분한다
         arena = FakeArena("URL Fetcher — GET /fetch?url=<url>", "/fetch?url=x", "FLAG{ssrf_win}",
-                          flag_when=lambda full: full.startswith("/fetch"))
+                          flag_when=lambda full: full.startswith("/fetch?"))
         rt = make_runtime(arena)
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 1)
@@ -110,6 +110,10 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(arena.submits[0]["flag"], "FLAG{ssrf_win}")
         self.assertEqual(arena.submits[0]["token"], "tok-team1")
         self.assertGreater(arena.llm_calls, 0)  # LLM exploit 경로를 실제로 탐
+
+    def test_probe_list_includes_fetch(self):
+        from aegis_attacker.recon import COMMON_PROBE_PATHS
+        self.assertIn("/fetch", COMMON_PROBE_PATHS)
 
     def test_recon_captures_without_llm(self):
         # 흔한 경로 /flag 에서 flag → recon이 LLM 토큰 없이 획득
@@ -236,7 +240,7 @@ class TestRuntimeResilience(unittest.TestCase):
     def test_budget_resets_between_rounds(self):
         # LLM exploit 경로를 실제로 타서 라운드마다 llm_calls가 증가하게 한다
         arena = FakeArena("URL Fetcher — GET /fetch?url=<url>", "/fetch?url=x", "FLAG{win}",
-                          flag_when=lambda full: full.startswith("/fetch"))
+                          flag_when=lambda full: full.startswith("/fetch?"))
         rt = make_runtime(arena)
         rt.run_once()
         after_first = rt.budget.llm_calls
@@ -276,7 +280,7 @@ class MultiPortArena:
         full = parts.path + (("?" + parts.query) if parts.query else "")
         if parts.path == "/" and not parts.query:
             return HttpResponse(200, self.banner)
-        if full.startswith(self.exploit_prefix):
+        if full.startswith(self.exploit_prefix) and "?" in full:
             return HttpResponse(200, "FLAG{port_%s}" % parts.port)
         return HttpResponse(200, "no flag yet")
 
@@ -346,14 +350,29 @@ class TestParallelAttack(unittest.TestCase):
 
 
 class TestRuntimeInert(unittest.TestCase):
-    def test_inert_without_llm_key_returns(self):
-        cfg = AttackerConfig(targets=("t2",), ports=(8082,), llm_api_key="")
+    def test_inert_without_targets_returns(self):
+        cfg = AttackerConfig(targets=(), ports=(), llm_api_key="sk")
         logs = []
         from aegis_attacker.audit import AuditLogger
         rt = AttackerRuntime(cfg, http=FakeArena("b", "/x", "f"),
                              audit=AuditLogger(sink=logs.append))
-        rt.run_forever()  # can_attack False → 즉시 반환(무한 루프 아님)
+        rt.run_forever()
         self.assertTrue(any("inert" in line for line in logs))
+
+    def test_recon_fetch_without_llm_key(self):
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8082,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="",
+        )
+        arena = FakeArena("URL Fetcher", "/unused", "FLAG{fetch_win}",
+                          flag_when=lambda full: full == "/fetch")
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt))
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{fetch_win}")
+        self.assertEqual(arena.llm_calls, 0)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ COMMON_PROBE_PATHS = (
     "/robots.txt",
     "/.git/config",
     "/registry",
+    "/fetch",
     "/api/flag",
     "/status",
     "/debug",
