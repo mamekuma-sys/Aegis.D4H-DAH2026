@@ -55,7 +55,7 @@ token과 한 팀 L1/L2의 accepted flag 두 건이 기록됐다. 원문 flag는 
 
 R17 성공 우회는 완전 request-target encoding·중첩/이중 인코딩 SSRF·trailing-dot 및 대소문자
 host·0-padding port·repeated slash, `/admin?`·중복/분할 Cookie, SQL control whitespace·block
-comment·`[app_meta]`였다. bundle `defender-2026-08-15-r17-stream-canonical`은 기존 exact rule 네
+comment·`[app_meta]`였다. bundle `defender-2026-08-15-finals-validity`는 기존 exact rule 네
 개와 canonical HTTP 의미 rule 세 개를 함께 사용한다.
 
 세 R17 PCAP을 순서대로 재생한 packet verdict 결과는 L1 549, L2 625, L3 217 DROP이다. 관측된
@@ -65,7 +65,7 @@ comment·`[app_meta]`였다. bundle `defender-2026-08-15-r17-stream-canonical`�
 ## 운영 경계
 
 - 기존 및 원격에서 병합된 휴리스틱 13개는 계속 `SHADOW`다.
-- ACTIVE rule 일곱 개는 protocol·port·request shape·logical evidence에 묶고 `2026-08-16T00:00:00Z`에 만료한다.
+- ACTIVE rule 일곱 개는 protocol·port·request shape·logical evidence에 묶고 `2026-09-01T00:00:00Z`에 만료한다. 리허설 직후 bundle은 다음 주 시각에 일곱 규칙이 그대로 ACTIVE임을 로더 회귀로 검증한다.
 - runtime은 packet-derived 지표로 rule을 승격·rollback하지 않는다.
 - 실제 SLA 저하 또는 negative fixture 실패 시 직전 검증 이미지로 되돌린다.
 - bounded HTTP header stitching은 연결했지만 일반 TCP/body 재조립과 물리 송신 E2E 계측은 범위 밖이다.

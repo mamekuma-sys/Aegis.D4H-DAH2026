@@ -15,7 +15,7 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ## 현재 상태
 
-`baseline_profiles`에는 실측 profile `6/8082`, `6/8083`, `6/8084`가 등록되어 있습니다. TEAM1의 66개 PCAP에서 flag 응답과 연결된 공격에 한정한 rule 일곱 개가 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 `SHADOW`입니다. 기존 exact rule 네 개에 R17 우회를 의미적으로 묶는 canonical rule 세 개가 추가됐습니다.
+현재 bundle은 `defender-2026-08-15-finals-validity`입니다. `baseline_profiles`에는 실측 profile `6/8082`, `6/8083`, `6/8084`가 등록되어 있습니다. TEAM1의 66개 PCAP에서 flag 응답과 연결된 공격에 한정한 rule 일곱 개가 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 `SHADOW`입니다. 기존 exact rule 네 개에 R17 우회를 의미적으로 묶는 canonical rule 세 개가 추가됐습니다. ACTIVE 일곱 규칙은 다음 주 본선 전체를 포함하도록 `2026-09-01T00:00:00Z`에 만료하며, 그 이후에는 로더가 자동으로 `SHADOW`로 강등합니다.
 
 활성 범위는 L1 `helper-box[.]?:8080/secret` SSRF, L2 Base64-JSON `session`의 관리자 claim 위조와 loopback secret SSRF, L3 `app_meta` 대상 UNION SQLi입니다. payload 정규식은 HTTP request line에만 적용하며 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. 분석 근거와 전체 PCAP 재생 결과는 `docs/references/team1-capture-defense-map.md`에 있습니다.
 

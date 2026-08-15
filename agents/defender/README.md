@@ -131,6 +131,6 @@ lock이나 대기가 없습니다. HTTP method로 시작한 in-order flow만 최
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
-- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-15-r17-stream-canonical", "drop_capable_rules":7, "demotions":[], ...}`
+- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-15-finals-validity", "drop_capable_rules":7, "demotions":[], ...}`
 - 종료: SIGTERM에서 2초 내 정리 종료, 종료 코드 0
 - 비밀 비출력: `FLAG{...}`, API key, Bearer 토큰, raw payload가 로그에 나오지 않음을 `tests/test_advisory.py`의 `TestAuditRedaction`이 검증

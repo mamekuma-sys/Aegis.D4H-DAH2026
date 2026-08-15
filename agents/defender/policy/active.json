@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-15-r17-stream-canonical",
-  "generated_at": "2026-08-15T12:10:00Z",
+  "bundle_id": "defender-2026-08-15-finals-validity",
+  "generated_at": "2026-08-15T13:09:02Z",
   "baseline_profiles": ["6/8082", "6/8083", "6/8084"],
   "rules": [
     {
@@ -345,7 +345,7 @@
       "positive_fixture_id": "TEAM1-L1-HELPER-SECRET-VARIANTS-POS-002",
       "negative_fixture_id": "TEAM1-L1-HTTP-NEG-002",
       "sla_fixture_id": "TEAM1-L1-SLA-100-002",
-      "expires_at": "2026-08-16T00:00:00Z",
+      "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 negative fixture가 하나라도 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
@@ -374,7 +374,7 @@
       "positive_fixture_id": "TEAM1-R17-L1-CANONICAL-POS-001",
       "negative_fixture_id": "TEAM1-R17-L1-CANONICAL-NEG-001",
       "sla_fixture_id": "TEAM1-R17-L1-SLA-100-001",
-      "expires_at": "2026-08-16T00:00:00Z",
+      "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 non-secret fetch fixture가 하나라도 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
@@ -402,7 +402,7 @@
       "positive_fixture_id": "TEAM1-L2-ADMIN-COOKIE-11-VARIANTS-POS-001",
       "negative_fixture_id": "TEAM1-L2-GUEST-COOKIE-NEG-001",
       "sla_fixture_id": "TEAM1-L2-SLA-100-001",
-      "expires_at": "2026-08-16T00:00:00Z",
+      "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 guest session 또는 cookie 없는 /admin negative fixture가 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
@@ -427,7 +427,7 @@
       "positive_fixture_id": "TEAM1-L2-LOOPBACK-SECRET-POS-001",
       "negative_fixture_id": "TEAM1-L2-LOOPBACK-REGISTRY-NEG-001",
       "sla_fixture_id": "TEAM1-L2-SLA-100-001",
-      "expires_at": "2026-08-16T00:00:00Z",
+      "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 loopback의 non-secret 정상 경로 fixture가 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
@@ -456,7 +456,7 @@
       "positive_fixture_id": "TEAM1-R17-L2-STREAM-CANONICAL-POS-001",
       "negative_fixture_id": "TEAM1-R17-L2-STREAM-CANONICAL-NEG-001",
       "sla_fixture_id": "TEAM1-R17-L2-SLA-100-001",
-      "expires_at": "2026-08-16T00:00:00Z",
+      "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 loopback non-secret fixture가 하나라도 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
@@ -481,7 +481,7 @@
       "positive_fixture_id": "TEAM1-L3-APP-META-UNION-POS-001",
       "negative_fixture_id": "TEAM1-L3-PRODUCT-NEG-001",
       "sla_fixture_id": "TEAM1-L3-SLA-100-001",
-      "expires_at": "2026-08-16T00:00:00Z",
+      "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 product query fixture가 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
@@ -508,7 +508,7 @@
       "positive_fixture_id": "TEAM1-R17-L3-CANONICAL-POS-001",
       "negative_fixture_id": "TEAM1-R17-L3-CANONICAL-NEG-001",
       "sla_fixture_id": "TEAM1-R17-L3-SLA-100-001",
-      "expires_at": "2026-08-16T00:00:00Z",
+      "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 product query fixture가 하나라도 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
