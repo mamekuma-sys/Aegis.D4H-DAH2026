@@ -485,6 +485,63 @@ class TestHeaderExploitReuse(unittest.TestCase):
         self.assertEqual(arena.llm_calls, 1)                   # 헤더 포함 playbook 재사용 → LLM 1회
 
 
+class RateLimitedSsrfArena:
+    """표적이 N개 요청 후 응답을 끊는다(rate-limit 차단 모사).
+
+    SSRF 피벗이 base sweep 끝이 아니라 /registry 직후 즉시 돌아야 차단 전에 flag를 잡는다.
+    """
+
+    def __init__(self, port, block_after):
+        import base64
+        self.port = port
+        self.block_after = block_after
+        self.target_reqs = 0
+        self.submits = []
+        self.llm_calls = 0
+        self._flag_url = "http://127.0.0.1:%d/vault" % port
+        self._registry_b64 = base64.b64encode(self._flag_url.encode()).decode()
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        from urllib.parse import urlsplit, parse_qs, unquote
+        if url.endswith("/submit"):
+            self.submits.append(json.loads(body))
+            return HttpResponse(200, json.dumps({"status": "accepted"}))
+        if "/v1/chat/completions" in url:
+            self.llm_calls += 1
+            return HttpResponse(500, "no llm")
+        parts = urlsplit(url)
+        self.target_reqs += 1
+        if self.target_reqs > self.block_after:
+            return HttpResponse(0, "")  # 표적이 차단(무응답)
+        if parts.path == "/" and not parts.query:
+            return HttpResponse(200, "URL Fetcher — GET /fetch?url=<url>", {})
+        if parts.path == "/fetch":
+            target = unquote((parse_qs(parts.query).get("url") or [""])[0])
+            if target.endswith("/registry"):
+                return HttpResponse(200, "index: " + self._registry_b64, {})
+            if target == self._flag_url:
+                return HttpResponse(200, "FLAG{early_pivot_%d}" % self.port, {})
+            return HttpResponse(200, "unknown", {})
+        return HttpResponse(200, "no flag", {})
+
+
+class TestPivotBeforeRateLimit(unittest.TestCase):
+    def test_pivot_fires_before_target_blocks(self):
+        # 표적이 20 요청 후 차단. 피벗이 /registry 직후 즉시 돌아야 그 전에 flag를 잡는다.
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8083,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="",
+        )
+        arena = RateLimitedSsrfArena(port=8083, block_after=20)
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt))
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{early_pivot_8083}")
+        self.assertEqual(arena.llm_calls, 0)
+
+
 class TestRuntimeInert(unittest.TestCase):
     def test_inert_without_targets_returns(self):
         cfg = AttackerConfig(targets=(), ports=(), llm_api_key="sk")

