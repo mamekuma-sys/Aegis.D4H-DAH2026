@@ -19,6 +19,7 @@ from .exploits import (
     auth_tamper_attempts,
     build_attempts,
     extract_internal_urls,
+    observed_attempts,
     ssrf_pivot_attempts,
     tamper_token,
 )
@@ -34,7 +35,7 @@ from .models import (
     VulnClass,
 )
 from .observation import EvidenceFactory, Observer, UrllibHttp
-from .phase_policy import FairScheduler
+from .phase_policy import FairScheduler, cumulative_endpoint_order
 from .planner import EndpointState, Planner
 from .playbook import Playbook
 from .profiles import suggest_vuln_classes
@@ -50,6 +51,8 @@ MAX_EVASION_VARIANTS = 3
 PLAN_TTL = 30.0
 EVIDENCE_TTL = 90.0
 ROUND_DURATION = 20 * 60.0  # Round 20분 → 제출 재시도 경계
+MAX_DISCOVERY_TEXT = 4096
+MAX_DISCOVERY_BODY = 512
 
 
 class AttackerRuntime:
@@ -189,7 +192,13 @@ class AttackerRuntime:
 
     # ---- 결정론적 사전 정찰 (LLM 전, 토큰 0) ----
 
-    def _recon(self, endpoint, evidence_ref) -> bool:
+    def _recon(self, endpoint, evidence_ref) -> tuple:
+        """읽기 전용 probe 응답을 bounded discovery text로 돌려준다.
+
+        L4/UGV의 구체 route는 사전 가정하지 않는다. `/status`·`robots.txt` 등 실제 응답이
+        노출한 path·parameter만 다음 결정론 공격의 배너 근거로 사용한다.
+        """
+        discovery = []
         for path in COMMON_PROBE_PATHS:
             now = self.clock()
             plan = ExecutionPlan(
@@ -207,9 +216,12 @@ class AttackerRuntime:
             self._report.record_request()
             if self._process_flags(result.body):
                 self.audit.log("hit", target=endpoint.key(), path=path, reason="recon")
-                return True
+                return True, "", result.observation.evidence_ref
             evidence_ref = result.observation.evidence_ref  # 다음 프로브용 신선한 증거
-        return False
+            body = (result.body or "").strip()
+            if body:
+                discovery.append(body[:MAX_DISCOVERY_BODY])
+        return False, "\n".join(discovery)[:MAX_DISCOVERY_TEXT], evidence_ref
 
     def _run_bound_exploit(self, endpoint, args, evidence_ref, reason):
         """비밀 없는 exploit 형태(method·path)를 READ_ONLY 계획으로 실행한다(playbook 재사용용)."""
@@ -277,7 +289,8 @@ class AttackerRuntime:
         return None, None
 
     def _deterministic_exploit(self, endpoint, banner, banner_fp,
-                               banner_headers, evidence_ref) -> bool:
+                               banner_headers, evidence_ref, attempts=None,
+                               attempted_keys=None, include_cookie_tamper=True) -> bool:
         """배너 힌트로 4개 취약 부류(SSRF·LFI·AUTH·SQLI)를 토큰 0으로 시도한다.
 
         SSRF 2단 피벗은 base 시도 직후 **즉시** 실행한다. 승리 경로(예: /registry가 흘린
@@ -286,12 +299,23 @@ class AttackerRuntime:
         성공 형태는 playbook에 기록해 같은 배너의 다른 표적에 재사용한다.
         """
         hints = suggest_vuln_classes(banner)
-        attempts = build_attempts(banner, hints, endpoint.port)
+        attempts = (build_attempts(banner, hints, endpoint.port)
+                    if attempts is None else list(attempts))
+        attempted_keys = attempted_keys if attempted_keys is not None else set()
         cookie_name, cookie_val = self._cookie_from_headers(banner_headers)
         pivoted = set()            # 이미 피벗한 내부 URL(중복 방지)
 
         def run(attempt) -> bool:
             nonlocal evidence_ref, cookie_name, cookie_val
+            attempt_key = (
+                attempt.method,
+                attempt.path,
+                tuple(sorted(attempt.headers.items())),
+                attempt.body,
+            )
+            if attempt_key in attempted_keys:
+                return False
+            attempted_keys.add(attempt_key)
             result, captured = self._execute_attempt(endpoint, attempt, evidence_ref)
             if captured:
                 self._playbook.record(banner_fp, {
@@ -325,7 +349,7 @@ class AttackerRuntime:
                 return True
 
         # AUTH 세션 변조 — 노출된 토큰을 관리자 권한으로 올려 재전송한다
-        if cookie_name and cookie_val:
+        if include_cookie_tamper and cookie_name and cookie_val:
             tokens = tamper_token(cookie_val)
             for attempt in auth_tamper_attempts(cookie_name, tokens):
                 if run(attempt):
@@ -349,13 +373,33 @@ class AttackerRuntime:
             self.audit.log("hit", target=endpoint.key(), turn=0, path="/", reason="banner")
             return True
 
-        # 결정론적 사전 정찰 — 쉬운 flag를 LLM 토큰 없이
-        if self._recon(endpoint, current_evidence):
+        attempted_keys = set()
+
+        # TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 일반 정찰보다 먼저 실행한다.
+        confirmed = observed_attempts(endpoint.port)
+        if confirmed and self._deterministic_exploit(
+                endpoint, banner, banner_fp, resp.headers, current_evidence,
+                attempts=confirmed, attempted_keys=attempted_keys,
+                include_cookie_tamper=False):
             return True
 
-        # 결정론적 exploit 엔진 — 알려진 4개 부류 체인을 LLM 토큰 0으로 시도(LLM 전)
-        if self._deterministic_exploit(endpoint, banner, banner_fp,
-                                       resp.headers, current_evidence):
+        # root 배너가 취약 부류를 직접 노출하면 정찰 sweep보다 먼저 zero-token 공격한다.
+        root_hints = suggest_vuln_classes(banner)
+        if root_hints != [VulnClass.OTHER] and self._deterministic_exploit(
+                endpoint, banner, banner_fp, resp.headers, current_evidence,
+                attempted_keys=attempted_keys):
+            return True
+
+        # L4/UGV를 포함한 미지 인터페이스는 실제 probe 응답에서 route를 발견한 뒤에만 공격한다.
+        captured, discovery, current_evidence = self._recon(endpoint, current_evidence)
+        if captured:
+            return True
+        observed_banner = "\n".join(part for part in (banner, discovery) if part)
+
+        # 결정론적 exploit 엔진 — 관측된 route·parameter를 우선해 LLM 전에 실행한다.
+        if self._deterministic_exploit(
+                endpoint, observed_banner, banner_fp, resp.headers, current_evidence,
+                attempted_keys=attempted_keys):
             return True
 
         # single-flight + 재사용: 같은 배너(같은 이미지)는 한 표적만 LLM으로 풀고, 나머지는
@@ -388,7 +432,7 @@ class AttackerRuntime:
             while not self._planner.should_stop(state):
                 state.turn += 1
                 # 승급 없이 저비용 기본 모델 고정 — 토큰 비용을 낮춰 동점 우위(제22조).
-                plan = self._planner.plan_next(endpoint, banner, feedback, state,
+                plan = self._planner.plan_next(endpoint, observed_banner, feedback, state,
                                                model=self.config.llm_model)
                 if plan is None:
                     break
@@ -443,7 +487,7 @@ class AttackerRuntime:
         """
         if not self._round_active:
             raise RuntimeError("start_round() must be called before run_cycle()")
-        endpoints = self.config.endpoints()
+        endpoints = cumulative_endpoint_order(self.config.endpoints())
         workers = min(self.config.concurrency, max(1, len(endpoints)))
         if workers <= 1:
             # 순차(결정론) — 공정 스케줄러로 순회

@@ -24,7 +24,7 @@ scripts/              공통 검증 및 실행 도구
 
 ## 현재 단계
 
-공격·방어 런타임, 독립 Dockerfile, 공식 스켈레톤 Compose override와 단위·계약 테스트가 구현되어 있습니다. 방어 정책은 TEAM1 본선 PCAP에서 직접 확인한 L1~L3 exploit 네 종류만 `ACTIVE`로 집행하고 나머지 휴리스틱은 `SHADOW`로 유지합니다. flow 재조립, 실제 Broker verdict 송신 E2E 계측과 worker watchdog은 후속 설계·검증 항목입니다.
+공격·방어 런타임, 독립 Dockerfile, 공식 스켈레톤 Compose override와 단위·계약 테스트가 구현되어 있습니다. 공격자는 TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 zero-token fast path로 우선 실행하고, Phase 4 UGV는 실제 응답에서 발견한 route만 공격하며 L1~L4를 누적 순회합니다. 방어 정책은 같은 PCAP에서 직접 확인한 L1~L3 exploit 네 종류만 `ACTIVE`로 집행하고 나머지 휴리스틱은 `SHADOW`로 유지합니다. flow 재조립, 실제 Broker verdict 송신 E2E 계측과 worker watchdog은 후속 설계·검증 항목입니다.
 
 ## 처음 시작하기
 

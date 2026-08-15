@@ -3,6 +3,15 @@
 본선 공격 에이전트. 관측 → 계획 → 실행 → flag 제출의 누적 적응형 런타임.
 설계 근거: `docs/superpowers/specs/2026-08-11-attacker-runtime-design.md`
 
+TEAM1 PCAP에서 성공이 확인된 L1 `helper-box` SSRF, L2 관리자 session 위조·loopback
+SSRF, L3 `app_meta` SQLi는 일반 정찰보다 먼저 zero-token fast path로 실행합니다. Phase 4
+UGV는 구체 인터페이스가 아직 관측되지 않았으므로 경로를 하드코딩하지 않습니다. root와 읽기 전용
+probe 응답이 실제로 노출한 route·parameter만 bounded discovery text로 다음 결정론 공격에 전달합니다.
+
+공식 `PORTS`에 L1~L4가 함께 들어오면 알려진 데모 포트는 `L4→L1→L2→L3` wave로 섞습니다.
+새 UGV 레이어를 초반에 시작하면서도 이전 세 레이어를 모두 같은 wave에 유지합니다. 데모 포트가
+아닌 경우 운영 측 입력 순서를 그대로 보존합니다.
+
 표준 라이브러리만 사용한다(런타임 외부 의존성 없음).
 
 ## 구조
@@ -39,13 +48,14 @@ python -m unittest discover -s tests -t .
 주소·토큰·키는 하드코딩하지 않고 환경변수로만 받는다(운영세칙 제7·16조).
 
 ```powershell
-$env:TARGETS="team2.lig.internal"; $env:PORTS="8082,8083,8084"
+$env:TARGETS="team2.lig.internal"; $env:PORTS="8082,8083,8084,8085"
 $env:SUBMIT_URL="http://backend:4100/submit"; $env:SUBMIT_TOKEN="tok-team1"
 $env:LLM_BASE_URL="http://litellm.lig.internal:4000"; $env:LLM_API_KEY="<key>"
 $env:PYTHONPATH="src"; python -m aegis_attacker
 ```
 
 표적(TARGETS·PORTS)이 없으면 inert(fail-open, 공격 없음)로 동작한다. LLM 키가 없어도 결정론 정찰은 수행한다.
+포트는 코드가 개방 여부를 추측하지 않고 운영 측 `PORTS`를 그대로 사용한다.
 
 ## 스켈레톤 데모에서 실행 (end-to-end)
 

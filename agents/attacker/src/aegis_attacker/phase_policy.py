@@ -34,11 +34,43 @@ def total_rounds() -> int:
     return sum(FINALS_PHASE_ROUNDS.values())
 
 
-# 데모 포트 → 레이어 추정(8082→1). 본선 포트는 매핑 불가할 수 있으므로 참고용.
+# 데모 포트 → 레이어 추정(8082→L1 ... 8085→L4). 본선 포트는 운영 측 PORTS가
+# 정답이며, 이 매핑은 알려진 데모 포트의 **순회 순서**에만 사용한다.
+_DEMO_LAYER_PORTS = {8082: 1, 8083: 2, 8084: 3, 8085: 4}
+
+
 def layer_of_port(port: int) -> int:
-    if 8082 <= port <= 8099:
-        return port - 8081
-    return 0  # 미상
+    return _DEMO_LAYER_PORTS.get(port, 0)  # 미상
+
+
+def cumulative_endpoint_order(endpoints) -> list:
+    """누적 개방 레이어를 공정하게 섞되 새 L4를 첫 wave에 포함한다.
+
+    알려진 데모 포트는 host별로 ``L4→L1→L2→L3`` 순환한다. Phase 4 UGV를 늦게
+    시작하지 않으면서도 이전 레이어가 굶지 않게 한 슬롯씩 배치한다. 포트-레이어 관계가
+    관측되지 않은 endpoint는 입력 순서를 보존하며, 전부 미상인 경우 원본 순서 그대로다.
+    """
+    original = list(endpoints)
+    by_layer = {layer: [] for layer in range(1, 5)}
+    unknown = []
+    for endpoint in original:
+        layer = layer_of_port(endpoint.port)
+        if layer:
+            by_layer[layer].append(endpoint)
+        else:
+            unknown.append(endpoint)
+    if not any(by_layer.values()):
+        return original
+
+    ordered = []
+    width = max([len(items) for items in by_layer.values()] + [len(unknown)])
+    for index in range(width):
+        for layer in (4, 1, 2, 3):
+            if index < len(by_layer[layer]):
+                ordered.append(by_layer[layer][index])
+        if index < len(unknown):
+            ordered.append(unknown[index])
+    return ordered
 
 
 def allocate_budget(endpoints, total_budget: int) -> dict:

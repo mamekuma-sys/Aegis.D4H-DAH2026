@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 import unittest
@@ -539,6 +540,119 @@ class TestPivotBeforeRateLimit(unittest.TestCase):
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 1)
         self.assertEqual(arena.submits[0]["flag"], "FLAG{early_pivot_8083}")
+        self.assertEqual(arena.llm_calls, 0)
+
+
+class ObservedPhaseArena:
+    """TEAM1 PCAP에서 확인된 L1~L3 fast path를 포트별로 재현한다."""
+
+    def __init__(self):
+        self.submits = []
+        self.llm_calls = 0
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        from urllib.parse import parse_qs, unquote, urlsplit
+
+        if url.endswith("/submit"):
+            self.submits.append(json.loads(body))
+            return HttpResponse(200, json.dumps({"status": "accepted"}))
+        if "/v1/chat/completions" in url:
+            self.llm_calls += 1
+            return HttpResponse(500, "unused")
+
+        parts = urlsplit(url)
+        if parts.path == "/" and not parts.query:
+            return HttpResponse(200, "service online", {})
+        params = parse_qs(parts.query)
+
+        if parts.port == 8082 and parts.path in ("/fetch", "/proxy"):
+            target = unquote(next(iter(params.values()), [""])[0])
+            if target in (
+                "http://helper-box:8080/secret",
+                "http://helper-box.:8080/secret",
+            ):
+                return HttpResponse(200, "FLAG{fixture_l1}", {})
+
+        if parts.port == 8083 and parts.path == "/admin":
+            cookie = (headers or {}).get("Cookie", "")
+            _, _, token = cookie.partition("session=")
+            try:
+                padded = token + "=" * (-len(token) % 4)
+                claims = json.loads(base64.urlsafe_b64decode(padded))
+            except Exception:
+                claims = {}
+            if claims.get("role") == "admin":
+                return HttpResponse(200, "FLAG{fixture_l2}", {})
+
+        if parts.port == 8084 and parts.path == "/product":
+            product_id = unquote((params.get("id") or [""])[0]).lower()
+            if "union select" in product_id and "from app_meta" in product_id:
+                return HttpResponse(200, "FLAG{fixture_l3}", {})
+
+        return HttpResponse(200, "no flag", {})
+
+
+class TestObservedPhaseFastPath(unittest.TestCase):
+    def test_l1_to_l3_confirmed_vectors_run_before_llm(self):
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8082, 8083, 8084),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=3,
+        )
+        from aegis_attacker.rate_limit import RateLimiter
+        arena = ObservedPhaseArena()
+        rt = AttackerRuntime(
+            cfg,
+            http=arena,
+            rate=RateLimiter(request_burst=10000, submit_max=10000),
+        )
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 3)
+        self.assertEqual(arena.llm_calls, 0)
+
+
+class UgvDiscoveryArena:
+    """L4 route를 root가 아니라 읽기 전용 /status 응답에서만 노출한다."""
+
+    def __init__(self):
+        self.submits = []
+        self.llm_calls = 0
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        from urllib.parse import parse_qs, unquote, urlsplit
+
+        if url.endswith("/submit"):
+            self.submits.append(json.loads(body))
+            return HttpResponse(200, json.dumps({"status": "accepted"}))
+        if "/v1/chat/completions" in url:
+            self.llm_calls += 1
+            return HttpResponse(500, "unused")
+
+        parts = urlsplit(url)
+        if parts.path == "/" and not parts.query:
+            return HttpResponse(200, "Phase 4 UGV online", {})
+        if parts.path == "/status":
+            return HttpResponse(200, "Routes: GET /telemetry?source=<url>", {})
+        if parts.path == "/telemetry":
+            target = unquote((parse_qs(parts.query).get("source") or [""])[0])
+            if target == "http://127.0.0.1:8085/registry":
+                return HttpResponse(200, "FLAG{fixture_l4}", {})
+        return HttpResponse(200, "online", {})
+
+
+class TestUgvObservedDiscovery(unittest.TestCase):
+    def test_phase4_uses_status_exposed_route_without_hardcoded_ugv_path(self):
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8085,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        arena = UgvDiscoveryArena()
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt))
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{fixture_l4}")
         self.assertEqual(arena.llm_calls, 0)
 
 

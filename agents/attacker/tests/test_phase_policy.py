@@ -4,6 +4,7 @@ from aegis_attacker.models import Endpoint
 from aegis_attacker.phase_policy import (
     FairScheduler,
     allocate_budget,
+    cumulative_endpoint_order,
     layer_of_port,
     layers_open,
     rounds_in_phase,
@@ -13,6 +14,7 @@ from aegis_attacker.phase_policy import (
 L1 = Endpoint("team2.lig.internal", 8082)
 L2 = Endpoint("team2.lig.internal", 8083)
 L3 = Endpoint("team2.lig.internal", 8084)
+L4 = Endpoint("team2.lig.internal", 8085)
 
 
 class TestFinalsPhaseStructure(unittest.TestCase):
@@ -38,9 +40,36 @@ class TestLayerOfPort(unittest.TestCase):
     def test_demo_ports(self):
         self.assertEqual(layer_of_port(8082), 1)
         self.assertEqual(layer_of_port(8084), 3)
+        self.assertEqual(layer_of_port(8085), 4)
 
     def test_unknown_port(self):
         self.assertEqual(layer_of_port(443), 0)
+        self.assertEqual(layer_of_port(8099), 0)
+
+
+class TestCumulativeEndpointOrder(unittest.TestCase):
+    def test_phase4_starts_early_without_starving_prior_layers(self):
+        ordered = cumulative_endpoint_order([L1, L2, L3, L4])
+        self.assertEqual(ordered, [L4, L1, L2, L3])
+        self.assertEqual(set(ordered), {L1, L2, L3, L4})
+
+    def test_unknown_ports_preserve_input_order(self):
+        first = Endpoint("team2.lig.internal", 9001)
+        second = Endpoint("team2.lig.internal", 9002)
+        self.assertEqual(cumulative_endpoint_order([first, second]), [first, second])
+
+    def test_each_host_keeps_all_four_cumulative_layers(self):
+        endpoints = [
+            Endpoint(host, port)
+            for host in ("team2.lig.internal", "team3.lig.internal")
+            for port in (8082, 8083, 8084, 8085)
+        ]
+        ordered = cumulative_endpoint_order(endpoints)
+        self.assertEqual(set(ordered), set(endpoints))
+        self.assertEqual(
+            [endpoint.port for endpoint in ordered[:4]],
+            [8085, 8082, 8083, 8084],
+        )
 
 
 class TestAllocateBudget(unittest.TestCase):
