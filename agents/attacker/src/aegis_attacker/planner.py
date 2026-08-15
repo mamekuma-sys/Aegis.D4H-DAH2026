@@ -15,7 +15,7 @@ from typing import Optional
 from .models import Endpoint, ExecutionPlan, Scenario, VulnClass
 from .profiles import suggest_vuln_classes
 
-MAX_TURNS = 6
+MAX_TURNS = 4  # endpoint당 LLM 왕복 상한. 낮춰 토큰 절약(제22조) — 대개 1~2턴에 해결된다.
 
 # 취약 부류 → 예선 시나리오(보고용 느슨한 대응, 실행 판단 아님).
 _VULN_TO_SCENARIO = {

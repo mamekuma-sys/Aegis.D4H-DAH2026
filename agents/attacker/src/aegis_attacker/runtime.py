@@ -23,7 +23,7 @@ from .exploits import (
     tamper_token,
 )
 from .flags import FlagPipeline, SubmitClient
-from .llm_advisor import LLMAdvisor, escalated_model
+from .llm_advisor import LLMAdvisor
 from .models import (
     Capability,
     ExecutionPlan,
@@ -292,8 +292,9 @@ class AttackerRuntime:
             nonlocal evidence_ref, cookie_name, cookie_val
             result, captured = self._execute_attempt(endpoint, attempt, evidence_ref)
             if captured:
-                self._playbook.record(banner_fp,
-                                      {"method": attempt.method, "path": attempt.path})
+                self._playbook.record(banner_fp, {
+                    "method": attempt.method, "path": attempt.path,
+                    "headers": dict(attempt.headers), "body": attempt.body})
                 self.audit.log("hit", target=endpoint.key(), path=attempt.path,
                                vuln=attempt.vuln.value, reason="det:" + attempt.reason)
                 return True
@@ -350,61 +351,78 @@ class AttackerRuntime:
         if self._recon(endpoint, current_evidence):
             return True
 
-        # 라운드 내 성공 플레이북 교차 재사용 — 같은 배너의 다른 표적에 먼저 시도(LLM 전)
-        known = self._playbook.lookup(banner_fp)
-        if known:
-            result, captured = self._run_bound_exploit(endpoint, known, current_evidence, "playbook")
-            if captured:
-                self.audit.log("hit", target=endpoint.key(),
-                               path=known.get("path"), reason="playbook")
-                return True
-            if result is not None:
-                current_evidence = result.observation.evidence_ref
-
         # 결정론적 exploit 엔진 — 알려진 4개 부류 체인을 LLM 토큰 0으로 시도(LLM 전)
         if self._deterministic_exploit(endpoint, banner, banner_fp,
                                        resp.headers, current_evidence):
             return True
 
+        # single-flight + 재사용: 같은 배너(같은 이미지)는 한 표적만 LLM으로 풀고, 나머지는
+        # 그 성공 형태(method·path·headers·body)를 재사용한다(§7.6, 제22조). 병렬 첫 사이클에
+        # 11개 표적이 동시에 LLM을 두드리는 낭비를 막는다. 재사용이 이 표적에 안 맞으면
+        # (표적 특정 exploit) 직접 LLM으로 이어서 푼다.
+        tried_reuse = False
+        while True:
+            known = self._playbook.lookup(banner_fp)
+            if known:
+                result, captured = self._run_bound_exploit(
+                    endpoint, known, current_evidence, "playbook")
+                tried_reuse = True
+                if captured:
+                    self.audit.log("hit", target=endpoint.key(),
+                                   path=known.get("path"), reason="playbook")
+                    return True
+                if result is not None:
+                    current_evidence = result.observation.evidence_ref
+            slot = self._playbook.claim_or_wait(banner_fp, tried_reuse=tried_reuse)
+            if slot == "reuse":
+                continue          # 대기 중 다른 표적이 새로 풀었다 — 새 항목으로 재시도
+            if slot == "skip":
+                return False      # 다른 표적이 아직 LLM으로 푸는 중 — 다음 사이클에 재사용
+            break                 # slot == "solve" → 아래 LLM 루프로 직접 푼다
+
         state = EndpointState(endpoint)
         feedback = ""
-        while not self._planner.should_stop(state):
-            state.turn += 1
-            # cheap-first 모델, 실패가 쌓이면 승급
-            model = escalated_model(self.config.llm_model, max(0, state.turn - 2))
-            plan = self._planner.plan_next(endpoint, banner, feedback, state, model=model)
-            if plan is None:
-                break
-            self._bind_plan(plan, endpoint, current_evidence)
-            try:
-                result = self._adapter.execute(plan)
-            except (PlanBindingError, EgressError) as exc:
-                self.audit.log("reject", target=endpoint.key(), turn=state.turn,
-                               reason=type(exc).__name__)
-                break
-            self._report.record_request()
+        try:
+            while not self._planner.should_stop(state):
+                state.turn += 1
+                # 승급 없이 저비용 기본 모델 고정 — 토큰 비용을 낮춰 동점 우위(제22조).
+                plan = self._planner.plan_next(endpoint, banner, feedback, state,
+                                               model=self.config.llm_model)
+                if plan is None:
+                    break
+                self._bind_plan(plan, endpoint, current_evidence)
+                try:
+                    result = self._adapter.execute(plan)
+                except (PlanBindingError, EgressError) as exc:
+                    self.audit.log("reject", target=endpoint.key(), turn=state.turn,
+                                   reason=type(exc).__name__)
+                    break
+                self._report.record_request()
 
-            if self._process_flags(result.body):
-                self._playbook.record(banner_fp, plan.args)  # 교차 재사용용 기록(비밀 없음)
-                self.audit.log("hit", target=endpoint.key(), turn=state.turn,
-                               path=plan.args["path"], vuln=str(plan.scenario), reason=plan.reason)
-                return True
-
-            current_evidence = result.observation.evidence_ref
-            if result.outcome == Outcome.TIMEOUT:
-                state.no_response_streak += 1
-                evaded, captured = self._try_evasion(plan, current_evidence)
-                if captured:
+                if self._process_flags(result.body):
+                    self._playbook.record(banner_fp, plan.args)  # 교차 재사용용 기록(비밀 없음)
                     self.audit.log("hit", target=endpoint.key(), turn=state.turn,
-                                   path=plan.args["path"], reason="evasion")
+                                   path=plan.args["path"], vuln=str(plan.scenario),
+                                   reason=plan.reason)
                     return True
-                if evaded is not None:
-                    result = evaded
-                    current_evidence = evaded.observation.evidence_ref
-            else:
-                state.no_response_streak = 0
 
-            feedback = self._feedback(plan, result)
+                current_evidence = result.observation.evidence_ref
+                if result.outcome == Outcome.TIMEOUT:
+                    state.no_response_streak += 1
+                    evaded, captured = self._try_evasion(plan, current_evidence)
+                    if captured:
+                        self.audit.log("hit", target=endpoint.key(), turn=state.turn,
+                                       path=plan.args["path"], reason="evasion")
+                        return True
+                    if evaded is not None:
+                        result = evaded
+                        current_evidence = evaded.observation.evidence_ref
+                else:
+                    state.no_response_streak = 0
+
+                feedback = self._feedback(plan, result)
+        finally:
+            self._playbook.finish_llm(banner_fp)  # 대기 중인 같은-배너 표적을 깨운다
 
         return False
 

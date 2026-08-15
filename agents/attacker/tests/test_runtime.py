@@ -348,6 +348,8 @@ class TestParallelAttack(unittest.TestCase):
         self.assertEqual(report.accepted_count(), 4)  # 네 포트 flag 모두 수집
         flags = {s["flag"] for s in arena.submits}
         self.assertEqual(len(flags), 4)  # 포트별 서로 다른 flag
+        # single-flight: 같은 배너이므로 LLM은 한 번만, 나머지 셋은 playbook 재사용(제22조)
+        self.assertEqual(arena.llm_calls, 1)
 
 
 class SsrfPivotArena:
@@ -428,6 +430,59 @@ class TestDeterministicExploit(unittest.TestCase):
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 2)
         self.assertEqual(arena.llm_calls, 0)
+
+
+class AdminHeaderArena:
+    """/admin 인증 우회: X-Role: admin 헤더가 있어야 flag. LLM만 이 헤더를 만든다.
+
+    같은 배너의 여러 포트에서 첫 포트만 LLM으로 풀고, 나머지는 헤더까지 담긴 playbook을
+    재사용해 토큰 0으로 잡는지(헤더 보존 회귀 방지) 검증한다.
+    """
+
+    def __init__(self):
+        self.submits = []
+        self.llm_calls = 0
+        self._lock = threading.Lock()
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        if url.endswith("/submit"):
+            with self._lock:
+                self.submits.append(json.loads(body))
+            return HttpResponse(200, json.dumps({"status": "accepted"}))
+        if "/v1/chat/completions" in url:
+            with self._lock:
+                self.llm_calls += 1
+            # 결정론 기본셋에 없는 비표준 헤더 — LLM만 이걸 만든다
+            content = json.dumps({"vuln": "AUTH", "method": "GET", "path": "/admin",
+                                  "headers": {"X-Backdoor": "1"}, "body": "",
+                                  "reason": "auth header"})
+            return HttpResponse(200, json.dumps({
+                "choices": [{"message": {"content": content}}],
+                "usage": {"total_tokens": 10}}))
+        parts = urlsplit(url)
+        if parts.path == "/" and not parts.query:
+            return HttpResponse(200, "Service online v2", {})  # 인증 키워드 없는 중립 배너
+        if parts.path == "/admin":
+            if (headers or {}).get("X-Backdoor", "") == "1":
+                return HttpResponse(200, "FLAG{admin_%s}" % (parts.port or "x"), {})
+            return HttpResponse(403, "forbidden", {})
+        return HttpResponse(200, "no flag yet", {})
+
+
+class TestHeaderExploitReuse(unittest.TestCase):
+    def test_admin_header_exploit_reused_across_ports_one_llm_call(self):
+        arena = AdminHeaderArena()
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8083, 8084, 8085),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
+            llm_model="gpt-4o-mini", concurrency=3)
+        from aegis_attacker.rate_limit import RateLimiter
+        rt = AttackerRuntime(cfg, http=arena,
+                             rate=RateLimiter(request_burst=10000, submit_max=10000))
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 3)          # 세 포트 모두 flag
+        self.assertEqual(arena.llm_calls, 1)                   # 헤더 포함 playbook 재사용 → LLM 1회
 
 
 class TestRuntimeInert(unittest.TestCase):
