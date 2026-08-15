@@ -14,13 +14,30 @@ from concurrent.futures import ThreadPoolExecutor
 from .audit import AuditLogger, Redactor
 from .config import AttackerConfig
 from .egress import EgressError, EgressGateway, build_allowlists
+from .exploits import (
+    Attempt,
+    auth_tamper_attempts,
+    build_attempts,
+    extract_internal_urls,
+    ssrf_pivot_attempts,
+    tamper_token,
+)
 from .flags import FlagPipeline, SubmitClient
-from .llm_advisor import LLMAdvisor, escalated_model
-from .models import Capability, ExecutionPlan, Outcome, RoundBudget, SideEffectClass, SubmitState
+from .llm_advisor import LLMAdvisor
+from .models import (
+    Capability,
+    ExecutionPlan,
+    Outcome,
+    RoundBudget,
+    SideEffectClass,
+    SubmitState,
+    VulnClass,
+)
 from .observation import EvidenceFactory, Observer, UrllibHttp
 from .phase_policy import FairScheduler
 from .planner import EndpointState, Planner
 from .playbook import Playbook
+from .profiles import suggest_vuln_classes
 from .rate_limit import RateLimiter
 from .recon import COMMON_PROBE_PATHS
 from .round_report import RoundReport
@@ -214,6 +231,107 @@ class AttackerRuntime:
         self._report.record_request()
         return result, self._process_flags(result.body)
 
+    # ---- 결정론적 exploit 엔진 (LLM 전, 토큰 0) ----
+
+    def _execute_attempt(self, endpoint, attempt: Attempt, evidence_ref):
+        """단일 결정론 시도를 READ_ONLY 계획으로 실행한다. (result, captured) 반환.
+
+        무응답(필터 DROP)이면 경로 재인코딩 evasion 변형으로 재시도한다.
+        """
+        now = self.clock()
+        plan = ExecutionPlan(
+            tool="http", target=endpoint,
+            args={"method": attempt.method, "path": attempt.path,
+                  "headers": dict(attempt.headers), "body": attempt.body or ""},
+            plan_id=f"exp-{self._round_id}-{endpoint.endpoint_id}-{now}",
+            round_id=self._round_id, endpoint_id=endpoint.endpoint_id,
+            capability=Capability.ATTACK_TARGET,
+            evidence_refs=[evidence_ref] if evidence_ref else [],
+            created_at_monotonic=now, expires_at_monotonic=now + PLAN_TTL,
+            side_effect_class=SideEffectClass.READ_ONLY,
+            reason="det:" + attempt.reason)
+        try:
+            result = self._adapter.execute(plan)
+        except (PlanBindingError, EgressError):
+            return None, False
+        self._report.record_request()
+        if self._process_flags(result.body):
+            return result, True
+        if result.outcome == Outcome.TIMEOUT:
+            evaded, captured = self._try_evasion(plan, result.observation.evidence_ref)
+            if captured:
+                return evaded, True
+            if evaded is not None:
+                return evaded, False
+        return result, False
+
+    @staticmethod
+    def _cookie_from_headers(headers) -> tuple:
+        """Set-Cookie 헤더에서 (name, value)를 뽑는다. 없으면 (None, None)."""
+        for key, val in (headers or {}).items():
+            if key.lower() == "set-cookie" and "=" in val:
+                pair = val.split(";", 1)[0].strip()
+                name, _, value = pair.partition("=")
+                if name and value:
+                    return name.strip(), value.strip()
+        return None, None
+
+    def _deterministic_exploit(self, endpoint, banner, banner_fp,
+                               banner_headers, evidence_ref) -> bool:
+        """배너 힌트로 4개 취약 부류(SSRF·LFI·AUTH·SQLI)를 토큰 0으로 시도한다.
+
+        SSRF 2단 피벗은 base 시도 직후 **즉시** 실행한다. 승리 경로(예: /registry가 흘린
+        내부 URL 재프록시)를 sweep 끝까지 미루면, 그 사이 base 요청이 표적의 rate limit을
+        먼저 소진해 정작 피벗이 throttle될 수 있다. AUTH는 노출된 세션 토큰을 변조해 재전송한다.
+        성공 형태는 playbook에 기록해 같은 배너의 다른 표적에 재사용한다.
+        """
+        hints = suggest_vuln_classes(banner)
+        attempts = build_attempts(banner, hints, endpoint.port)
+        cookie_name, cookie_val = self._cookie_from_headers(banner_headers)
+        pivoted = set()            # 이미 피벗한 내부 URL(중복 방지)
+
+        def run(attempt) -> bool:
+            nonlocal evidence_ref, cookie_name, cookie_val
+            result, captured = self._execute_attempt(endpoint, attempt, evidence_ref)
+            if captured:
+                self._playbook.record(banner_fp, {
+                    "method": attempt.method, "path": attempt.path,
+                    "headers": dict(attempt.headers), "body": attempt.body})
+                self.audit.log("hit", target=endpoint.key(), path=attempt.path,
+                               vuln=attempt.vuln.value, reason="det:" + attempt.reason)
+                return True
+            if result is None:
+                return False
+            evidence_ref = result.observation.evidence_ref
+            if cookie_name is None:
+                cn, cv = self._cookie_from_headers(result.observation.redacted_header_hints)
+                if cn:
+                    cookie_name, cookie_val = cn, cv
+            # SSRF base 응답이면 즉시 2단 피벗(승리 경로를 앞당겨 표적 rate limit 전에 회수).
+            # 피벗 응답 자체는 다시 피벗하지 않는다(reason 구분).
+            if (attempt.vuln == VulnClass.SSRF and attempt.reason != "ssrf:pivot"
+                    and "?" in attempt.path):
+                base, _, query = attempt.path.partition("?")
+                param = query.split("=", 1)[0]
+                fresh = [u for u in extract_internal_urls(result.body) if u not in pivoted]
+                pivoted.update(fresh)
+                for pivot in ssrf_pivot_attempts(base, param, fresh):
+                    if run(pivot):
+                        return True
+            return False
+
+        for attempt in attempts:
+            if run(attempt):
+                return True
+
+        # AUTH 세션 변조 — 노출된 토큰을 관리자 권한으로 올려 재전송한다
+        if cookie_name and cookie_val:
+            tokens = tamper_token(cookie_val)
+            for attempt in auth_tamper_attempts(cookie_name, tokens):
+                if run(attempt):
+                    return True
+        return False
+
     # ---- 단일 표적 공격 ----
 
     def attack_endpoint(self, endpoint) -> bool:
@@ -235,56 +353,78 @@ class AttackerRuntime:
         if self._recon(endpoint, current_evidence):
             return True
 
-        # 라운드 내 성공 플레이북 교차 재사용 — 같은 배너의 다른 표적에 먼저 시도(LLM 전)
-        known = self._playbook.lookup(banner_fp)
-        if known:
-            result, captured = self._run_bound_exploit(endpoint, known, current_evidence, "playbook")
-            if captured:
-                self.audit.log("hit", target=endpoint.key(),
-                               path=known.get("path"), reason="playbook")
-                return True
-            if result is not None:
-                current_evidence = result.observation.evidence_ref
+        # 결정론적 exploit 엔진 — 알려진 4개 부류 체인을 LLM 토큰 0으로 시도(LLM 전)
+        if self._deterministic_exploit(endpoint, banner, banner_fp,
+                                       resp.headers, current_evidence):
+            return True
+
+        # single-flight + 재사용: 같은 배너(같은 이미지)는 한 표적만 LLM으로 풀고, 나머지는
+        # 그 성공 형태(method·path·headers·body)를 재사용한다(§7.6, 제22조). 병렬 첫 사이클에
+        # 11개 표적이 동시에 LLM을 두드리는 낭비를 막는다. 재사용이 이 표적에 안 맞으면
+        # (표적 특정 exploit) 직접 LLM으로 이어서 푼다.
+        tried_reuse = False
+        while True:
+            known = self._playbook.lookup(banner_fp)
+            if known:
+                result, captured = self._run_bound_exploit(
+                    endpoint, known, current_evidence, "playbook")
+                tried_reuse = True
+                if captured:
+                    self.audit.log("hit", target=endpoint.key(),
+                                   path=known.get("path"), reason="playbook")
+                    return True
+                if result is not None:
+                    current_evidence = result.observation.evidence_ref
+            slot = self._playbook.claim_or_wait(banner_fp, tried_reuse=tried_reuse)
+            if slot == "reuse":
+                continue          # 대기 중 다른 표적이 새로 풀었다 — 새 항목으로 재시도
+            if slot == "skip":
+                return False      # 다른 표적이 아직 LLM으로 푸는 중 — 다음 사이클에 재사용
+            break                 # slot == "solve" → 아래 LLM 루프로 직접 푼다
 
         state = EndpointState(endpoint)
         feedback = ""
-        while not self._planner.should_stop(state):
-            state.turn += 1
-            # cheap-first 모델, 실패가 쌓이면 승급
-            model = escalated_model(self.config.llm_model, max(0, state.turn - 2))
-            plan = self._planner.plan_next(endpoint, banner, feedback, state, model=model)
-            if plan is None:
-                break
-            self._bind_plan(plan, endpoint, current_evidence)
-            try:
-                result = self._adapter.execute(plan)
-            except (PlanBindingError, EgressError) as exc:
-                self.audit.log("reject", target=endpoint.key(), turn=state.turn,
-                               reason=type(exc).__name__)
-                break
-            self._report.record_request()
+        try:
+            while not self._planner.should_stop(state):
+                state.turn += 1
+                # 승급 없이 저비용 기본 모델 고정 — 토큰 비용을 낮춰 동점 우위(제22조).
+                plan = self._planner.plan_next(endpoint, banner, feedback, state,
+                                               model=self.config.llm_model)
+                if plan is None:
+                    break
+                self._bind_plan(plan, endpoint, current_evidence)
+                try:
+                    result = self._adapter.execute(plan)
+                except (PlanBindingError, EgressError) as exc:
+                    self.audit.log("reject", target=endpoint.key(), turn=state.turn,
+                                   reason=type(exc).__name__)
+                    break
+                self._report.record_request()
 
-            if self._process_flags(result.body):
-                self._playbook.record(banner_fp, plan.args)  # 교차 재사용용 기록(비밀 없음)
-                self.audit.log("hit", target=endpoint.key(), turn=state.turn,
-                               path=plan.args["path"], vuln=str(plan.scenario), reason=plan.reason)
-                return True
-
-            current_evidence = result.observation.evidence_ref
-            if result.outcome == Outcome.TIMEOUT:
-                state.no_response_streak += 1
-                evaded, captured = self._try_evasion(plan, current_evidence)
-                if captured:
+                if self._process_flags(result.body):
+                    self._playbook.record(banner_fp, plan.args)  # 교차 재사용용 기록(비밀 없음)
                     self.audit.log("hit", target=endpoint.key(), turn=state.turn,
-                                   path=plan.args["path"], reason="evasion")
+                                   path=plan.args["path"], vuln=str(plan.scenario),
+                                   reason=plan.reason)
                     return True
-                if evaded is not None:
-                    result = evaded
-                    current_evidence = evaded.observation.evidence_ref
-            else:
-                state.no_response_streak = 0
 
-            feedback = self._feedback(plan, result)
+                current_evidence = result.observation.evidence_ref
+                if result.outcome == Outcome.TIMEOUT:
+                    state.no_response_streak += 1
+                    evaded, captured = self._try_evasion(plan, current_evidence)
+                    if captured:
+                        self.audit.log("hit", target=endpoint.key(), turn=state.turn,
+                                       path=plan.args["path"], reason="evasion")
+                        return True
+                    if evaded is not None:
+                        result = evaded
+                        current_evidence = evaded.observation.evidence_ref
+                else:
+                    state.no_response_streak = 0
+
+                feedback = self._feedback(plan, result)
+        finally:
+            self._playbook.finish_llm(banner_fp)  # 대기 중인 같은-배너 표적을 깨운다
 
         return False
 

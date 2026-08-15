@@ -92,7 +92,7 @@ if ($LASTEXITCODE -ne 0) { throw 'docker push failed' }
 - **정책 경로**: 이미지 안 `/policy/active.json`. `/app/policy`가 아니다.
 - **비밀·주소·경로 미포함(제7·16조)**: 키·토큰·개인 절대경로를 이미지·저장소에 남기지 않는다.
 - **Compose 경로**: 상대경로는 첫 번째 `-f` 파일 기준이다. `AEGIS_DEFENDER_CONTEXT`를 사용한다.
-- **시작 로그**: `policy_source=active`, `bundle_id=defender-2026-08-15-team1-capture-enforce`, `drop_capable_rules=4`, `demotions=[]`가 정상이다. TEAM1 PCAP에서 검증한 L1~L3 exact rule 네 개만 차단 권한이 있고 기존 11개 SHADOW rule은 차단 권한이 없다.
+- **시작 로그**: `policy_source=active`, `bundle_id=defender-2026-08-15-team1-capture-enforce`, `drop_capable_rules=4`, `demotions=[]`가 정상이다. TEAM1 PCAP에서 검증한 L1~L3 exact rule 네 개만 차단 권한이 있고 기존 및 병합된 13개 SHADOW rule은 차단 권한이 없다.
 - **운영 페이지 시작 재생성**: backend `POST /control/start`는 combatant를 스켈레톤 이미지로 force-recreate한다. 로컬 스모크에서 라운드를 연 뒤에는 `-ReapplyAgents`로 team1-attacker·team1-defender를 팀 이미지로 되돌리고, 실행 중 이미지가 override 값인지 확인한다. 이 단계 없이 로그를 보면 스켈레톤 레퍼런스 에이전트를 검증하게 된다. 본선은 Registry `latest`를 쓰므로 이 절차가 필요 없다.
 
 ## 5. 설계상 의도된 범위

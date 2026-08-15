@@ -73,7 +73,7 @@ agents/defender/
 
 ## 현재 정책 상태
 
-TEAM1 본선 자료 63개 PCAP과 28개 로그를 분석해 `6/8082`, `6/8083`, `6/8084`를 baseline profile로 등록했습니다. flag 응답과 연결된 L1 SSRF, L2 관리자 session 위조·loopback SSRF, L3 `app_meta` SQLi에 대응하는 네 rule만 `ACTIVE`이고 기존 휴리스틱 11개는 계속 `SHADOW`입니다.
+TEAM1 본선 자료 63개 PCAP과 28개 로그를 분석해 `6/8082`, `6/8083`, `6/8084`를 baseline profile로 등록했습니다. flag 응답과 연결된 L1 SSRF, L2 관리자 session 위조·loopback SSRF, L3 `app_meta` SQLi에 대응하는 네 rule만 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 계속 `SHADOW`입니다.
 
 L2 cookie rule은 raw Base64 문자열을 나열하지 않고 2KB packet payload 안의 완전한 HTTP header와 bounded JSON scalar claim만 해석합니다. 오류·분할·상한 초과는 차단 사유가 아닙니다. 정규식 rule은 HTTP request line에 한정해 header나 body의 같은 문자열을 오탐하지 않습니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
 

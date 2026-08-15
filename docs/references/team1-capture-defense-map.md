@@ -48,7 +48,7 @@ bundle `defender-2026-08-15-team1-capture-enforce`를 63개 PCAP에 재생한 �
 
 ## 운영 경계
 
-- 기존 휴리스틱 11개는 계속 `SHADOW`다.
+- 기존 및 원격에서 병합된 휴리스틱 13개는 계속 `SHADOW`다.
 - 새 ACTIVE rule 네 개는 protocol·port·request shape·logical evidence에 묶고 `2026-08-16T00:00:00Z`에 만료한다.
 - runtime은 packet-derived 지표로 rule을 승격·rollback하지 않는다.
 - 실제 SLA 저하 또는 negative fixture 실패 시 직전 검증 이미지로 되돌린다.

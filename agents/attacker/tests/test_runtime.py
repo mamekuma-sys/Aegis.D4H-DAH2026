@@ -100,9 +100,9 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(arena.submits, [])
 
     def test_captures_and_submits_flag(self):
-        # flag는 query가 있는 /fetch? 경로에서만 — 기본 recon GET /fetch 와 구분한다
+        # flag는 LLM이 만든 정확한 경로(?url=x)에서만 — 결정론 엔진이 못 잡는 케이스로 LLM 경로 격리
         arena = FakeArena("URL Fetcher — GET /fetch?url=<url>", "/fetch?url=x", "FLAG{ssrf_win}",
-                          flag_when=lambda full: full.startswith("/fetch?"))
+                          flag_when=lambda full: full.endswith("?url=x"))
         rt = make_runtime(arena)
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 1)
@@ -240,7 +240,7 @@ class TestRuntimeResilience(unittest.TestCase):
     def test_budget_resets_between_rounds(self):
         # LLM exploit 경로를 실제로 타서 라운드마다 llm_calls가 증가하게 한다
         arena = FakeArena("URL Fetcher — GET /fetch?url=<url>", "/fetch?url=x", "FLAG{win}",
-                          flag_when=lambda full: full.startswith("/fetch?"))
+                          flag_when=lambda full: full.endswith("?url=x"))
         rt = make_runtime(arena)
         rt.run_once()
         after_first = rt.budget.llm_calls
@@ -280,7 +280,8 @@ class MultiPortArena:
         full = parts.path + (("?" + parts.query) if parts.query else "")
         if parts.path == "/" and not parts.query:
             return HttpResponse(200, self.banner)
-        if full.startswith(self.exploit_prefix) and "?" in full:
+        # flag는 LLM이 만든 정확한 경로(?url=x)에서만 — 결정론 엔진의 내부 URL 시도와 구분
+        if full.endswith("?url=x"):
             return HttpResponse(200, "FLAG{port_%s}" % parts.port)
         return HttpResponse(200, "no flag yet")
 
@@ -347,6 +348,198 @@ class TestParallelAttack(unittest.TestCase):
         self.assertEqual(report.accepted_count(), 4)  # 네 포트 flag 모두 수집
         flags = {s["flag"] for s in arena.submits}
         self.assertEqual(len(flags), 4)  # 포트별 서로 다른 flag
+        # single-flight: 같은 배너이므로 LLM은 한 번만, 나머지 셋은 playbook 재사용(제22조)
+        self.assertEqual(arena.llm_calls, 1)
+
+
+class SsrfPivotArena:
+    """/fetch?url= SSRF 아레나. 1단 /registry는 base64 내부 URL을, 그 URL은 flag를 준다.
+
+    LLM 없이(키 공백) 결정론 엔진이 2단 피벗으로 flag를 뽑는지 검증한다.
+    """
+
+    def __init__(self, port):
+        import base64
+        self.submits = []
+        self.llm_calls = 0
+        self.port = port
+        self._flag_url = "http://127.0.0.1:%d/vault" % port
+        self._registry_b64 = base64.b64encode(self._flag_url.encode()).decode()
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        from urllib.parse import urlsplit, parse_qs, unquote
+        if url.endswith("/submit"):
+            self.submits.append(json.loads(body))
+            return HttpResponse(200, json.dumps({"status": "accepted"}))
+        if "/v1/chat/completions" in url:
+            self.llm_calls += 1
+            return HttpResponse(500, "should not be called")
+        parts = urlsplit(url)
+        if parts.path == "/" and not parts.query:
+            return HttpResponse(200, "URL Fetcher — GET /fetch?url=<url>", {})
+        if parts.path == "/fetch":
+            target = unquote((parse_qs(parts.query).get("url") or [""])[0])
+            if target.endswith("/registry"):
+                return HttpResponse(200, "internal index: " + self._registry_b64, {})
+            if target == self._flag_url:
+                return HttpResponse(200, "FLAG{ssrf_pivot_%d}" % self.port, {})
+            return HttpResponse(200, "unknown internal target", {})
+        return HttpResponse(200, "no flag yet", {})
+
+
+class TestDeterministicExploit(unittest.TestCase):
+    def test_ssrf_two_stage_pivot_without_llm(self):
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8083,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="",  # LLM 키 없음 — 결정론 엔진만으로 성공해야 함
+        )
+        arena = SsrfPivotArena(port=8083)
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt))
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{ssrf_pivot_8083}")
+        self.assertEqual(arena.llm_calls, 0)  # 토큰 0
+
+    def test_two_ports_solved_deterministically_zero_llm(self):
+        # 같은 배너의 두 포트를 결정론 엔진이 각각 토큰 0으로 잡는다(포트별 내부 URL 재유도)
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8083, 8084),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="",
+        )
+
+        class TwoPortSsrf(SsrfPivotArena):
+            def __init__(self):
+                super().__init__(port=8083)
+                self._alt = SsrfPivotArena(port=8084)
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                from urllib.parse import urlsplit
+                if ":8084" in urlsplit(url).netloc:
+                    r = self._alt.request(method, url, headers, body, timeout)
+                    if url.endswith("/submit"):
+                        self.submits.append(json.loads(body))
+                    return r
+                return super().request(method, url, headers, body, timeout)
+
+        arena = TwoPortSsrf()
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt))
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 2)
+        self.assertEqual(arena.llm_calls, 0)
+
+
+class AdminHeaderArena:
+    """/admin 인증 우회: X-Role: admin 헤더가 있어야 flag. LLM만 이 헤더를 만든다.
+
+    같은 배너의 여러 포트에서 첫 포트만 LLM으로 풀고, 나머지는 헤더까지 담긴 playbook을
+    재사용해 토큰 0으로 잡는지(헤더 보존 회귀 방지) 검증한다.
+    """
+
+    def __init__(self):
+        self.submits = []
+        self.llm_calls = 0
+        self._lock = threading.Lock()
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        if url.endswith("/submit"):
+            with self._lock:
+                self.submits.append(json.loads(body))
+            return HttpResponse(200, json.dumps({"status": "accepted"}))
+        if "/v1/chat/completions" in url:
+            with self._lock:
+                self.llm_calls += 1
+            # 결정론 기본셋에 없는 비표준 헤더 — LLM만 이걸 만든다
+            content = json.dumps({"vuln": "AUTH", "method": "GET", "path": "/admin",
+                                  "headers": {"X-Backdoor": "1"}, "body": "",
+                                  "reason": "auth header"})
+            return HttpResponse(200, json.dumps({
+                "choices": [{"message": {"content": content}}],
+                "usage": {"total_tokens": 10}}))
+        parts = urlsplit(url)
+        if parts.path == "/" and not parts.query:
+            return HttpResponse(200, "Service online v2", {})  # 인증 키워드 없는 중립 배너
+        if parts.path == "/admin":
+            if (headers or {}).get("X-Backdoor", "") == "1":
+                return HttpResponse(200, "FLAG{admin_%s}" % (parts.port or "x"), {})
+            return HttpResponse(403, "forbidden", {})
+        return HttpResponse(200, "no flag yet", {})
+
+
+class TestHeaderExploitReuse(unittest.TestCase):
+    def test_admin_header_exploit_reused_across_ports_one_llm_call(self):
+        arena = AdminHeaderArena()
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8083, 8084, 8085),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
+            llm_model="gpt-4o-mini", concurrency=3)
+        from aegis_attacker.rate_limit import RateLimiter
+        rt = AttackerRuntime(cfg, http=arena,
+                             rate=RateLimiter(request_burst=10000, submit_max=10000))
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 3)          # 세 포트 모두 flag
+        self.assertEqual(arena.llm_calls, 1)                   # 헤더 포함 playbook 재사용 → LLM 1회
+
+
+class RateLimitedSsrfArena:
+    """표적이 N개 요청 후 응답을 끊는다(rate-limit 차단 모사).
+
+    SSRF 피벗이 base sweep 끝이 아니라 /registry 직후 즉시 돌아야 차단 전에 flag를 잡는다.
+    """
+
+    def __init__(self, port, block_after):
+        import base64
+        self.port = port
+        self.block_after = block_after
+        self.target_reqs = 0
+        self.submits = []
+        self.llm_calls = 0
+        self._flag_url = "http://127.0.0.1:%d/vault" % port
+        self._registry_b64 = base64.b64encode(self._flag_url.encode()).decode()
+
+    def request(self, method, url, headers=None, body=None, timeout=6.0):
+        from urllib.parse import urlsplit, parse_qs, unquote
+        if url.endswith("/submit"):
+            self.submits.append(json.loads(body))
+            return HttpResponse(200, json.dumps({"status": "accepted"}))
+        if "/v1/chat/completions" in url:
+            self.llm_calls += 1
+            return HttpResponse(500, "no llm")
+        parts = urlsplit(url)
+        self.target_reqs += 1
+        if self.target_reqs > self.block_after:
+            return HttpResponse(0, "")  # 표적이 차단(무응답)
+        if parts.path == "/" and not parts.query:
+            return HttpResponse(200, "URL Fetcher — GET /fetch?url=<url>", {})
+        if parts.path == "/fetch":
+            target = unquote((parse_qs(parts.query).get("url") or [""])[0])
+            if target.endswith("/registry"):
+                return HttpResponse(200, "index: " + self._registry_b64, {})
+            if target == self._flag_url:
+                return HttpResponse(200, "FLAG{early_pivot_%d}" % self.port, {})
+            return HttpResponse(200, "unknown", {})
+        return HttpResponse(200, "no flag", {})
+
+
+class TestPivotBeforeRateLimit(unittest.TestCase):
+    def test_pivot_fires_before_target_blocks(self):
+        # 표적이 20 요청 후 차단. 피벗이 /registry 직후 즉시 돌아야 그 전에 flag를 잡는다.
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8083,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="",
+        )
+        arena = RateLimitedSsrfArena(port=8083, block_after=20)
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt))
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{early_pivot_8083}")
+        self.assertEqual(arena.llm_calls, 0)
 
 
 class TestRuntimeInert(unittest.TestCase):

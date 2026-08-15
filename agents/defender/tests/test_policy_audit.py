@@ -284,6 +284,61 @@ class TestLoadOrder(unittest.TestCase):
             self.assertEqual(report.drop_capable_rules, 0)
 
 
+class TestShippedBroadHeuristicSafety(unittest.TestCase):
+    """exact 근거가 없는 광범위 휴리스틱은 shipped bundle에서 차단하지 않는다."""
+
+    def setUp(self):
+        from aegis_defender.policy import HotPolicy
+        compiled, _ = load_policy(_POLICY_DIR)
+        self.policy = HotPolicy(policy=compiled, clock=lambda: 0.0)
+
+    def _verdict(self, payload, dst_port=8083, src_port=51234):
+        from aegis_defender.packet import parse_ip
+        from .fakes import ipv4_tcp
+        parsed = parse_ip(ipv4_tcp(payload, src_port=src_port, dst_port=dst_port))
+        return self.policy.decide(1, parsed, 0.0)
+
+    def test_broad_file_rules_remain_shadow(self):
+        from aegis_defender.protocol import VERDICT_ACCEPT
+        payloads = [
+            b"GET /read?file=/etc/passwd HTTP/1.1\r\n\r\n",       # LFI (file-read)
+            b"GET /fetch?url=file:///flag HTTP/1.1\r\n\r\n",       # SSRF file:// (file-read)
+            b"GET /.git/config HTTP/1.1\r\n\r\n",                  # 소스 유출 (sensitive-path)
+            b"GET /flag HTTP/1.1\r\n\r\n",                          # flag 경로 (sensitive-path)
+        ]
+        for payload in payloads:
+            self.assertEqual(self._verdict(payload).verdict, VERDICT_ACCEPT, payload)
+
+    def test_normal_traffic_accepts(self):
+        from aegis_defender.protocol import VERDICT_ACCEPT
+        normal = [
+            b"GET / HTTP/1.1\r\nHost: team1.lig.internal\r\n\r\n",
+            b"GET /admin HTTP/1.1\r\nCookie: session=abc123\r\n\r\n",     # 정상 admin+쿠키
+            b"POST /login HTTP/1.1\r\n\r\nuser=bob&password=hunter2",     # 정상 로그인
+            b"GET /proxy?target=report HTTP/1.1\r\n\r\n",                 # 내부 IP 없는 정상 proxy
+        ]
+        for payload in normal:
+            self.assertEqual(self._verdict(payload).verdict, VERDICT_ACCEPT, payload)
+
+    def test_generic_sqli_heuristic_remains_shadow(self):
+        from aegis_defender.protocol import VERDICT_ACCEPT
+        payload = b"GET /item?id=1 union select 1,2,3 HTTP/1.1\r\n\r\n"
+        for index in range(200):
+            self.assertEqual(
+                self._verdict(payload, src_port=20000 + index).verdict,
+                VERDICT_ACCEPT,
+            )
+
+    def test_response_marker_rule_remains_shadow(self):
+        from aegis_defender.protocol import VERDICT_ACCEPT
+        for index in range(200):
+            payload = b"HTTP/1.1 200 OK\r\n\r\nFLAG{fixture_%d}" % index
+            self.assertEqual(
+                self._verdict(payload, src_port=8083, dst_port=40000 + index).verdict,
+                VERDICT_ACCEPT,
+            )
+
+
 class TestRuntimeCannotMutatePolicy(unittest.TestCase):
     """§10.3 — 런타임은 어떤 방향으로도 승격 상태를 바꾸지 않는다."""
 
