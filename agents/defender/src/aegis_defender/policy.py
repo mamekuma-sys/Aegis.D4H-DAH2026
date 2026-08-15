@@ -11,7 +11,7 @@ policy file이 이미 승인한 것만 집행한다.
 세 단계는 서로 다른 것을 본다(§0.4 직교 3축).
 
     Gate   구조 sanity            p99 25μs 이하   — 실패는 차단이 아니라 판정 포기
-    Sig    payload 시그니처        p99 100μs 이하  — 합쳐서 컴파일한 단일 정규식
+    Sig    payload·HTTP 의미 검사  p99 100μs 이하  — 결합 정규식 + bounded exact lookup
     Score  flow 위험도 조회        p99 25μs 이하   — snapshot 한 번 읽고 한 번 조회
 
 soft cutoff 5ms를 넘기면 남은 분석을 포기하고 즉시 `ACCEPT`한다. 이 값은 200ms
@@ -36,6 +36,7 @@ from .metrics import (
     M_VERDICT_SOFT_CUTOFF,
     Metrics,
 )
+from .http_semantics import parse_http_request
 from .packet import ParsedPacket, ParseStatus, is_scan_flag_combination
 from .protocol import FrameStatus, VERDICT_ACCEPT, VERDICT_DROP
 from .rules import CompiledPolicy, EMPTY_POLICY, PromotionState, Rule, canary_selected
@@ -294,6 +295,23 @@ class HotPolicy:
             return self._enforce(
                 pkt_id, rule, parsed, received_at, STAGE_SIG, allowed_by, rule.category, baseline
             )
+
+        if self._policy.http_json_rules:
+            request = parse_http_request(payload)
+            if request is not None:
+                rules = self._policy.http_json_rules.get(
+                    (parsed.protocol, parsed.dst_port, request.method, request.target), ()
+                )
+                for rule in rules:
+                    if not self._scope_allows(rule, parsed):
+                        continue
+                    if request.cookie_claim_matches(
+                        rule.cookie_name, rule.claim_key, rule.claim_values
+                    ):
+                        return self._enforce(
+                            pkt_id, rule, parsed, received_at, STAGE_SIG,
+                            allowed_by, rule.category, baseline,
+                        )
         return None
 
     def _score(

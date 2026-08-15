@@ -1,5 +1,7 @@
-"""실측 L1 SSRF hotfix의 shipped PolicyBundle 회귀 테스트."""
+"""TEAM1 실측 L1~L3 공격에 대한 shipped PolicyBundle 회귀 테스트."""
 
+import base64
+import json
 import os
 import unittest
 
@@ -12,12 +14,16 @@ from .fakes import ipv4_tcp
 
 _POLICY_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "policy"))
 _ACTIVE_WINDOW_EPOCH = 1786764000.0
-_RULE_ID = "sig-l1-helper-secret-001"
-_REASON = "sig-l1-helper-secret"
+_L1_RULE_ID = "sig-l1-helper-secret-001"
+_L2_ADMIN_RULE_ID = "http-l2-forged-admin-session-001"
+_L2_SSRF_RULE_ID = "sig-l2-loopback-secret-001"
+_L3_RULE_ID = "sig-l3-app-meta-union-001"
+_ACTIVE_RULES = {_L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID}
 
 _POSITIVE_PATHS = (
     "/fetch?url=http://helper-box:8080/secret",
     "/fetch?url=http%3A%2F%2Fhelper-box%3A8080%2Fsecret",
+    "/fetch?url=http%3A%2F%2Fhelper-box.%3A8080%2Fsecret",
     "/%66%65%74%63%68?%75%72%6C=%68%74%74%70%3A%2F%2F%68%65%6C%70%65%72%2D%62%6F%78%3A%38%30%38%30%2F%73%65%63%72%65%74",
 )
 
@@ -38,11 +44,11 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         cls.report = report
         cls.policy = HotPolicy(policy=compiled, clock=lambda: 0.0)
 
-    def _decide(self, path, dst_port=8082, pkt_id=1):
+    def _decide(self, path, dst_port=8082, pkt_id=1, headers=""):
         payload = (
             f"GET {path} HTTP/1.1\r\n"
             "Host: team1.lig.internal:8082\r\n"
-            "User-Agent: fixture\r\n\r\n"
+            f"User-Agent: fixture\r\n{headers}\r\n"
         ).encode("ascii")
         parsed = parse_ip(ipv4_tcp(payload, dst_port=dst_port))
         return self.policy.decide(pkt_id, parsed, 0.0)
@@ -52,8 +58,8 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
             with self.subTest(path=path):
                 decision = self._decide(path, pkt_id=index)
                 self.assertEqual(decision.verdict, VERDICT_DROP)
-                self.assertEqual(decision.rule_id, _RULE_ID)
-                self.assertEqual(decision.reason_code, _REASON)
+                self.assertEqual(decision.rule_id, _L1_RULE_ID)
+                self.assertEqual(decision.reason_code, "sig-l1-helper-secret")
 
     def test_round1_negative_and_sla_requests_accept_100_times(self):
         for index in range(100):
@@ -69,19 +75,71 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                     VERDICT_ACCEPT,
                 )
 
-    def test_shipped_bundle_activates_only_the_l1_hotfix(self):
+    def test_l2_observed_admin_cookie_variants_drop(self):
+        documents = (
+            {"user": "guest", "role": "admin"},
+            {"role": "admin", "user": "operator"},
+            {"authenticated": True, "role": "admin", "user": "guest"},
+            {"admin": True, "is_admin": True, "role": "admin", "user": "admin"},
+        )
+        for index, document in enumerate(documents, start=1):
+            encoded = base64.urlsafe_b64encode(
+                json.dumps(document, separators=(",", ":")).encode("utf-8")
+            ).decode("ascii").rstrip("=")
+            for path in ("/admin", "/%61%64%6D%69%6E"):
+                with self.subTest(document=document, path=path):
+                    decision = self._decide(
+                        path, dst_port=8083, pkt_id=index,
+                        headers=f"Cookie: session = {encoded}\r\n",
+                    )
+                    self.assertEqual(decision.verdict, VERDICT_DROP)
+                    self.assertEqual(decision.rule_id, _L2_ADMIN_RULE_ID)
+
+    def test_l2_guest_malformed_and_cookie_free_admin_requests_accept(self):
+        guest = base64.b64encode(b'{"user":"guest","role":"user"}').decode("ascii")
+        cases = ("", f"Cookie: session={guest}\r\n", "Cookie: session=not-base64!\r\n")
+        for index, headers in enumerate(cases):
+            with self.subTest(headers=bool(headers)):
+                self.assertEqual(
+                    self._decide("/admin", dst_port=8083, pkt_id=index, headers=headers).verdict,
+                    VERDICT_ACCEPT,
+                )
+
+    def test_l2_observed_absolute_form_loopback_secret_drops(self):
+        path = "http://team1.lig.internal:8083/fetch?url=http%3A%2F%2F127.0.0.1%3A8083%2Fsecret"
+        decision = self._decide(path, dst_port=8083)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _L2_SSRF_RULE_ID)
+
+    def test_l3_observed_app_meta_union_variants_drop(self):
+        paths = (
+            "/product?id=-1%20UNION%20SELECT%201,k,v%20FROM%20app_meta--%20",
+            "/product?id=-1+UNION+ALL+SELECT+1%2Cv%2C3+FROM+app_meta+WHERE+k%3D%27deploy_token%27",
+            "/product?id=0%20UNION%20SELECT%201,group_concat(k%7C%7Cv),3%20FROM%20app_meta",
+        )
+        for index, path in enumerate(paths):
+            with self.subTest(path=path):
+                decision = self._decide(path, dst_port=8084, pkt_id=index)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, _L3_RULE_ID)
+
+    def test_cross_layer_and_normal_product_requests_accept(self):
+        attack = "/product?id=-1%20UNION%20SELECT%201,k,v%20FROM%20app_meta"
+        self.assertEqual(self._decide(attack, dst_port=8083).verdict, VERDICT_ACCEPT)
+        for path in ("/product?id=1", "/product?name=app_meta", "/health"):
+            self.assertEqual(self._decide(path, dst_port=8084).verdict, VERDICT_ACCEPT)
+
+    def test_shipped_bundle_activates_only_observed_exact_rules(self):
         self.assertEqual(self.report.source, "active")
-        self.assertEqual(self.report.bundle_id, "defender-2026-08-15-l1-ssrf-hotfix")
-        self.assertEqual(self.report.drop_capable_rules, 1)
+        self.assertEqual(self.report.bundle_id, "defender-2026-08-15-team1-capture-enforce")
+        self.assertEqual(self.report.drop_capable_rules, 4)
         self.assertEqual(self.report.demotions, ())
-        self.assertEqual(self.compiled.baseline_profiles, frozenset({"6/8082"}))
-        self.assertIs(
-            self.compiled.rules_by_id[_RULE_ID].promotion_state,
-            PromotionState.ACTIVE,
+        self.assertEqual(
+            self.compiled.baseline_profiles, frozenset({"6/8082", "6/8083", "6/8084"})
         )
         for rule_id, rule in self.compiled.rules_by_id.items():
-            if rule_id != _RULE_ID:
-                self.assertIs(rule.promotion_state, PromotionState.SHADOW)
+            expected = PromotionState.ACTIVE if rule_id in _ACTIVE_RULES else PromotionState.SHADOW
+            self.assertIs(rule.promotion_state, expected)
 
 
 if __name__ == "__main__":

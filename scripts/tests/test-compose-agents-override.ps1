@@ -118,8 +118,11 @@ if ($defenderText -notmatch 'ConfigOnly') {
 if ($defenderText -notmatch 'policy_source=active') {
     throw 'defender-deploy.md does not require policy_source=active.'
 }
-if ($defenderText -notmatch 'drop_capable_rules=0') {
-    throw 'defender-deploy.md does not require drop_capable_rules=0.'
+if ($defenderText -notmatch 'bundle_id=defender-2026-08-15-team1-capture-enforce') {
+    throw 'defender-deploy.md does not require the TEAM1 capture bundle id.'
+}
+if ($defenderText -notmatch 'drop_capable_rules=4') {
+    throw 'defender-deploy.md does not require drop_capable_rules=4.'
 }
 if ($defenderText -notmatch 'COPY policy /policy') {
     throw 'defender-deploy.md does not document the /policy image path.'

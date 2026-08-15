@@ -15,9 +15,9 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ## 현재 상태
 
-`baseline_profiles`에는 실측 정상 profile `6/8082`가 등록되어 있습니다. `sig-l1-helper-secret-001`만 `ACTIVE`이고 기존 휴리스틱 11개는 `SHADOW`입니다.
+`baseline_profiles`에는 실측 profile `6/8082`, `6/8083`, `6/8084`가 등록되어 있습니다. TEAM1의 63개 PCAP에서 flag 응답과 연결된 공격에 한정한 rule 네 개가 `ACTIVE`이고 기존 휴리스틱 11개는 `SHADOW`입니다.
 
-활성 rule은 TCP/8082 payload에서 관측된 L1 SSRF 대상 `helper-box:8080/secret`의 plain·percent-encoded 표현만 차단합니다. `/fetch` 자체, User-Agent, NAT source IP, 다른 내부 URL은 차단하지 않습니다. 이 범위는 공격 positive, Round 1 정상 negative, 100회 SLA 성격 fixture로 검증합니다.
+활성 범위는 L1 `helper-box[.]?:8080/secret` SSRF, L2 Base64-JSON `session`의 관리자 claim 위조와 loopback secret SSRF, L3 `app_meta` 대상 UNION SQLi입니다. payload 정규식은 HTTP request line에만 적용하며 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. 분석 근거와 전체 PCAP 재생 결과는 `docs/references/team1-capture-defense-map.md`에 있습니다.
 
 로더는 안전 조건을 구조적으로 강제합니다. `baseline_profiles`가 비거나 rule이 만료되거나 두 review 중 하나라도 미승인이면 차단 권한을 가진 rule을 기동 시 `SHADOW`로 강등합니다(§15.6 마지막 항목).
 
@@ -39,12 +39,14 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 | 필드 | 의미 |
 |---|---|
 | `rule_id` | 불변 ID. 중복이면 bundle 전체를 거부합니다 |
-| `kind` | `payload_regex` / `tcp_flags` / `flow_score` / `allow_profile` |
+| `kind` | `payload_regex` / `http_json_cookie_claim` / `tcp_flags` / `flow_score` / `allow_profile` |
 | `category` | `Sig` 카테고리. `CausalMatcher`의 관측 단계 매핑에도 쓰입니다 |
 | `reason_code` | 로그에 남는 비민감 사유. payload나 rule 내용을 드러내지 않아야 합니다 |
 | `protocol`, `ports` | `ports`가 비면 해당 protocol 전체(포트 무관 matcher) |
 | `pattern` | `payload_regex` 전용. 아래 「정규식 제약」 참조 |
 | `ignore_case` | 같은 scope의 rule 중 하나라도 true면 그 scope의 결합 정규식 전체가 대소문자 무시로 컴파일됩니다 |
+| `http_method`, `http_path` | `http_json_cookie_claim` 전용. percent-decoding과 absolute-form 정규화 뒤 정확히 일치해야 합니다 |
+| `cookie_name`, `claim_key`, `claim_values` | `http_json_cookie_claim` 전용. 완전한 header 안의 bounded Base64-JSON scalar claim만 비교합니다 |
 | `tcp_flags_name` | `tcp_flags` 전용. `tcp-null` / `tcp-fin` / `tcp-xmas` |
 | `min_score` | `flow_score` 전용. `CorrelationSnapshot`의 flow 점수 임계 |
 | `promotion_state` | `SHADOW` → `CANARY` → `ACTIVE` |
@@ -67,12 +69,16 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 - 중첩 수량자 `(...+)*` — backtracking 폭발을 유발합니다
 - 512자 초과, 반복 상한 1000 초과
 
+### HTTP JSON cookie 제약
+
+`http_json_cookie_claim`은 TCP와 명시적 port를 요구합니다. 한 packet의 2KB payload view 안에 request line과 header 종결자가 모두 있어야 하며, cookie 값은 512 bytes, JSON text는 512 bytes, key는 16개로 제한합니다. 불완전 header, 잘못된 Base64·JSON, 중첩 claim, 상한 초과는 매치하지 않고 `ACCEPT` 경로를 유지합니다. cookie 원문이나 claim 값은 로그·snapshot·LLM에 전달하지 않습니다.
+
 ## 강등과 거부의 차이
 
 | 처리 | 대상 | 결과 |
 |---|---|---|
 | **강등** (`SHADOW`로) | 만료된 rule, review 미승인 rule, `baseline_profiles`가 빈 상태의 차단 rule | 그 rule만 무력화, 나머지는 그대로 사용 |
-| **거부** (bundle 전체) | schema version 불일치, 중복 `rule_id`, 깨진/금지 정규식, 모순된 promotion cohort, 알 수 없는 `kind`·`promotion_state`, 포트 범위 밖, `CANARY`인데 seed/fraction 없음 | `fallback.json`으로 넘어감 |
+| **거부** (bundle 전체) | schema version 불일치, 중복 `rule_id`, 깨진/금지 정규식, 모순된 promotion cohort, 알 수 없는 `kind`·`promotion_state`, 포트 범위 밖, 잘못된 HTTP cookie 필드, `CANARY`인데 seed/fraction 없음 | `fallback.json`으로 넘어감 |
 
 기준은 "그 rule을 안전하게 무력화할 수 있는가"입니다. 만료된 rule은 `SHADOW`로 내리면 정상 트래픽에 무해하지만, 중복 `rule_id`나 깨진 정규식은 bundle 전체의 해석을 신뢰할 수 없게 만듭니다.
 

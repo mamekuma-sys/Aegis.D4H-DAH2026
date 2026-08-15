@@ -66,6 +66,7 @@ class PromotionState(str, Enum):
 
 class MatchKind(str, Enum):
     PAYLOAD_REGEX = "payload_regex"
+    HTTP_JSON_COOKIE_CLAIM = "http_json_cookie_claim"
     TCP_FLAGS = "tcp_flags"
     FLOW_SCORE = "flow_score"
     ALLOW_PROFILE = "allow_profile"
@@ -99,6 +100,11 @@ class Rule:
     ignore_case: bool = False
     tcp_flags_name: str = ""
     min_score: int = 0
+    http_method: str = ""
+    http_path: str = ""
+    cookie_name: str = ""
+    claim_key: str = ""
+    claim_values: tuple[str, ...] = ()
 
     @property
     def enforces_drop(self) -> bool:
@@ -145,6 +151,7 @@ class CompiledPolicy:
     schema_version: int
     payload_matchers: Mapping[tuple[int, int], CompiledMatcher]
     wildcard_matchers: Mapping[int, CompiledMatcher]
+    http_json_rules: Mapping[tuple[int, int, str, str], tuple[Rule, ...]]
     flag_rules: tuple[Rule, ...]
     score_rules: tuple[Rule, ...]
     allow_rules: tuple[Rule, ...]
@@ -174,6 +181,7 @@ EMPTY_POLICY = CompiledPolicy(
     schema_version=SUPPORTED_SCHEMA_VERSION,
     payload_matchers=MappingProxyType({}),
     wildcard_matchers=MappingProxyType({}),
+    http_json_rules=MappingProxyType({}),
     flag_rules=(),
     score_rules=(),
     allow_rules=(),
@@ -323,10 +331,45 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
     ignore_case = bool(raw.get("ignore_case", False))
     tcp_flags_name = ""
     min_score = 0
+    http_method = ""
+    http_path = ""
+    cookie_name = ""
+    claim_key = ""
+    claim_values: tuple[str, ...] = ()
 
     if kind is MatchKind.PAYLOAD_REGEX:
         pattern_source = str(_require(raw, "pattern", context))
         validate_pattern(pattern_source, context)
+    elif kind is MatchKind.HTTP_JSON_COOKIE_CLAIM:
+        if protocol != IPPROTO_TCP:
+            raise PolicyValidationError(f"{context}: HTTP cookie rule 의 protocol 이 tcp 가 아니다")
+        if not ports:
+            raise PolicyValidationError(f"{context}: HTTP cookie rule 은 명시적 port 가 필요하다")
+        http_method = str(_require(raw, "http_method", context)).upper()
+        if http_method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+            raise PolicyValidationError(f"{context}: 지원하지 않는 http_method {http_method!r}")
+        http_path = str(_require(raw, "http_path", context))
+        if not http_path.startswith("/") or len(http_path) > 256 or any(ch in http_path for ch in "\r\n\x00"):
+            raise PolicyValidationError(f"{context}: 안전하지 않은 http_path")
+        cookie_name = str(_require(raw, "cookie_name", context)).strip().lower()
+        claim_key = str(_require(raw, "claim_key", context)).strip().lower()
+        if not re.fullmatch(r"[a-z0-9_-]{1,64}", cookie_name):
+            raise PolicyValidationError(f"{context}: 안전하지 않은 cookie_name")
+        if not re.fullmatch(r"[a-z0-9_-]{1,64}", claim_key):
+            raise PolicyValidationError(f"{context}: 안전하지 않은 claim_key")
+        raw_values = _require(raw, "claim_values", context)
+        if not isinstance(raw_values, list) or not (1 <= len(raw_values) <= 16):
+            raise PolicyValidationError(f"{context}: claim_values 는 1~16개 배열이어야 한다")
+        normalized_values = []
+        for item in raw_values:
+            if not isinstance(item, str):
+                raise PolicyValidationError(f"{context}: claim_values 항목은 문자열이어야 한다")
+            value = item.strip().lower()
+            if not value or len(value) > 64:
+                raise PolicyValidationError(f"{context}: 안전하지 않은 claim_values 항목")
+            if value not in normalized_values:
+                normalized_values.append(value)
+        claim_values = tuple(normalized_values)
     elif kind is MatchKind.TCP_FLAGS:
         tcp_flags_name = str(_require(raw, "tcp_flags_name", context))
         if protocol != IPPROTO_TCP:
@@ -372,6 +415,11 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
         ignore_case=ignore_case,
         tcp_flags_name=tcp_flags_name,
         min_score=min_score,
+        http_method=http_method,
+        http_path=http_path,
+        cookie_name=cookie_name,
+        claim_key=claim_key,
+        claim_values=claim_values,
     )
     return rule, None
 
@@ -464,6 +512,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
 
     payload_buckets: dict[tuple[int, int], list[Rule]] = {}
     wildcard_buckets: dict[int, list[Rule]] = {}
+    http_json_buckets: dict[tuple[int, int, str, str], list[Rule]] = {}
     flag_rules: list[Rule] = []
     score_rules: list[Rule] = []
     allow_rules: list[Rule] = []
@@ -475,6 +524,10 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
                     payload_buckets.setdefault((rule.protocol, port), []).append(rule)
             else:
                 wildcard_buckets.setdefault(rule.protocol, []).append(rule)
+        elif rule.kind is MatchKind.HTTP_JSON_COOKIE_CLAIM:
+            for port in rule.ports:
+                key = (rule.protocol, port, rule.http_method, rule.http_path)
+                http_json_buckets.setdefault(key, []).append(rule)
         elif rule.kind is MatchKind.TCP_FLAGS:
             flag_rules.append(rule)
         elif rule.kind is MatchKind.FLOW_SCORE:
@@ -487,6 +540,9 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
     }
     wildcard_matchers = {
         key: _compile_matcher(bucket) for key, bucket in wildcard_buckets.items()
+    }
+    http_json_rules = {
+        key: tuple(bucket) for key, bucket in http_json_buckets.items()
     }
 
     alert_profiles: dict[str, AlertProfile] = {}
@@ -510,6 +566,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
         schema_version=schema_version,
         payload_matchers=MappingProxyType(payload_matchers),
         wildcard_matchers=MappingProxyType(wildcard_matchers),
+        http_json_rules=MappingProxyType(http_json_rules),
         flag_rules=tuple(flag_rules),
         score_rules=tuple(score_rules),
         allow_rules=tuple(allow_rules),

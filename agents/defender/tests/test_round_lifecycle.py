@@ -251,9 +251,9 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(startup[0]["policy_source"], "active")
         self.assertEqual(
             startup[0]["bundle_id"],
-            "defender-2026-08-15-l1-ssrf-hotfix",
+            "defender-2026-08-15-team1-capture-enforce",
         )
-        self.assertEqual(startup[0]["drop_capable_rules"], 1)
+        self.assertEqual(startup[0]["drop_capable_rules"], 4)
         self.assertEqual(startup[0]["demotions"], [])
         self.assertFalse(startup[0]["advisory_enabled"])
 

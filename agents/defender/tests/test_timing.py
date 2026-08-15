@@ -70,11 +70,23 @@ def build_policy(metrics):
         rule_document(
             "r-l1-ssrf",
             pattern=(
-                "helper-box(?::|%3a)8080(?:/|%2f)secret|"
-                "%68%65%6c%70%65%72%2d%62%6f%78%3a%38%30%38%30%2f%73%65%63%72%65%74"
+                "(?:GET|POST) [^\\r\\n ]{0,1000}(?:helper-box\\.?(?::|%3a)8080"
+                "(?:/|%2f)secret|%68%65%6c%70%65%72%2d%62%6f%78%3a%38%30%38%30"
+                "%2f%73%65%63%72%65%74) HTTP/1\\.[01]"
             ),
             category="ssrf",
             ports=[8082],
+        ),
+        rule_document(
+            "r-l2-admin",
+            kind="http_json_cookie_claim",
+            category="broken-auth",
+            ports=[8083],
+            http_method="GET",
+            http_path="/admin",
+            cookie_name="session",
+            claim_key="role",
+            claim_values=["admin"],
         ),
     ]
     compiled, _ = compile_bundle(minimal_bundle(rules=rules, baseline_profiles=["6/80"]))
@@ -85,12 +97,18 @@ def sample_frames(count: int) -> list[bytes]:
     """정상 요청 위주에 공격 형태를 섞은 표본."""
     frames = []
     for index in range(count):
-        if index % 20 == 0:
+        if index % 40 == 0:
             payload = (
                 b"GET /fetch?url=http://helper-box:8080/secret HTTP/1.1\r\n"
                 b"Host: team1.lig.internal:8082\r\n\r\n"
             )
             dst_port = 8082
+        elif index % 40 == 1:
+            payload = (
+                b"GET /admin HTTP/1.1\r\nHost: team1.lig.internal:8083\r\n"
+                b"Cookie: session=eyJ1c2VyIjoiZ3Vlc3QiLCJyb2xlIjoiYWRtaW4ifQ==\r\n\r\n"
+            )
+            dst_port = 8083
         else:
             payload = (
                 b"GET /index.html?page=" + str(index).encode() +

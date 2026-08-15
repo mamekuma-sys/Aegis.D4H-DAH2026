@@ -33,6 +33,21 @@ class TestBundleRejection(unittest.TestCase):
         with self.assertRaises(PolicyValidationError):
             compile_bundle(document)
 
+    def _http_rule(self, **overrides):
+        document = rule_document(
+            "http-admin",
+            kind="http_json_cookie_claim",
+            ports=[8083],
+            http_method="GET",
+            http_path="/admin",
+            cookie_name="session",
+            claim_key="role",
+            claim_values=["admin"],
+        )
+        document.pop("pattern")
+        document.update(overrides)
+        return document
+
     def test_unsupported_schema_version(self):
         document = minimal_bundle()
         document["schema_version"] = 99
@@ -97,6 +112,31 @@ class TestBundleRejection(unittest.TestCase):
 
     def test_broken_regex(self):
         self._reject(minimal_bundle(rules=[rule_document("r", pattern="(?:unclosed")]))
+
+    def test_http_cookie_rule_requires_explicit_port(self):
+        self._reject(minimal_bundle(rules=[self._http_rule(ports=[])]))
+
+    def test_http_cookie_rule_requires_tcp(self):
+        self._reject(minimal_bundle(rules=[self._http_rule(protocol="udp")]))
+
+    def test_http_cookie_rule_rejects_unknown_method(self):
+        self._reject(minimal_bundle(rules=[self._http_rule(http_method="TRACE")]))
+
+    def test_http_cookie_rule_rejects_unsafe_path(self):
+        self._reject(minimal_bundle(rules=[self._http_rule(http_path="admin")]))
+
+    def test_http_cookie_rule_requires_claim_values(self):
+        self._reject(minimal_bundle(rules=[self._http_rule(claim_values=[])]))
+
+    def test_http_cookie_rule_rejects_non_string_claim_value(self):
+        self._reject(minimal_bundle(rules=[self._http_rule(claim_values=[True])]))
+
+    def test_http_cookie_rule_compiles_to_exact_lookup(self):
+        compiled, _ = compile_bundle(minimal_bundle(
+            rules=[self._http_rule()], baseline_profiles=["6/8083"]
+        ))
+        rules = compiled.http_json_rules[(6, 8083, "GET", "/admin")]
+        self.assertEqual(tuple(rule.rule_id for rule in rules), ("http-admin",))
 
 
 class TestPatternSafety(unittest.TestCase):
@@ -215,19 +255,23 @@ class TestLoadOrder(unittest.TestCase):
             self.assertEqual(compiled.drop_capable_rule_count, 0)
             self.assertEqual(report.errors, ("active:missing", "fallback:missing"))
 
-    def test_shipped_bundle_activates_only_reviewed_l1_hotfix(self):
+    def test_shipped_bundle_activates_only_reviewed_observed_rules(self):
         compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertEqual(report.bundle_id, "defender-2026-08-15-l1-ssrf-hotfix")
-        self.assertEqual(report.drop_capable_rules, 1)
+        self.assertEqual(report.bundle_id, "defender-2026-08-15-team1-capture-enforce")
+        self.assertEqual(report.drop_capable_rules, 4)
         self.assertEqual(report.demotions, ())
-        self.assertEqual(compiled.baseline_profiles, frozenset({"6/8082"}))
+        self.assertEqual(
+            compiled.baseline_profiles, frozenset({"6/8082", "6/8083", "6/8084"})
+        )
+        active_ids = {
+            "sig-l1-helper-secret-001",
+            "http-l2-forged-admin-session-001",
+            "sig-l2-loopback-secret-001",
+            "sig-l3-app-meta-union-001",
+        }
         for rule_id, rule in compiled.rules_by_id.items():
-            expected = (
-                PromotionState.ACTIVE
-                if rule_id == "sig-l1-helper-secret-001"
-                else PromotionState.SHADOW
-            )
+            expected = PromotionState.ACTIVE if rule_id in active_ids else PromotionState.SHADOW
             self.assertIs(rule.promotion_state, expected)
 
     def test_shipped_fallback_is_valid(self):

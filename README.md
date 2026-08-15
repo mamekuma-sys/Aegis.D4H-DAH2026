@@ -24,7 +24,7 @@ scripts/              공통 검증 및 실행 도구
 
 ## 현재 단계
 
-저장소 기반과 담당 경계를 확정한 상태입니다. 공격 런타임과 방어 런타임은 각각 별도 설계 승인 후 구현합니다. 아직 Dockerfile이 없는 것은 누락이 아니라 의도된 설계 게이트입니다.
+공격·방어 런타임, 독립 Dockerfile, 공식 스켈레톤 Compose override와 단위·계약 테스트가 구현되어 있습니다. 방어 정책은 TEAM1 본선 PCAP에서 직접 확인한 L1~L3 exploit 네 종류만 `ACTIVE`로 집행하고 나머지 휴리스틱은 `SHADOW`로 유지합니다. flow 재조립, 실제 Broker verdict 송신 E2E 계측과 worker watchdog은 후속 설계·검증 항목입니다.
 
 ## 처음 시작하기
 
@@ -42,11 +42,11 @@ pwsh -NoProfile -File scripts/check-layout.ps1
 
 모든 push와 pull request에서 저장소 경계와 스켈레톤 검증기 테스트를 실행합니다. 공격·방어 구현이 시작되면 각 이미지의 단위 테스트, 계약 테스트, 독립 Docker 빌드를 같은 CI에 추가합니다.
 
-## 다음 설계 게이트
+## 다음 검증 게이트
 
-1. 공격 담당자와 S1~S5 기반 관측-계획-실행 구조를 확정합니다.
-2. 방어 담당자와 300ms hot path 및 비동기 상관분석 경계를 확정합니다.
-3. 두 Dockerfile이 준비되면 외부 스켈레톤 Compose override를 추가합니다.
+1. 외부 공식 스켈레톤에서 두 이미지를 함께 실행해 Broker 수신부터 verdict 송신까지 E2E 300ms를 계측합니다.
+2. packet-local ACTIVE rule의 TCP 분할 우회를 막을 bounded flow 재조립 경계를 승인합니다.
+3. 필수 worker watchdog과 attacker·image build CI를 추가합니다.
 
 ## 팀 작업 방식
 

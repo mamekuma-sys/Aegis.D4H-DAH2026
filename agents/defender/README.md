@@ -36,6 +36,7 @@ agents/defender/
 │   ├── session.py       BrokerSession(재연결), SocketWriter, VerdictSender, OutboundQueue
 │   ├── heartbeat.py     HeartbeatScheduler (세션별 epoch)
 │   ├── packet.py        PacketParser (상한 있는 IP/L4)
+│   ├── http_semantics.py bounded HTTP request·Base64-JSON cookie 의미 파서
 │   ├── policy.py        HotPolicy (Gate · Sig · Score)
 │   ├── rules.py         PolicyLoader, schema 검증, matcher 사전 컴파일
 │   ├── anomaly.py       AnomalyMonitor (alert-only)
@@ -45,7 +46,7 @@ agents/defender/
 │   ├── advisory.py      AdvisoryWorker (비동기 LLM 조언)
 │   ├── logging.py       AuditLogger (비밀 없는 구조화 로그)
 │   └── metrics.py       Metrics
-├── tests/               unittest 12개 모듈 + fakes.py
+├── tests/               unittest 14개 모듈 + fakes.py
 ├── Dockerfile           **초안 — Docker 담당자 확정 필요**
 └── requirements.txt     표준 라이브러리 전용(비어 있음)
 ```
@@ -72,9 +73,11 @@ agents/defender/
 
 ## 현재 정책 상태
 
-관측된 정상 profile `6/8082`를 baseline으로 등록했고, 실측 L1 SSRF 대상 `helper-box:8080/secret`만 탐지하는 `sig-l1-helper-secret-001`이 유일한 `ACTIVE` rule입니다. 기존 휴리스틱 11개는 계속 `SHADOW`입니다.
+TEAM1 본선 자료 63개 PCAP과 28개 로그를 분석해 `6/8082`, `6/8083`, `6/8084`를 baseline profile로 등록했습니다. flag 응답과 연결된 L1 SSRF, L2 관리자 session 위조·loopback SSRF, L3 `app_meta` SQLi에 대응하는 네 rule만 `ACTIVE`이고 기존 휴리스틱 11개는 계속 `SHADOW`입니다.
 
-이 rule은 TCP 목적지 포트 `8082`에서 plain·percent-encoded 대상 문자열만 차단합니다. `/fetch` 자체, User-Agent, NAT source IP, 다른 내부 URL은 차단 근거로 쓰지 않으므로 정상 요청은 계속 통과합니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
+L2 cookie rule은 raw Base64 문자열을 나열하지 않고 2KB packet payload 안의 완전한 HTTP header와 bounded JSON scalar claim만 해석합니다. 오류·분할·상한 초과는 차단 사유가 아닙니다. 정규식 rule은 HTTP request line에 한정해 header나 body의 같은 문자열을 오탐하지 않습니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
+
+63개 PCAP의 HTTP 요청 43,580건을 새 bundle에 재생한 결과 확인된 exploit shape 4,814건을 전부 차단했고, 공격이 없는 packet의 예상 밖 차단 그룹은 0개였습니다. 상세 근거는 `docs/references/team1-capture-defense-map.md`를 보십시오.
 
 승격 절차와 필드 의미는 `policy/README.md`를 보십시오.
 
@@ -111,7 +114,7 @@ $env:PYTHONPATH="src"; python -m aegis_defender
 
 §9.3은 여러 패킷에 걸친 요청을 잡기 위해 flow별 재조립 버퍼를 두라고 하지만, §8은 `CorrelationEvent`가 원본 payload를 참조하는 것을 금지합니다. 두 조건을 동시에 만족하려면 재조립을 hot path의 공유 상태에 두어야 하는데, 그것은 "builder state를 hot path에 노출하지 않는다"는 §11 경계를 깹니다.
 
-현재는 §8.1의 16KB 상한을 지키는 `FlowReassemblyBuffer`를 검증된 자료구조로만 제공하고 판정 경로에 연결하지 않았습니다. 어느 쪽으로 해결할지는 설계 보완 사항이며, §19 우선순위상 이 브랜치의 범위가 아닙니다(재조립은 1~3순위에 없고, 현재 차단 rule이 하나도 활성화되지 않아 실효 손실도 없습니다). 팀장 검토 시 이 항목을 함께 결정해 주십시오.
+현재는 §8.1의 16KB 상한을 지키는 `FlowReassemblyBuffer`를 검증된 자료구조로만 제공하고 판정 경로에 연결하지 않았습니다. 어느 쪽으로 해결할지는 설계 보완 사항입니다. 현재 ACTIVE rule 네 개도 exploit 문자열이나 HTTP header가 여러 TCP segment로 분할되면 packet-local matcher가 놓칠 수 있으므로 팀장 검토 시 이 항목을 함께 결정해야 합니다.
 
 `CausalMatcher`의 단계 이름도 관련 결정입니다. 예선 보고서 S4의 1~5 번호를 관측된 증거에 임의로 붙이지 않기 위해(§2), 단계를 `observed-*`로만 명명했습니다. 보고서 단계와의 대응은 본선 PCAP과 fixture 확보 후 `research/defense-mapping.md`에 기록합니다.
 
@@ -123,6 +126,6 @@ $env:PYTHONPATH="src"; python -m aegis_defender
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
-- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-15-l1-ssrf-hotfix", "drop_capable_rules":1, "demotions":[], ...}`
+- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-15-team1-capture-enforce", "drop_capable_rules":4, "demotions":[], ...}`
 - 종료: SIGTERM에서 2초 내 정리 종료, 종료 코드 0
 - 비밀 비출력: `FLAG{...}`, API key, Bearer 토큰, raw payload가 로그에 나오지 않음을 `tests/test_advisory.py`의 `TestAuditRedaction`이 검증

@@ -103,9 +103,17 @@
 | 표준 라이브러리만 사용한 결정론적 재현 | 44 | **가능** | 오프라인 | 없음 | 서드파티 의존성 0개 유지(설계 §9.3·§14) | 해당 없음 | 해당 없음 |
 | 예선 정량 지표(DR·FPR·MTTD·Precision·Recall) | 12, 37, 45 | **제외** — synthetic N=8 상대 비교값 | **제외** | 본선 threshold로 사용 금지 | 해당 없음 | 해당 없음 | 해당 없음 |
 
+## 2026-08-15 TEAM1 본선 관측 반영
+
+TEAM1의 63개 PCAP과 28개 로그에서 Broker가 전달하는 것과 같은 packet-local HTTP 증거로 L1 SSRF, L2 Base64-JSON 관리자 session 위조·loopback SSRF, L3 `app_meta` UNION SQLi를 확인했다. 원본과 분석 출력은 Git 제외 경로에 두고 tree hash, aggregate count, logical evidence와 정책 매핑만 `docs/references/team1-capture-defense-map.md`에 기록한다.
+
+이 관측으로 A 전략의 고신뢰 exact signature 네 개를 `ACTIVE`로 승인했다. L2 cookie는 raw Base64 문자열 11종을 나열하지 않고 bounded HTTP 의미 parser와 versioned rule 필드로 검사한다. parser는 애플리케이션 세션의 진위를 일반화하지 않으며, 정확히 관측된 `/admin`·`session`·`role=admin` 조합만 판정한다. malformed·분할·과대 입력은 기존 원칙대로 `ACCEPT`한다.
+
+63개 PCAP 재생에서 확인된 exploit-shape 4,814건을 모두 차단했고 공격이 없는 packet의 예상 밖 차단 그룹은 없었다. 이 결과는 offline packet replay이며 300ms 물리 송신 E2E 또는 공식 SLA 결과로 표현하지 않는다.
+
 ## DROP 영향이 있는 항목의 승인 조건
 
-위 S1~S5 및 파이프라인 매핑 표에서 runtime `ACCEPT`/`DROP`에 직접 연결되는 예선 개념은 아직 없다. 정상 트래픽 기준선과 packet-derived 충돌률은 metric·경보·Break 분석에만 쓰이며 runtime rollback이나 effective-policy 변경을 일으키지 않는다. 실제 DROP 후보는 앞의 A~H 검토에서 채택한 A, 증명된 C invariant와 사전 승인된 multi-signal rule에서 별도로 나온다.
+위 S1~S5 및 파이프라인 매핑 표의 예선 개념 자체는 runtime `ACCEPT`/`DROP`에 직접 연결하지 않는다. 정상 트래픽 기준선과 packet-derived 충돌률은 metric·경보·Break 분석에만 쓰이며 runtime rollback이나 effective-policy 변경을 일으키지 않는다. 실제 DROP은 앞의 A~H 검토에서 채택한 A에 따라 본선 PCAP에서 성공 응답과 직접 연결되고 정상 negative·SLA 성격 회귀를 통과한 네 exact rule에서 나온다.
 
 실제 `DROP` rule은 `FinalsPhase 1`의 관측 이후에 개별로 추가되며, 각 rule은 설계 §6.1의 6조건과 §10.2의 기록 항목을 모두 충족해야 한다. 최소 요건은 다음과 같다.
 
