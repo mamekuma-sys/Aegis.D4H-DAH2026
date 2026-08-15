@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 import urllib.parse
 from dataclasses import dataclass
 
@@ -19,7 +20,8 @@ MAX_HEADER_LINES = 64
 MAX_COOKIE_VALUE = 512
 MAX_JSON_KEYS = 16
 MAX_JSON_TEXT = 512
-MAX_PERCENT_DECODE_ROUNDS = 2
+MAX_PERCENT_DECODE_ROUNDS = 3
+MAX_NESTED_URL_DEPTH = 3
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
 
 
@@ -44,8 +46,12 @@ def _decode_target(raw: bytes) -> str | None:
         if decoded == target:
             break
         target = decoded
-    if len(target) > MAX_REQUEST_LINE or any(ch in target for ch in (b"\r", b"\n", b"\x00")):
+    if len(target) > MAX_REQUEST_LINE or b"\x00" in target:
         return None
+    # Raw CR/LF cannot occur inside the already-bounded request line, but percent-
+    # encoded SQL whitespace decodes to these bytes.  Treat decoded controls as
+    # semantic whitespace instead of turning a valid application request invisible.
+    target = target.replace(b"\r", b" ").replace(b"\n", b" ")
     try:
         text = target.decode("latin-1")
     except UnicodeDecodeError:
@@ -59,6 +65,66 @@ def _decode_target(raw: bytes) -> str | None:
         if parsed.query:
             text += "?" + parsed.query
     return text
+
+
+def _decode_query_component(raw: str) -> str | None:
+    value = raw.encode("latin-1", "replace")
+    for _ in range(MAX_PERCENT_DECODE_ROUNDS):
+        value = value.replace(b"+", b" ")
+        try:
+            decoded = urllib.parse.unquote_to_bytes(value)
+        except Exception:
+            return None
+        if decoded == value:
+            break
+        value = decoded
+    if len(value) > MAX_REQUEST_LINE or b"\x00" in value:
+        return None
+    value = value.replace(b"\r", b" ").replace(b"\n", b" ")
+    return value.decode("latin-1", "replace")
+
+
+def _query_pairs(query: str) -> tuple[tuple[str, str], ...]:
+    pairs = []
+    for item in query.split("&"):
+        if not item:
+            continue
+        raw_name, separator, raw_value = item.partition("=")
+        name = _decode_query_component(raw_name)
+        value = _decode_query_component(raw_value if separator else "")
+        if name is None or value is None or not name:
+            continue
+        pairs.append((name.strip().lower(), value))
+        if len(pairs) >= 32:
+            break
+    return tuple(pairs)
+
+
+def _canonical_url_path(path: str) -> str:
+    decoded = _decode_query_component(path) or path
+    normalized = re.sub(r"/+", "/", decoded or "/")
+    return normalized if normalized.startswith("/") else "/" + normalized
+
+
+def _iter_url_targets(value: str, depth: int = 0):
+    if depth >= MAX_NESTED_URL_DEPTH:
+        return
+    decoded = _decode_query_component(value)
+    if decoded is None or not decoded.lower().startswith(("http://", "https://")):
+        return
+    try:
+        parsed = urllib.parse.urlsplit(decoded)
+        host = (parsed.hostname or "").rstrip(".").lower()
+        port = parsed.port
+    except ValueError:
+        return
+    if not host:
+        return
+    if port is None:
+        port = 443 if parsed.scheme.lower() == "https" else 80
+    yield host, int(port), _canonical_url_path(parsed.path or "/")
+    for _, nested_value in _query_pairs(parsed.query):
+        yield from _iter_url_targets(nested_value, depth + 1)
 
 
 def _decode_json_cookie(value: bytes) -> tuple[tuple[str, str], ...] | None:
@@ -94,6 +160,8 @@ def _decode_json_cookie(value: bytes) -> tuple[tuple[str, str], ...] | None:
 class HttpRequestView:
     method: str
     target: str
+    path: str
+    query_pairs: tuple[tuple[str, str], ...]
     json_cookies: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
 
     def cookie_claim_matches(
@@ -107,6 +175,45 @@ class HttpRequestView:
             for key, value in claims:
                 if key == expected_key and value in claim_values:
                     return True
+        return False
+
+    def ssrf_target_matches(
+        self,
+        query_names: tuple[str, ...],
+        target_hosts: tuple[str, ...],
+        target_ports: tuple[int, ...],
+        target_path: str,
+    ) -> bool:
+        expected_names = frozenset(name.lower() for name in query_names)
+        expected_hosts = frozenset(host.rstrip(".").lower() for host in target_hosts)
+        expected_ports = frozenset(int(port) for port in target_ports)
+        expected_path = _canonical_url_path(target_path)
+        for name, value in self.query_pairs:
+            if expected_names and name not in expected_names:
+                continue
+            for host, port, path in _iter_url_targets(value):
+                if host in expected_hosts and port in expected_ports and path == expected_path:
+                    return True
+        return False
+
+    def sql_source_matches(self, query_names: tuple[str, ...], source: str) -> bool:
+        expected_names = frozenset(name.lower() for name in query_names)
+        expected_source = source.strip().lower()
+        for name, value in self.query_pairs:
+            if expected_names and name not in expected_names:
+                continue
+            canonical = re.sub(r"/\*.*?\*/", " ", value, flags=re.DOTALL)
+            canonical = re.sub(r"\[([A-Za-z_][A-Za-z0-9_]*)\]", r"\1", canonical)
+            tokens = re.findall(r"[a-z_][a-z0-9_]*", canonical.lower())
+            try:
+                union_at = tokens.index("union")
+                select_at = tokens.index("select", union_at + 1)
+                from_at = tokens.index("from", select_at + 1)
+                source_at = tokens.index(expected_source, from_at + 1)
+            except ValueError:
+                continue
+            if union_at < select_at < from_at < source_at:
+                return True
         return False
 
 
@@ -128,6 +235,9 @@ def parse_http_request(payload: bytes) -> HttpRequestView | None:
     target = _decode_target(parts[1])
     if target is None:
         return None
+    path, separator, query = target.partition("?")
+    path = path or "/"
+    query_pairs = _query_pairs(query if separator else "")
 
     cookies = []
     header_lines = payload[line_end + 2 : header_end].split(b"\r\n")
@@ -150,4 +260,10 @@ def parse_http_request(payload: bytes) -> HttpRequestView | None:
             claims = _decode_json_cookie(cookie_value)
             if normalized_name and claims is not None:
                 cookies.append((normalized_name, claims))
-    return HttpRequestView(method=method, target=target, json_cookies=tuple(cookies))
+    return HttpRequestView(
+        method=method,
+        target=target,
+        path=path,
+        query_pairs=query_pairs,
+        json_cookies=tuple(cookies),
+    )

@@ -15,7 +15,7 @@ from typing import Optional
 from .models import Endpoint, ExecutionPlan, Scenario, VulnClass
 from .profiles import suggest_vuln_classes
 
-MAX_TURNS = 6  # endpoint당 LLM 왕복 상한. single-flight·결정론 우선으로 실사용은 낮게 유지되며,
+MAX_TURNS = 4  # endpoint당 LLM 왕복 상한. 구조 fingerprint single-flight 뒤 대표 solver만 사용하며,
 # 결정론이 못 뚫는 어려운 표적을 여유 예산 안에서 더 깊게 공략한다(§0.2: flag 1개 > 토큰 절약).
 
 # 취약 부류 → 예선 시나리오(보고용 느슨한 대응, 실행 판단 아님).

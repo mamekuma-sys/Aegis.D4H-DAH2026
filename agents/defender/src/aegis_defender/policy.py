@@ -39,8 +39,9 @@ from .metrics import (
 from .http_semantics import parse_http_request
 from .packet import ParsedPacket, ParseStatus, is_scan_flag_combination
 from .protocol import FrameStatus, VERDICT_ACCEPT, VERDICT_DROP
-from .rules import CompiledPolicy, EMPTY_POLICY, PromotionState, Rule, canary_selected
+from .rules import CompiledPolicy, EMPTY_POLICY, MatchKind, PromotionState, Rule, canary_selected
 from .state import CorrelationSnapshotRef
+from .stream import HttpStreamStitcher
 
 # §5.2 — 판정 soft cutoff. PACKET 수신 시각 기준이며 큐 진입 시각 기준이 아니다.
 SOFT_CUTOFF_SECONDS = 0.005
@@ -106,12 +107,14 @@ class HotPolicy:
         metrics: Metrics | None = None,
         clock=time.monotonic,
         soft_cutoff: float = SOFT_CUTOFF_SECONDS,
+        http_stream: HttpStreamStitcher | None = None,
     ) -> None:
         self._policy = policy or EMPTY_POLICY
         self._snapshot_ref = snapshot_ref
         self._metrics = metrics
         self._clock = clock
         self._soft_cutoff = soft_cutoff
+        self._http_stream = http_stream or HttpStreamStitcher()
 
     @property
     def policy(self) -> CompiledPolicy:
@@ -278,29 +281,37 @@ class HotPolicy:
         if not payload:
             return None
 
+        stitched = self._http_stream.feed(parsed, self._clock())
+        payload_views = [payload]
+        if stitched is not None and stitched != payload:
+            payload_views.insert(0, stitched)
+
         # 포트별 matcher와 포트 무관 matcher 최대 두 번. 정규식 수십 개를 패킷마다
         # 순차 실행하지 않는 것이 §5.2 `Sig` 100μs 예산의 전제다(§9.3).
-        for matcher in (
-            self._policy.payload_matchers.get((parsed.protocol, parsed.dst_port)),
-            self._policy.wildcard_matchers.get(parsed.protocol),
-        ):
-            if matcher is None:
-                continue
-            found = matcher.pattern.search(payload)
-            if found is None:
-                continue
-            rule = matcher.rules_by_group.get(found.lastgroup or "")
-            if rule is None or not self._scope_allows(rule, parsed):
-                continue
-            return self._enforce(
-                pkt_id, rule, parsed, received_at, STAGE_SIG, allowed_by, rule.category, baseline
-            )
+        for candidate in payload_views:
+            for matcher in (
+                self._policy.payload_matchers.get((parsed.protocol, parsed.dst_port)),
+                self._policy.wildcard_matchers.get(parsed.protocol),
+            ):
+                if matcher is None:
+                    continue
+                found = matcher.pattern.search(candidate)
+                if found is None:
+                    continue
+                rule = matcher.rules_by_group.get(found.lastgroup or "")
+                if rule is None or not self._scope_allows(rule, parsed):
+                    continue
+                self._http_stream.discard(parsed.flow_key)
+                return self._enforce(
+                    pkt_id, rule, parsed, received_at, STAGE_SIG,
+                    allowed_by, rule.category, baseline,
+                )
 
-        if self._policy.http_json_rules:
-            request = parse_http_request(payload)
+        if self._policy.http_json_rules or self._policy.http_semantic_rules:
+            request = parse_http_request(stitched if stitched is not None else payload)
             if request is not None:
                 rules = self._policy.http_json_rules.get(
-                    (parsed.protocol, parsed.dst_port, request.method, request.target), ()
+                    (parsed.protocol, parsed.dst_port, request.method, request.path), ()
                 )
                 for rule in rules:
                     if not self._scope_allows(rule, parsed):
@@ -308,6 +319,28 @@ class HotPolicy:
                     if request.cookie_claim_matches(
                         rule.cookie_name, rule.claim_key, rule.claim_values
                     ):
+                        return self._enforce(
+                            pkt_id, rule, parsed, received_at, STAGE_SIG,
+                            allowed_by, rule.category, baseline,
+                        )
+                semantic_rules = self._policy.http_semantic_rules.get(
+                    (parsed.protocol, parsed.dst_port, request.method, request.path), ()
+                )
+                for rule in semantic_rules:
+                    if not self._scope_allows(rule, parsed):
+                        continue
+                    matched = False
+                    if rule.kind is MatchKind.HTTP_SSRF_TARGET:
+                        matched = request.ssrf_target_matches(
+                            rule.query_names,
+                            rule.target_hosts,
+                            rule.target_ports,
+                            rule.target_path,
+                        )
+                    elif rule.kind is MatchKind.HTTP_SQLI_SOURCE:
+                        matched = request.sql_source_matches(rule.query_names, rule.sql_source)
+                    if matched:
+                        self._http_stream.discard(parsed.flow_key)
                         return self._enforce(
                             pkt_id, rule, parsed, received_at, STAGE_SIG,
                             allowed_by, rule.category, baseline,

@@ -36,6 +36,12 @@ class TestHttpRequestView(unittest.TestCase):
     def test_absolute_form_is_reduced_to_path_and_query(self):
         view = parse_http_request(request("http://team1.lig.internal:8083/admin?view=1"))
         self.assertEqual(view.target, "/admin?view=1")
+        self.assertEqual(view.path, "/admin")
+        self.assertEqual(view.query_pairs, (("view", "1"),))
+
+    def test_empty_query_does_not_change_protected_route(self):
+        view = parse_http_request(request("/admin?"))
+        self.assertEqual(view.path, "/admin")
 
     def test_claim_order_and_boolean_values_do_not_break_parser(self):
         value = encoded({"admin": True, "role": "admin", "user": "operator"})
@@ -67,6 +73,55 @@ class TestHttpRequestView(unittest.TestCase):
         view = parse_http_request(request(cookie="session=" + "A" * (MAX_COOKIE_VALUE + 1)))
         self.assertIsNotNone(view)
         self.assertFalse(view.cookie_claim_matches("session", "role", ("admin",)))
+
+    def test_nested_and_canonical_ssrf_targets_match(self):
+        targets = (
+            "/fetch?url=http%3A%2F%2Fhelper-box%3A08080%2F%2Fsecret",
+            "/fetch?url=http%3A%2F%2F127.0.0.1%3A8082%2Ffetch%3Furl%3Dhttp%253A%252F%252FHELPER-BOX.%253A8080%252Fsecret%253F",
+        )
+        for target in targets:
+            with self.subTest(target=target):
+                view = parse_http_request(request(target))
+                self.assertTrue(view.ssrf_target_matches(
+                    ("url",), ("helper-box",), (8080,), "/secret"
+                ))
+
+    def test_ssrf_scope_mismatches_do_not_match(self):
+        view = parse_http_request(request(
+            "/fetch?url=http%3A%2F%2Fhelper-box%3A8080%2Fhealth"
+            "&next=http%3A%2F%2Fexample.invalid%3A8080%2Fsecret"
+        ))
+        self.assertFalse(view.ssrf_target_matches(
+            ("url",), ("helper-box",), (8080,), "/secret"
+        ))
+        self.assertFalse(view.ssrf_target_matches(
+            ("next",), ("helper-box",), (8080,), "/secret"
+        ))
+        self.assertFalse(view.ssrf_target_matches(
+            ("url",), ("helper-box",), (8081,), "/health"
+        ))
+
+    def test_sql_comments_controls_and_brackets_are_canonicalized(self):
+        targets = (
+            "/product?id=-1%20UNION%0A%0ASELECT%20k%2Cv%2C3%20FROM%20app_meta",
+            "/product?id=0%2F%2Ax%2A%2FUNION%2F%2Ax%2A%2FSELECT%2F%2Ax%2A%2F1%2Cv%2C3%2F%2Ax%2A%2FFROM%2F%2Ax%2A%2F%5Bapp_meta%5D",
+        )
+        for target in targets:
+            with self.subTest(target=target):
+                view = parse_http_request(request(target))
+                self.assertTrue(view.sql_source_matches(("id",), "app_meta"))
+
+    def test_partial_or_wrong_parameter_sql_markers_do_not_match(self):
+        targets = (
+            "/product?id=select%20v%20from%20app_meta",
+            "/product?id=union%20select%20app_meta",
+            "/product?note=union%20select%20v%20from%20app_meta&id=1",
+            "/product?id=union%20select%20v%20from%20products",
+        )
+        for target in targets:
+            with self.subTest(target=target):
+                view = parse_http_request(request(target))
+                self.assertFalse(view.sql_source_matches(("id",), "app_meta"))
 
 
 if __name__ == "__main__":

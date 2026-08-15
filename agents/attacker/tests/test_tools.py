@@ -17,6 +17,7 @@ from aegis_attacker.tools import (
     PlanBindingError,
     double_encode_tokens,
     evasion_variants,
+    fully_encode_target,
     insert_sql_comments,
     url_encode_tokens,
     vary_keyword_case,
@@ -166,6 +167,28 @@ class TestEvasion(unittest.TestCase):
     def test_variants_differ(self):
         variants = evasion_variants("1' UNION SELECT sql FROM sqlite_master")
         self.assertTrue(len(variants) >= 2)
+
+    def test_fully_encoded_target_preserves_http_delimiters(self):
+        encoded = fully_encode_target("/fetch?url=http://helper-box:8080/secret")
+        self.assertTrue(encoded.startswith("/%66%65%74%63%68?%75%72%6C="))
+        self.assertIn("%68%74%74%70", encoded.lower())
+
+    def test_r17_ssrf_delivery_variants_are_generated(self):
+        variants = evasion_variants(
+            "/fetch?url=http%3A%2F%2Fhelper-box%3A8080%2Fsecret",
+            endpoint_port=8082,
+        )
+        self.assertTrue(any("helper-box.%3a8080" in item.lower() for item in variants))
+        self.assertTrue(any("%3A08080" in item for item in variants))
+        self.assertTrue(any("127.0.0.1%3A8082" in item for item in variants))
+
+    def test_r17_sqli_delivery_variants_are_generated(self):
+        variants = evasion_variants(
+            "/product?id=-1%20UNION%20SELECT%201%2Cv%2C3%20FROM%20app_meta"
+        )
+        self.assertTrue(any("/**/" in item for item in variants))
+        self.assertTrue(any("%0A" in item.upper() for item in variants))
+        self.assertTrue(any("[app_meta]" in item.lower() for item in variants))
 
 
 if __name__ == "__main__":

@@ -18,7 +18,13 @@ _L1_RULE_ID = "sig-l1-helper-secret-001"
 _L2_ADMIN_RULE_ID = "http-l2-forged-admin-session-001"
 _L2_SSRF_RULE_ID = "sig-l2-loopback-secret-001"
 _L3_RULE_ID = "sig-l3-app-meta-union-001"
-_ACTIVE_RULES = {_L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID}
+_L1_CANONICAL_RULE_ID = "http-l1-helper-secret-canonical-001"
+_L2_CANONICAL_RULE_ID = "http-l2-loopback-secret-canonical-001"
+_L3_CANONICAL_RULE_ID = "http-l3-app-meta-canonical-001"
+_ACTIVE_RULES = {
+    _L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID,
+    _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
+}
 
 _POSITIVE_PATHS = (
     "/fetch?url=http://helper-box:8080/secret",
@@ -95,6 +101,15 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                     self.assertEqual(decision.verdict, VERDICT_DROP)
                     self.assertEqual(decision.rule_id, _L2_ADMIN_RULE_ID)
 
+    def test_l2_empty_query_admin_cookie_drops(self):
+        encoded = base64.urlsafe_b64encode(b'{"user":"admin","role":"admin"}').decode("ascii")
+        decision = self._decide(
+            "/admin?", dst_port=8083,
+            headers=f"Cookie: session={encoded}\r\n",
+        )
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _L2_ADMIN_RULE_ID)
+
     def test_l2_guest_malformed_and_cookie_free_admin_requests_accept(self):
         guest = base64.b64encode(b'{"user":"guest","role":"user"}').decode("ascii")
         cases = ("", f"Cookie: session={guest}\r\n", "Cookie: session=not-base64!\r\n")
@@ -123,6 +138,20 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 self.assertEqual(decision.verdict, VERDICT_DROP)
                 self.assertEqual(decision.rule_id, _L3_RULE_ID)
 
+    def test_r17_canonical_bypasses_drop(self):
+        cases = (
+            (8082, "/%66%65%74%63%68?%75%72%6C=%68%74%74%70%3A%2F%2F%68%65%6C%70%65%72%2D%62%6F%78%2E%3A%38%30%38%30%2F%73%65%63%72%65%74", _L1_CANONICAL_RULE_ID),
+            (8082, "/fetch?url=http%3A%2F%2F127.0.0.1%3A8082%2Ffetch%3Furl%3Dhttp%253A%252F%252Fhelper-box%253A8080%252Fsecret", _L1_CANONICAL_RULE_ID),
+            (8082, "/fetch?url=http%3A%2F%2Fhelper-box%3A08080%2Fsecret", _L1_CANONICAL_RULE_ID),
+            (8084, "/product?id=-1%20UNION%0A%0ASELECT%20k%2Cv%2C3%20FROM%20app_meta", _L3_CANONICAL_RULE_ID),
+            (8084, "/product?id=0%2F%2Ax%2A%2FUNION%2F%2Ax%2A%2FSELECT%2F%2Ax%2A%2F1%2Cv%2C3%2F%2Ax%2A%2FFROM%2F%2Ax%2A%2F%5Bapp_meta%5D", _L3_CANONICAL_RULE_ID),
+        )
+        for index, (port, path, rule_id) in enumerate(cases):
+            with self.subTest(path=path):
+                decision = self._decide(path, dst_port=port, pkt_id=500 + index)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, rule_id)
+
     def test_cross_layer_and_normal_product_requests_accept(self):
         attack = "/product?id=-1%20UNION%20SELECT%201,k,v%20FROM%20app_meta"
         self.assertEqual(self._decide(attack, dst_port=8083).verdict, VERDICT_ACCEPT)
@@ -131,8 +160,8 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
 
     def test_shipped_bundle_activates_only_observed_exact_rules(self):
         self.assertEqual(self.report.source, "active")
-        self.assertEqual(self.report.bundle_id, "defender-2026-08-15-team1-capture-enforce")
-        self.assertEqual(self.report.drop_capable_rules, 4)
+        self.assertEqual(self.report.bundle_id, "defender-2026-08-15-r17-stream-canonical")
+        self.assertEqual(self.report.drop_capable_rules, 7)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles, frozenset({"6/8082", "6/8083", "6/8084"})

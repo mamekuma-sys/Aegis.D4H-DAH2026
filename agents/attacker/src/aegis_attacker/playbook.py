@@ -25,7 +25,13 @@ class Playbook:
     def __init__(self):
         self._by_fp = {}
         self._inflight = {}   # banner_fp -> threading.Event (해결 시도 종료 시 set)
+        self._generation = 0
         self._lock = threading.Lock()
+
+    @property
+    def generation(self) -> int:
+        with self._lock:
+            return self._generation
 
     @staticmethod
     def _sanitize(exploit: dict) -> dict:
@@ -43,8 +49,13 @@ class Playbook:
     def record(self, banner_fp: str, exploit: dict) -> None:
         if not banner_fp:
             return
+        sanitized = self._sanitize(exploit)
         with self._lock:
-            self._by_fp.setdefault(banner_fp, self._sanitize(exploit))
+            if self._by_fp.get(banner_fp) != sanitized:
+                # A delivery encoding that crossed a stricter defender supersedes the
+                # raw form learned from a weak team while preserving the same semantics.
+                self._by_fp[banner_fp] = sanitized
+                self._generation += 1
 
     def lookup(self, banner_fp: str):
         with self._lock:
@@ -94,3 +105,4 @@ class Playbook:
         with self._lock:
             self._by_fp.clear()
             self._inflight.clear()
+            self._generation = 0

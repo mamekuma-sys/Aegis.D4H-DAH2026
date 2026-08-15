@@ -107,13 +107,24 @@
 
 TEAM1의 63개 PCAP과 28개 로그에서 Broker가 전달하는 것과 같은 packet-local HTTP 증거로 L1 SSRF, L2 Base64-JSON 관리자 session 위조·loopback SSRF, L3 `app_meta` UNION SQLi를 확인했다. 원본과 분석 출력은 Git 제외 경로에 두고 tree hash, aggregate count, logical evidence와 정책 매핑만 `docs/references/team1-capture-defense-map.md`에 기록한다.
 
-이 관측으로 A 전략의 고신뢰 exact signature 네 개를 `ACTIVE`로 승인했다. L2 cookie는 raw Base64 문자열 11종을 나열하지 않고 bounded HTTP 의미 parser와 versioned rule 필드로 검사한다. parser는 애플리케이션 세션의 진위를 일반화하지 않으며, 정확히 관측된 `/admin`·`session`·`role=admin` 조합만 판정한다. malformed·분할·과대 입력은 기존 원칙대로 `ACCEPT`한다.
+초기 관측으로 A 전략의 고신뢰 exact signature 네 개를 `ACTIVE`로 승인했다. L2 cookie는 raw Base64 문자열 11종을 나열하지 않고 bounded HTTP 의미 parser와 versioned rule 필드로 검사한다. parser는 애플리케이션 세션의 진위를 일반화하지 않으며, 정확히 관측된 `/admin`·`session`·`role=admin` 조합만 판정한다.
 
 63개 PCAP 재생에서 확인된 exploit-shape 4,814건을 모두 차단했고 공격이 없는 packet의 예상 밖 차단 그룹은 없었다. 이 결과는 offline packet replay이며 300ms 물리 송신 E2E 또는 공식 SLA 결과로 표현하지 않는다.
 
+R17에서는 packet-local 문자열 규칙을 피하는 완전 target encoding, trailing-dot·대소문자 host,
+0-padding port, repeated slash, 중첩 SSRF, SQL control whitespace·block comment·bracket identifier와
+TCP header 분할을 확인했다. 이에 L1/L2 SSRF와 L3 SQLi를 bounded canonical HTTP 의미 rule 세 개로
+추가하고, 단일 producer가 소유하는 4KB·2,048 flow·5초 TTL의 in-order header stitcher를 `Sig`에
+연결했다. gap·과대·불완전 flow는 폐기 후 `ACCEPT`하며 일반 TCP stream이나 body는 재조립하지 않는다.
+
+R17 세 PCAP의 offline packet replay에서 새 bundle은 L1 549, L2 625, L3 217개의 관련 packet을
+DROP했고 위 성공 우회 형태가 모두 해당 계층의 승인 rule에 매치됐다. 이 수치는 packet verdict 수이며
+flag 수나 공식 SLA 결과가 아니다. hot-path 회귀의 1,100 pkt/s profile은 p99 128.3us, max 264.2us로
+내부 p99 500us 목표를 통과했다.
+
 ## DROP 영향이 있는 항목의 승인 조건
 
-위 S1~S5 및 파이프라인 매핑 표의 예선 개념 자체는 runtime `ACCEPT`/`DROP`에 직접 연결하지 않는다. 정상 트래픽 기준선과 packet-derived 충돌률은 metric·경보·Break 분석에만 쓰이며 runtime rollback이나 effective-policy 변경을 일으키지 않는다. 실제 DROP은 앞의 A~H 검토에서 채택한 A에 따라 본선 PCAP에서 성공 응답과 직접 연결되고 정상 negative·SLA 성격 회귀를 통과한 네 exact rule에서 나온다.
+위 S1~S5 및 파이프라인 매핑 표의 예선 개념 자체는 runtime `ACCEPT`/`DROP`에 직접 연결하지 않는다. 정상 트래픽 기준선과 packet-derived 충돌률은 metric·경보·Break 분석에만 쓰이며 runtime rollback이나 effective-policy 변경을 일으키지 않는다. 실제 DROP은 앞의 A~H 검토에서 채택한 A에 따라 본선 PCAP에서 성공 응답과 직접 연결되고 정상 negative·SLA 성격 회귀를 통과한 네 exact rule과 세 canonical HTTP 의미 rule에서 나온다.
 
 실제 `DROP` rule은 `FinalsPhase 1`의 관측 이후에 개별로 추가되며, 각 rule은 설계 §6.1의 6조건과 §10.2의 기록 항목을 모두 충족해야 한다. 최소 요건은 다음과 같다.
 

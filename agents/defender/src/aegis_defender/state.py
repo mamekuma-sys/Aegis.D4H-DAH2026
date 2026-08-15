@@ -60,10 +60,9 @@ class FlowReassemblyBuffer:
     상태에 두어야 하는데, 그것은 "builder state를 hot path에 노출하지 않는다"는
     §11 경계를 깬다.
 
-    따라서 이 컨테이너는 §8.1 상한을 지키는 검증된 원시 자료구조로만 제공하고,
-    실제 배선은 §19 우선순위에 따라 정상 negative fixture가 확보된 뒤 별도
-    브랜치에서 설계 보완과 함께 진행한다. 자세한 내용은
-    `agents/defender/README.md`의 「알려진 설계 간극」 참조.
+    따라서 이 컨테이너는 §8.1 상한을 지키는 검증된 비동기 상관용 원시 자료구조로만
+    제공하고 판정 경로에는 배선하지 않는다. R17의 분할 HTTP header는 별도
+    `HttpStreamStitcher`가 단일 producer 소유·4KB 상한·짧은 TTL로만 처리한다.
     """
 
     __slots__ = ("_data",)

@@ -48,6 +48,22 @@ class TestBundleRejection(unittest.TestCase):
         document.update(overrides)
         return document
 
+    def _semantic_rule(self, kind="http_ssrf_target", **overrides):
+        document = rule_document(
+            "http-semantic",
+            kind=kind,
+            ports=[8082],
+            http_method="GET",
+            http_paths=["/fetch"],
+            query_names=["url"],
+            target_hosts=["helper-box"],
+            target_ports=[8080],
+            target_path="/secret",
+        )
+        document.pop("pattern")
+        document.update(overrides)
+        return document
+
     def test_unsupported_schema_version(self):
         document = minimal_bundle()
         document["schema_version"] = 99
@@ -137,6 +153,41 @@ class TestBundleRejection(unittest.TestCase):
         ))
         rules = compiled.http_json_rules[(6, 8083, "GET", "/admin")]
         self.assertEqual(tuple(rule.rule_id for rule in rules), ("http-admin",))
+
+    def test_semantic_rule_requires_tcp_port_and_safe_paths(self):
+        for rule in (
+            self._semantic_rule(protocol="udp"),
+            self._semantic_rule(ports=[]),
+            self._semantic_rule(http_paths=[]),
+            self._semantic_rule(http_paths=["fetch"]),
+            self._semantic_rule(target_ports=[0]),
+        ):
+            with self.subTest(rule=rule):
+                self._reject(minimal_bundle(rules=[rule]))
+
+    def test_semantic_rules_compile_to_bounded_lookup(self):
+        ssrf = self._semantic_rule()
+        sqli = self._semantic_rule(
+            kind="http_sqli_source",
+            rule_id="http-sqli",
+            ports=[8084],
+            http_paths=["/product"],
+            query_names=["id"],
+            sql_source="app_meta",
+        )
+        for key in ("target_hosts", "target_ports", "target_path"):
+            sqli.pop(key)
+        compiled, _ = compile_bundle(minimal_bundle(
+            rules=[ssrf, sqli], baseline_profiles=["6/8082", "6/8084"]
+        ))
+        self.assertEqual(
+            tuple(rule.rule_id for rule in compiled.http_semantic_rules[(6, 8082, "GET", "/fetch")]),
+            ("http-semantic",),
+        )
+        self.assertEqual(
+            tuple(rule.rule_id for rule in compiled.http_semantic_rules[(6, 8084, "GET", "/product")]),
+            ("http-sqli",),
+        )
 
 
 class TestPatternSafety(unittest.TestCase):
@@ -258,8 +309,8 @@ class TestLoadOrder(unittest.TestCase):
     def test_shipped_bundle_activates_only_reviewed_observed_rules(self):
         compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertEqual(report.bundle_id, "defender-2026-08-15-team1-capture-enforce")
-        self.assertEqual(report.drop_capable_rules, 4)
+        self.assertEqual(report.bundle_id, "defender-2026-08-15-r17-stream-canonical")
+        self.assertEqual(report.drop_capable_rules, 7)
         self.assertEqual(report.demotions, ())
         self.assertEqual(
             compiled.baseline_profiles, frozenset({"6/8082", "6/8083", "6/8084"})
@@ -269,6 +320,9 @@ class TestLoadOrder(unittest.TestCase):
             "http-l2-forged-admin-session-001",
             "sig-l2-loopback-secret-001",
             "sig-l3-app-meta-union-001",
+            "http-l1-helper-secret-canonical-001",
+            "http-l2-loopback-secret-canonical-001",
+            "http-l3-app-meta-canonical-001",
         }
         for rule_id, rule in compiled.rules_by_id.items():
             expected = PromotionState.ACTIVE if rule_id in active_ids else PromotionState.SHADOW

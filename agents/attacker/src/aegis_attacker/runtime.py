@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from .audit import AuditLogger, Redactor
@@ -38,7 +39,7 @@ from .observation import EvidenceFactory, Observer, UrllibHttp
 from .phase_policy import FairScheduler, cumulative_endpoint_order
 from .planner import EndpointState, Planner
 from .playbook import Playbook
-from .profiles import suggest_vuln_classes
+from .profiles import service_fingerprint, suggest_vuln_classes
 from .rate_limit import RateLimiter
 from .recon import COMMON_PROBE_PATHS
 from .round_report import RoundReport
@@ -47,7 +48,8 @@ from .tools import ExecutionAdapter, PlanBindingError, evasion_variants
 
 LOOP_SLEEP = 4.0
 PER_TARGET_BUDGET = 1
-MAX_EVASION_VARIANTS = 3
+MAX_EVASION_VARIANTS = 6
+ENDPOINT_RETRY_COOLDOWN = 30.0
 PLAN_TTL = 30.0
 EVIDENCE_TTL = 90.0
 ROUND_DURATION = 20 * 60.0  # Round 20분 → 제출 재시도 경계
@@ -80,6 +82,10 @@ class AttackerRuntime:
         self._report = None
         self._playbook = None
         self._round_active = False
+        self._state_lock = threading.Lock()
+        self._completed_endpoints = set()
+        self._endpoint_retry_state = {}
+        self._latest_evidence_refs = {}
 
     # ---- Round 컨텍스트 구성 ----
 
@@ -109,6 +115,10 @@ class AttackerRuntime:
         self._pipeline = FlagPipeline(submit_client, store)
         self._report = RoundReport(budget=self.budget)
         self._playbook = Playbook()  # Round 한정 교차 재사용(비밀 없음)
+        with self._state_lock:
+            self._completed_endpoints.clear()
+            self._endpoint_retry_state.clear()
+            self._latest_evidence_refs.clear()
 
     def start_round(self) -> RoundReport:
         """공식 Round를 연다. 이미 열려 있으면 같은 Round를 유지한다."""
@@ -122,6 +132,10 @@ class AttackerRuntime:
         if not self._round_active:
             return
         self._secret_store.expire_all()
+        with self._state_lock:
+            self._completed_endpoints.clear()
+            self._endpoint_retry_state.clear()
+            self._latest_evidence_refs.clear()
         self._round_active = False
 
     def finish_round(self) -> None:
@@ -152,6 +166,31 @@ class AttackerRuntime:
                 captured = True
         return captured
 
+    def _remember_evidence(self, endpoint, evidence_ref) -> None:
+        if evidence_ref is None:
+            return
+        with self._state_lock:
+            self._latest_evidence_refs[endpoint.endpoint_id] = evidence_ref
+
+    def _latest_evidence(self, endpoint, fallback=None):
+        with self._state_lock:
+            return self._latest_evidence_refs.get(endpoint.endpoint_id, fallback)
+
+    @staticmethod
+    def _binding_reason(exc: PlanBindingError) -> str:
+        message = str(exc)
+        if "증거" in message:
+            return "evidence-stale-or-missing"
+        if "TTL" in message:
+            return "plan-expired"
+        if "Round" in message:
+            return "round-mismatch"
+        if "endpoint" in message:
+            return "endpoint-mismatch"
+        if "부작용" in message or "변경 작업" in message:
+            return "side-effect-gate"
+        return "binding-invalid"
+
     def _feedback(self, plan: ExecutionPlan, result) -> str:
         obs = result.observation
         method, path = plan.args["method"], plan.args["path"]
@@ -167,7 +206,9 @@ class AttackerRuntime:
 
     def _try_evasion(self, plan: ExecutionPlan, evidence_ref):
         """무응답(필터 DROP) 시 동일 의도의 재인코딩 변형으로 재시도한다."""
-        for variant in evasion_variants(plan.args["path"])[:MAX_EVASION_VARIANTS]:
+        first_success = None
+        for variant in evasion_variants(
+                plan.args["path"], endpoint_port=plan.target.port)[:MAX_EVASION_VARIANTS]:
             now = self.clock()
             vplan = ExecutionPlan(
                 tool=plan.tool, target=plan.target,
@@ -184,11 +225,12 @@ class AttackerRuntime:
             except (PlanBindingError, EgressError):
                 return None, False
             self._report.record_request()
+            self._remember_evidence(plan.target, vresult.observation.evidence_ref)
             if self._process_flags(vresult.body):
                 return vresult, True
-            if vresult.outcome == Outcome.SUCCESS:
-                return vresult, False  # 필터 통과 — 이 응답으로 다음 계획
-        return None, False
+            if vresult.outcome == Outcome.SUCCESS and first_success is None:
+                first_success = vresult
+        return first_success, False
 
     # ---- 결정론적 사전 정찰 (LLM 전, 토큰 0) ----
 
@@ -218,6 +260,7 @@ class AttackerRuntime:
                 self.audit.log("hit", target=endpoint.key(), path=path, reason="recon")
                 return True, "", result.observation.evidence_ref
             evidence_ref = result.observation.evidence_ref  # 다음 프로브용 신선한 증거
+            self._remember_evidence(endpoint, evidence_ref)
             body = (result.body or "").strip()
             if body:
                 discovery.append(body[:MAX_DISCOVERY_BODY])
@@ -241,7 +284,13 @@ class AttackerRuntime:
         except (PlanBindingError, EgressError):
             return None, False
         self._report.record_request()
-        return result, self._process_flags(result.body)
+        self._remember_evidence(endpoint, result.observation.evidence_ref)
+        captured = self._process_flags(result.body)
+        if not captured and result.outcome == Outcome.TIMEOUT:
+            evaded, captured = self._try_evasion(plan, result.observation.evidence_ref)
+            if evaded is not None:
+                result = evaded
+        return result, captured
 
     # ---- 결정론적 exploit 엔진 (LLM 전, 토큰 0) ----
 
@@ -267,6 +316,7 @@ class AttackerRuntime:
         except (PlanBindingError, EgressError):
             return None, False
         self._report.record_request()
+        self._remember_evidence(endpoint, result.observation.evidence_ref)
         if self._process_flags(result.body):
             return result, True
         if result.outcome == Outcome.TIMEOUT:
@@ -318,10 +368,20 @@ class AttackerRuntime:
             attempted_keys.add(attempt_key)
             result, captured = self._execute_attempt(endpoint, attempt, evidence_ref)
             if captured:
+                winning_args = result.plan.args if result is not None else {
+                    "method": attempt.method,
+                    "path": attempt.path,
+                    "headers": dict(attempt.headers),
+                    "body": attempt.body,
+                }
                 self._playbook.record(banner_fp, {
-                    "method": attempt.method, "path": attempt.path,
-                    "headers": dict(attempt.headers), "body": attempt.body})
-                self.audit.log("hit", target=endpoint.key(), path=attempt.path,
+                    "method": winning_args.get("method", attempt.method),
+                    "path": winning_args.get("path", attempt.path),
+                    "headers": winning_args.get("headers", dict(attempt.headers)),
+                    "body": winning_args.get("body", attempt.body),
+                })
+                self.audit.log("hit", target=endpoint.key(),
+                               path=winning_args.get("path", attempt.path),
                                vuln=attempt.vuln.value, reason="det:" + attempt.reason)
                 return True
             if result is None:
@@ -362,12 +422,13 @@ class AttackerRuntime:
         obs, resp = self._observer.observe_banner(endpoint)
         self._report.record_observation()
         self._report.record_request()
+        self._remember_evidence(endpoint, obs.evidence_ref)
         if obs.no_response:
             self.audit.log("skip", target=endpoint.key(), reason="no-response")
             return False
 
         current_evidence = obs.evidence_ref
-        banner_fp = obs.body_fingerprint
+        banner_fp = service_fingerprint(obs.status, resp.body or "", resp.headers)
         banner = (resp.body or "").strip()
         if self._process_flags(resp.body):
             self.audit.log("hit", target=endpoint.key(), turn=0, path="/", reason="banner")
@@ -382,6 +443,7 @@ class AttackerRuntime:
                 attempts=confirmed, attempted_keys=attempted_keys,
                 include_cookie_tamper=False):
             return True
+        current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # root 배너가 취약 부류를 직접 노출하면 정찰 sweep보다 먼저 zero-token 공격한다.
         root_hints = suggest_vuln_classes(banner)
@@ -389,6 +451,7 @@ class AttackerRuntime:
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
                 attempted_keys=attempted_keys):
             return True
+        current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # L4/UGV를 포함한 미지 인터페이스는 실제 probe 응답에서 route를 발견한 뒤에만 공격한다.
         captured, discovery, current_evidence = self._recon(endpoint, current_evidence)
@@ -401,6 +464,7 @@ class AttackerRuntime:
                 endpoint, observed_banner, banner_fp, resp.headers, current_evidence,
                 attempted_keys=attempted_keys):
             return True
+        current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # single-flight + 재사용: 같은 배너(같은 이미지)는 한 표적만 LLM으로 풀고, 나머지는
         # 그 성공 형태(method·path·headers·body)를 재사용한다(§7.6, 제22조). 병렬 첫 사이클에
@@ -414,8 +478,11 @@ class AttackerRuntime:
                     endpoint, known, current_evidence, "playbook")
                 tried_reuse = True
                 if captured:
+                    if result is not None:
+                        self._playbook.record(banner_fp, result.plan.args)
                     self.audit.log("hit", target=endpoint.key(),
-                                   path=known.get("path"), reason="playbook")
+                                   path=(result.plan.args.get("path") if result is not None
+                                         else known.get("path")), reason="playbook")
                     return True
                 if result is not None:
                     current_evidence = result.observation.evidence_ref
@@ -439,11 +506,39 @@ class AttackerRuntime:
                 self._bind_plan(plan, endpoint, current_evidence)
                 try:
                     result = self._adapter.execute(plan)
-                except (PlanBindingError, EgressError) as exc:
+                except PlanBindingError as exc:
+                    binding_reason = self._binding_reason(exc)
+                    if binding_reason == "evidence-stale-or-missing":
+                        refresh_obs, refresh_resp = self._observer.observe_banner(endpoint)
+                        self._report.record_observation()
+                        self._report.record_request()
+                        self._remember_evidence(endpoint, refresh_obs.evidence_ref)
+                        if self._process_flags(refresh_resp.body):
+                            self.audit.log("hit", target=endpoint.key(), turn=state.turn,
+                                           path="/", reason="evidence-refresh")
+                            return True
+                        current_evidence = refresh_obs.evidence_ref
+                        self._bind_plan(plan, endpoint, current_evidence)
+                        try:
+                            result = self._adapter.execute(plan)
+                        except (PlanBindingError, EgressError) as retry_exc:
+                            self.audit.log(
+                                "reject", target=endpoint.key(), turn=state.turn,
+                                reason=(self._binding_reason(retry_exc)
+                                        if isinstance(retry_exc, PlanBindingError)
+                                        else type(retry_exc).__name__),
+                            )
+                            break
+                    else:
+                        self.audit.log("reject", target=endpoint.key(), turn=state.turn,
+                                       reason=binding_reason)
+                        break
+                except EgressError as exc:
                     self.audit.log("reject", target=endpoint.key(), turn=state.turn,
                                    reason=type(exc).__name__)
                     break
                 self._report.record_request()
+                self._remember_evidence(endpoint, result.observation.evidence_ref)
 
                 if self._process_flags(result.body):
                     self._playbook.record(banner_fp, plan.args)  # 교차 재사용용 기록(비밀 없음)
@@ -457,8 +552,9 @@ class AttackerRuntime:
                     state.no_response_streak += 1
                     evaded, captured = self._try_evasion(plan, current_evidence)
                     if captured:
+                        self._playbook.record(banner_fp, evaded.plan.args)
                         self.audit.log("hit", target=endpoint.key(), turn=state.turn,
-                                       path=plan.args["path"], reason="evasion")
+                                       path=evaded.plan.args["path"], reason="evasion")
                         return True
                     if evaded is not None:
                         result = evaded
@@ -475,10 +571,30 @@ class AttackerRuntime:
     # ---- 라운드 루프 ----
 
     def _attack_isolated(self, endpoint) -> None:
+        key = endpoint.endpoint_id
+        now = self.clock()
+        with self._state_lock:
+            if key in self._completed_endpoints:
+                return
+            next_attempt, seen_generation = self._endpoint_retry_state.get(key, (0.0, -1))
+        generation = self._playbook.generation
+        if now < next_attempt and generation <= seen_generation:
+            return
+        captured = False
         try:
-            self.attack_endpoint(endpoint)
+            captured = self.attack_endpoint(endpoint)
         except Exception as exc:  # 표적 단위 격리
             self.audit.log("error", target=endpoint.key(), error=type(exc).__name__)
+        finally:
+            with self._state_lock:
+                if captured:
+                    self._completed_endpoints.add(key)
+                    self._endpoint_retry_state.pop(key, None)
+                else:
+                    self._endpoint_retry_state[key] = (
+                        self.clock() + ENDPOINT_RETRY_COOLDOWN,
+                        self._playbook.generation,
+                    )
 
     def run_cycle(self) -> RoundReport:
         """열린 Round에서 엔드포인트 전체를 한 번 공격한다(병렬, 전역 rate limit 공유).

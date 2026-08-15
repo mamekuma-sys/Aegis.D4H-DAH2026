@@ -112,12 +112,13 @@ def ipv4_tcp(
     src_port: int = 51234,
     dst_port: int = 80,
     flags: int = 0x18,
+    sequence: int = 0,
 ) -> bytes:
     """최소 IPv4+TCP 패킷. options 없음, fragment 없음."""
     tcp_header = struct.pack(
         ">HHIIBBHHH",
         src_port, dst_port,
-        0, 0,
+        sequence, 0,
         (5 << 4), flags,
         65535, 0, 0,
     )

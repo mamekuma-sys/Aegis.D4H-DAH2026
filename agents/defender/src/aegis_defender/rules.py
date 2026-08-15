@@ -67,6 +67,8 @@ class PromotionState(str, Enum):
 class MatchKind(str, Enum):
     PAYLOAD_REGEX = "payload_regex"
     HTTP_JSON_COOKIE_CLAIM = "http_json_cookie_claim"
+    HTTP_SSRF_TARGET = "http_ssrf_target"
+    HTTP_SQLI_SOURCE = "http_sqli_source"
     TCP_FLAGS = "tcp_flags"
     FLOW_SCORE = "flow_score"
     ALLOW_PROFILE = "allow_profile"
@@ -105,6 +107,12 @@ class Rule:
     cookie_name: str = ""
     claim_key: str = ""
     claim_values: tuple[str, ...] = ()
+    http_paths: tuple[str, ...] = ()
+    query_names: tuple[str, ...] = ()
+    target_hosts: tuple[str, ...] = ()
+    target_ports: tuple[int, ...] = ()
+    target_path: str = ""
+    sql_source: str = ""
 
     @property
     def enforces_drop(self) -> bool:
@@ -152,6 +160,7 @@ class CompiledPolicy:
     payload_matchers: Mapping[tuple[int, int], CompiledMatcher]
     wildcard_matchers: Mapping[int, CompiledMatcher]
     http_json_rules: Mapping[tuple[int, int, str, str], tuple[Rule, ...]]
+    http_semantic_rules: Mapping[tuple[int, int, str, str], tuple[Rule, ...]]
     flag_rules: tuple[Rule, ...]
     score_rules: tuple[Rule, ...]
     allow_rules: tuple[Rule, ...]
@@ -182,6 +191,7 @@ EMPTY_POLICY = CompiledPolicy(
     payload_matchers=MappingProxyType({}),
     wildcard_matchers=MappingProxyType({}),
     http_json_rules=MappingProxyType({}),
+    http_semantic_rules=MappingProxyType({}),
     flag_rules=(),
     score_rules=(),
     allow_rules=(),
@@ -336,6 +346,12 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
     cookie_name = ""
     claim_key = ""
     claim_values: tuple[str, ...] = ()
+    http_paths: tuple[str, ...] = ()
+    query_names: tuple[str, ...] = ()
+    target_hosts: tuple[str, ...] = ()
+    target_ports: tuple[int, ...] = ()
+    target_path = ""
+    sql_source = ""
 
     if kind is MatchKind.PAYLOAD_REGEX:
         pattern_source = str(_require(raw, "pattern", context))
@@ -370,6 +386,63 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
             if value not in normalized_values:
                 normalized_values.append(value)
         claim_values = tuple(normalized_values)
+    elif kind in (MatchKind.HTTP_SSRF_TARGET, MatchKind.HTTP_SQLI_SOURCE):
+        if protocol != IPPROTO_TCP:
+            raise PolicyValidationError(f"{context}: HTTP semantic rule 의 protocol 이 tcp 가 아니다")
+        if not ports:
+            raise PolicyValidationError(f"{context}: HTTP semantic rule 은 명시적 port 가 필요하다")
+        http_method = str(_require(raw, "http_method", context)).upper()
+        if http_method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+            raise PolicyValidationError(f"{context}: 지원하지 않는 http_method {http_method!r}")
+        raw_paths = _require(raw, "http_paths", context)
+        if not isinstance(raw_paths, list) or not (1 <= len(raw_paths) <= 16):
+            raise PolicyValidationError(f"{context}: http_paths 는 1~16개 배열이어야 한다")
+        normalized_paths = []
+        for item in raw_paths:
+            value = str(item)
+            if not value.startswith("/") or len(value) > 256 or any(ch in value for ch in "\r\n\x00"):
+                raise PolicyValidationError(f"{context}: 안전하지 않은 http_paths 항목")
+            if value not in normalized_paths:
+                normalized_paths.append(value)
+        http_paths = tuple(normalized_paths)
+
+        raw_names = raw.get("query_names", [])
+        if not isinstance(raw_names, list) or len(raw_names) > 16:
+            raise PolicyValidationError(f"{context}: query_names 는 최대 16개 배열이어야 한다")
+        normalized_names = []
+        for item in raw_names:
+            value = str(item).strip().lower()
+            if not re.fullmatch(r"[a-z0-9_-]{1,64}", value):
+                raise PolicyValidationError(f"{context}: 안전하지 않은 query_names 항목")
+            if value not in normalized_names:
+                normalized_names.append(value)
+        query_names = tuple(normalized_names)
+
+        if kind is MatchKind.HTTP_SSRF_TARGET:
+            raw_hosts = _require(raw, "target_hosts", context)
+            raw_target_ports = _require(raw, "target_ports", context)
+            if not isinstance(raw_hosts, list) or not (1 <= len(raw_hosts) <= 16):
+                raise PolicyValidationError(f"{context}: target_hosts 는 1~16개 배열이어야 한다")
+            if not isinstance(raw_target_ports, list) or not (1 <= len(raw_target_ports) <= 16):
+                raise PolicyValidationError(f"{context}: target_ports 는 1~16개 배열이어야 한다")
+            target_hosts = tuple(dict.fromkeys(str(item).rstrip(".").lower() for item in raw_hosts))
+            if any(not host or len(host) > 253 or any(ch in host for ch in "\r\n\x00/ ") for host in target_hosts):
+                raise PolicyValidationError(f"{context}: 안전하지 않은 target_hosts 항목")
+            normalized_target_ports = []
+            for item in raw_target_ports:
+                value = int(item)
+                if not (1 <= value <= 65535):
+                    raise PolicyValidationError(f"{context}: target_ports 범위 밖 {value}")
+                if value not in normalized_target_ports:
+                    normalized_target_ports.append(value)
+            target_ports = tuple(normalized_target_ports)
+            target_path = str(_require(raw, "target_path", context))
+            if not target_path.startswith("/") or len(target_path) > 256:
+                raise PolicyValidationError(f"{context}: 안전하지 않은 target_path")
+        else:
+            sql_source = str(_require(raw, "sql_source", context)).strip().lower()
+            if not re.fullmatch(r"[a-z_][a-z0-9_]{0,63}", sql_source):
+                raise PolicyValidationError(f"{context}: 안전하지 않은 sql_source")
     elif kind is MatchKind.TCP_FLAGS:
         tcp_flags_name = str(_require(raw, "tcp_flags_name", context))
         if protocol != IPPROTO_TCP:
@@ -420,6 +493,12 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
         cookie_name=cookie_name,
         claim_key=claim_key,
         claim_values=claim_values,
+        http_paths=http_paths,
+        query_names=query_names,
+        target_hosts=target_hosts,
+        target_ports=target_ports,
+        target_path=target_path,
+        sql_source=sql_source,
     )
     return rule, None
 
@@ -513,6 +592,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
     payload_buckets: dict[tuple[int, int], list[Rule]] = {}
     wildcard_buckets: dict[int, list[Rule]] = {}
     http_json_buckets: dict[tuple[int, int, str, str], list[Rule]] = {}
+    http_semantic_buckets: dict[tuple[int, int, str, str], list[Rule]] = {}
     flag_rules: list[Rule] = []
     score_rules: list[Rule] = []
     allow_rules: list[Rule] = []
@@ -528,6 +608,11 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
             for port in rule.ports:
                 key = (rule.protocol, port, rule.http_method, rule.http_path)
                 http_json_buckets.setdefault(key, []).append(rule)
+        elif rule.kind in (MatchKind.HTTP_SSRF_TARGET, MatchKind.HTTP_SQLI_SOURCE):
+            for port in rule.ports:
+                for path in rule.http_paths:
+                    key = (rule.protocol, port, rule.http_method, path)
+                    http_semantic_buckets.setdefault(key, []).append(rule)
         elif rule.kind is MatchKind.TCP_FLAGS:
             flag_rules.append(rule)
         elif rule.kind is MatchKind.FLOW_SCORE:
@@ -543,6 +628,9 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
     }
     http_json_rules = {
         key: tuple(bucket) for key, bucket in http_json_buckets.items()
+    }
+    http_semantic_rules = {
+        key: tuple(bucket) for key, bucket in http_semantic_buckets.items()
     }
 
     alert_profiles: dict[str, AlertProfile] = {}
@@ -567,6 +655,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
         payload_matchers=MappingProxyType(payload_matchers),
         wildcard_matchers=MappingProxyType(wildcard_matchers),
         http_json_rules=MappingProxyType(http_json_rules),
+        http_semantic_rules=MappingProxyType(http_semantic_rules),
         flag_rules=tuple(flag_rules),
         score_rules=tuple(score_rules),
         allow_rules=tuple(allow_rules),
