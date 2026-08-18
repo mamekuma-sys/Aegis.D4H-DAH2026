@@ -254,7 +254,7 @@ class AdvisoryWorker:
             "model": self._config.llm_model,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": 600,
+            "max_completion_tokens": 600,
         }
         url = f"{self._config.llm_base_url}/v1/chat/completions"
 

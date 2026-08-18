@@ -141,6 +141,20 @@ class TestBudget(unittest.TestCase):
         self.assertIsNotNone(worker.run_once())
         self.assertEqual(worker.calls, 2)
 
+    def test_uses_official_completion_token_parameter(self):
+        clock = FakeClock()
+        sent = {}
+
+        def transport(url, key, body, timeout):
+            sent.update(body)
+            return self._ok_transport(url, key, body, timeout)
+
+        worker = self._worker(clock, transport=transport)
+        clock.advance(120.0)
+        self.assertIsNotNone(worker.run_once())
+        self.assertEqual(sent["max_completion_tokens"], 600)
+        self.assertNotIn("max_tokens", sent)
+
     def test_round_call_cap(self):
         clock = FakeClock()
         worker = self._worker(clock, max_calls=3)

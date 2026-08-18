@@ -17,10 +17,10 @@ from .planner import parse_exploit
 MAX_LLM_CALLS_PER_ROUND = 48  # R17의 111회/93k token 무진전 확산을 막고 대표 service solver에 집중.
 LLM_TIMEOUT = 20.0
 
-# 2026-08-18 본선 제공표 중 Chat Completions 계열. 아래 모델만 현재
-# `/v1/chat/completions` 어댑터로 호출할 수 있다. Responses 전용 모델은 이름만
-# 바꿔 호출하지 않고, 별도 어댑터가 생기기 전까지 LLM 사용만 fail-safe로 생략한다.
-CHAT_COMPLETIONS_MODELS = frozenset({
+# 공식 skeleton guide는 제공 모델의 원래 API 유형과 무관하게 LiteLLM이 모두
+# `/v1/chat/completions` 요청을 투명 변환한다고 명시한다. 따라서 공지된 21개 ID만
+# 허용하고, 그 밖의 임의 모델은 fail-safe로 생략한다.
+SUPPORTED_LLM_MODELS = frozenset({
     "gpt-4o-mini",
     "gpt-4.1-mini",
     "gpt-4.1",
@@ -34,6 +34,14 @@ CHAT_COMPLETIONS_MODELS = frozenset({
     "gpt-5.6-sol",
     "o3",
     "o4-mini",
+    "gpt-5-pro",
+    "gpt-5.4-pro",
+    "gpt-5-codex",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-codex-max",
+    "gpt-5.2-codex",
+    "gpt-5.3-codex",
 })
 
 # 실패가 쌓이면 더 센 모델로 승급한다(cheap-first). 동점 시 토큰 비용이 적은 팀이
@@ -98,7 +106,7 @@ class LLMAdvisor:
         if self._key_handle is None:
             return None
         model_id = model or self._config.llm_model
-        if model_id not in CHAT_COMPLETIONS_MODELS:
+        if model_id not in SUPPORTED_LLM_MODELS:
             return None
         if not self._budget.try_reserve_llm(self._max_calls):
             return None  # 예산 소진 → 결정론 경로로 (검사·예약 원자적, 병렬 초과 방지)
@@ -117,7 +125,7 @@ class LLMAdvisor:
         payload = json.dumps({
             "model": model_id,
             "temperature": 0,
-            "max_tokens": 300,
+            "max_completion_tokens": 300,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},

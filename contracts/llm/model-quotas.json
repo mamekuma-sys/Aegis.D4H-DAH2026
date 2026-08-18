@@ -4,6 +4,8 @@
   "provider": "Azure Foundry",
   "proxy": "LiteLLM",
   "compatibility": "OpenAI",
+  "proxy_request_endpoint": "/v1/chat/completions",
+  "responses_models_transparently_converted": true,
   "quota_window": "per-minute",
   "quota_may_increase_with_organizer_notice": true,
   "team_total_budget_usd": 1360,

@@ -47,8 +47,18 @@ for required in \
     }
 done
 
+if docker compose version >/dev/null 2>&1; then
+    compose_command=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+    compose_command=(docker-compose)
+else
+    printf '%s\n' \
+        'ERROR: Docker Compose not found. Install the Compose plugin or docker-compose.' >&2
+    exit 1
+fi
+
 compose() {
-    docker compose --progress quiet \
+    "${compose_command[@]}" \
         -f "$compose_file" -f "$override_file" --profile combat "$@"
 }
 

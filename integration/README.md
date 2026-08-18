@@ -36,6 +36,10 @@ bash integration/run-with-skeleton.sh <스켈레톤-루트> --down
 ```
 
 Compose override가 공격·방어 이미지 모두 `linux/amd64`로 빌드·실행하도록 강제합니다.
+실행 스크립트는 Docker Compose plugin(`docker compose`)을 우선 사용하고, 없으면
+Homebrew 등으로 설치한 standalone `docker-compose`를 자동으로 사용합니다.
+Apple Silicon에서 공식 x86-64 Broker의 NFQUEUE까지 실기 검증할 때는 단순 컨테이너
+에뮬레이션이 아니라 x86_64 Linux VM을 사용해야 합니다.
 
 ## 이미지 제출 계약
 

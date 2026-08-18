@@ -54,6 +54,11 @@ mkdir -p "$fake_bin"
 cat >"$fake_bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$*" == 'compose version' ]]; then
+    [[ "${FAKE_DOCKER_COMPOSE_PLUGIN:-1}" == '1' ]] || exit 1
+    printf '%s\n' 'Docker Compose version test'
+    exit 0
+fi
 if [[ "$1" == 'compose' && "$*" == *' config --format json'* ]]; then
     python3 -c '
 import json, os
@@ -75,9 +80,21 @@ exit 2
 EOF
 chmod +x "$fake_bin/docker"
 
+cat >"$fake_bin/docker-compose" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exec docker compose "$@"
+EOF
+chmod +x "$fake_bin/docker-compose"
+
 PATH="$fake_bin:$PATH" \
     bash "$repo_root/integration/run-with-skeleton.sh" "$valid" --config-only \
     >/dev/null \
     || fail 'macOS/Linux skeleton runner rejected correct repository contexts'
+
+FAKE_DOCKER_COMPOSE_PLUGIN=0 PATH="$fake_bin:$PATH" \
+    bash "$repo_root/integration/run-with-skeleton.sh" "$valid" --config-only \
+    >/dev/null \
+    || fail 'macOS standalone docker-compose fallback rejected correct repository contexts'
 
 printf '%s\n' 'test-shell-entrypoints.sh passed'

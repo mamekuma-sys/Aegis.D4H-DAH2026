@@ -24,7 +24,7 @@ scripts/              공통 검증 및 실행 도구
 
 ## 현재 단계
 
-공격·방어 런타임, 독립 Dockerfile, 공식 스켈레톤 Compose override와 단위·계약 테스트가 구현되어 있습니다. 공격자는 TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 zero-token fast path로 우선 실행하고, Phase 4 UGV는 실제 응답에서 발견한 route만 공격하며 L1~L4를 누적 순회합니다. 방어 정책은 같은 PCAP에서 직접 확인한 L1~L3 exploit 형태에 대응하는 9개 규칙만 `ACTIVE`로 집행하고 나머지 휴리스틱은 `SHADOW`로 유지합니다. bounded HTTP stream stitching, worker watchdog, PACKET 수신부터 실제 verdict socket 송신 완료까지의 E2E 계측이 연결되어 있습니다. Linux 계약 테스트는 실제 `AF_UNIX/SOCK_SEQPACKET`으로 PACKET→VERDICT·HEARTBEAT·ACTIVE 정책 9개·300ms 미만 송신을 검증합니다.
+공격·방어 런타임, 독립 Dockerfile, 공식 스켈레톤 Compose override와 단위·계약 테스트가 구현되어 있습니다. 공격자는 TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 zero-token fast path로 우선 실행하고, Phase 4 UGV는 실제 응답에서 발견한 route만 공격하며 L1~L4를 누적 순회합니다. 방어 정책은 같은 PCAP에서 직접 확인한 L1~L3 exploit 형태에 대응하는 9개 규칙만 `ACTIVE`로 집행하고 나머지 휴리스틱은 `SHADOW`로 유지합니다. bounded HTTP stream stitching, worker watchdog, PACKET 수신부터 실제 verdict socket 송신 완료까지의 E2E 계측이 연결되어 있습니다. Linux 계약 테스트에 더해 공식 Broker 실기에서도 65초간 heartbeat 65회, PACKET 116개, ACCEPT 80/DROP 36, verdict 송신 E2E 최대 14.12ms를 확인했습니다. 상세 증거는 [`본선 준비 검증 기록`](docs/reviews/2026-08-19-finals-readiness-verification.md)에 있습니다.
 
 ## 처음 시작하기
 
@@ -61,8 +61,8 @@ bash scripts/replay-defender-pcaps.sh capture \
 
 ## 다음 검증 게이트
 
-1. 외부 공식 스켈레톤에서 두 이미지를 함께 실행해 Broker 수신부터 verdict 송신까지 E2E 300ms를 계측합니다.
-2. 본선 L4 PCAP/인터페이스를 확보한 뒤 관측 fixture와 방어 rule 승격 여부를 승인합니다.
+1. 본선 L4 PCAP/인터페이스를 확보한 뒤 관측 fixture와 방어 rule 승격 여부를 승인합니다.
+2. 공식 스켈레톤 challenge 의존성 drift가 해소된 배포본에서 공격·방어 전체 demo stack을 재확인합니다.
 3. [`LLM 계약`](contracts/llm/README.md)에 당일 운영진 가격·과금 기준을 반영한 뒤
    팀 공용 `$1360` 비용 ledger와 공격·방어 배분을 확정합니다.
 
