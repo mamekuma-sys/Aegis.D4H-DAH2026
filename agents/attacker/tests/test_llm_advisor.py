@@ -3,7 +3,7 @@ import unittest
 
 from aegis_attacker.config import AttackerConfig
 from aegis_attacker.egress import EgressGateway
-from aegis_attacker.llm_advisor import LLMAdvisor
+from aegis_attacker.llm_advisor import CHAT_COMPLETIONS_MODELS, LLMAdvisor
 from aegis_attacker.models import Capability, RoundBudget, VulnClass
 from aegis_attacker.observation import HttpResponse
 from aegis_attacker.secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
@@ -88,6 +88,24 @@ class TestLLMAdvisor(unittest.TestCase):
         adv, transport = make_advisor(chat_response('{"path":"/x"}'), with_key=False)
         self.assertIsNone(adv.advise_exploit("b", "", []))
         self.assertEqual(transport.calls, 0)
+
+    def test_responses_only_model_is_not_sent_to_chat_endpoint(self):
+        adv, transport = make_advisor(chat_response('{"path":"/x"}'))
+        self.assertIsNone(adv.advise_exploit("b", "", [], model="gpt-5-pro"))
+        self.assertEqual(transport.calls, 0)
+
+    def test_chat_model_catalog_matches_finals_contract(self):
+        from pathlib import Path
+
+        contract_path = (
+            Path(__file__).resolve().parents[3]
+            / "contracts" / "llm" / "model-quotas.json"
+        )
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        expected = {item["id"] for item in contract["models"] if item["api"] == "chat"}
+        self.assertEqual(set(CHAT_COMPLETIONS_MODELS), expected)
+        self.assertIsNone(contract["price_schedule"])
+        self.assertEqual(contract["team_total_budget_usd"], 1360)
 
 
 if __name__ == "__main__":

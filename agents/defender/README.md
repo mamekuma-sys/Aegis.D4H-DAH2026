@@ -52,7 +52,18 @@ agents/defender/
 └── requirements.txt     표준 라이브러리 전용(비어 있음)
 ```
 
-스레드는 다섯 개입니다. 수신·판정 producer(메인), `SocketWriter`, HEARTBEAT scheduler, correlation worker, 선택적 advisory. §5.3의 승인된 실행 모델대로 **producer는 하나이고 inbound queue는 없습니다.** producer를 늘리거나 inbound queue를 추가하는 것은 packet ordering·memory 상한·deadline backpressure를 바꾸는 변경이므로 별도 설계 승인이 필요합니다.
+수신·판정 producer(메인) 외 helper는 `SocketWriter`, HEARTBEAT scheduler, correlation
+worker, audit logger, worker watchdog, 선택적 advisory입니다. watchdog은 packet을 읽거나 policy를
+바꾸지 않습니다. helper가 예기치 않게 죽었을 때 같은 bounded worker를 재기동하며, writer 또는
+HEARTBEAT라면 기존 session을 폐기하고 새 generation으로 재연결합니다. §5.3의 승인된 실행 모델대로
+**producer는 하나이고 inbound queue는 없습니다.** producer를 늘리거나 inbound queue를 추가하는
+것은 packet ordering·memory 상한·deadline backpressure를 바꾸는 변경이므로 별도 설계 승인이
+필요합니다.
+
+`latency.send`는 `socket.send` 호출 자체만, `latency.verdict_send_e2e`는 PACKET 수신부터 전체
+VERDICT frame을 socket이 받아들인 시점까지의 producer·queue·send 합계를 기록합니다. Broker ACK
+계약은 없으므로 후자가 에이전트에서 관측 가능한 실제 송신 완료 경계이며 shutdown 감사 로그에
+p50·p95·p99·max가 남습니다.
 
 ## 시간 예산 (§5.2)
 
@@ -80,6 +91,23 @@ L2 cookie rule은 raw Base64 문자열을 나열하지 않고 packet-local 또�
 
 전체 104개 PCAP의 HTTP 요청 79,507건에서는 확인된 exploit shape 14,388건을 전부 차단했고, 공격이 없는 packet의 예상 밖 차단 그룹은 0개였습니다. FLAG 응답 연계 요청 2,134건 중 2,121건이 새 정책에 매치됐고, 남은 13건은 경로만으로 차단할 수 없는 직접 노출 또는 관리자 claim이 증명되지 않은 요청입니다. 상세 근거는 `docs/references/team1-capture-defense-map.md`를 보십시오.
 
+같은 원본을 현재 `HotPolicy`에 다시 재생하는 macOS/Linux 자동 검사는 다음과 같습니다. 원본
+PCAP은 계속 Git 제외 경로에 두며 출력에는 payload, 주소, cookie, flag 값이 포함되지 않습니다.
+
+```bash
+bash scripts/replay-defender-pcaps.sh capture \
+  --as-of 2026-08-18T00:00:00Z \
+  --require-files 104 \
+  --require-drop-rules 9 \
+  --min-exploit-block-rate 1.0 \
+  --require-zero-unexpected-other-drops
+```
+
+이 도구는 완전한 HTTP header가 현재 packet 안에 있는 요청 통계와 실제 bounded TCP stitching
+판정을 분리합니다. 따라서 과거 일회성 분석의 stream-level 요청 수와 packet-local 요청 수를
+같은 지표처럼 비교하지 않습니다. `unexpected-other`는 관측 공격 형태를 제외한 오탐 대리값이지
+공식 SLA 오탐률이 아닙니다.
+
 승격 절차와 필드 의미는 `policy/README.md`를 보십시오.
 
 ## 테스트
@@ -93,7 +121,15 @@ python -m unittest discover -s tests -t .
 
 CI의 `defender-tests` job이 `ubuntu-latest` + Python 3.12(= 이미지와 같은 플랫폼·버전)에서 같은 명령을 실행합니다.
 
-실제 `AF_UNIX`/`SOCK_SEQPACKET` 소켓을 쓰지 않고 fake clock·fake transport로 검증합니다. macOS는 `AF_UNIX`에서 `SOCK_SEQPACKET`을 지원하지 않고 Windows도 마찬가지라, 실제 소켓 기반 테스트는 개발 환경 어디에서도 돌지 않기 때문입니다. 설계 §15.4가 fake 기반 검증을 명시한 것도 같은 이유입니다.
+대부분의 deadline·장애 회귀는 fake clock·fake transport로 검증합니다. macOS는
+`AF_UNIX`에서 `SOCK_SEQPACKET`을 지원하지 않고 Windows도 마찬가지라, 플랫폼 공통 테스트를 실제
+소켓에만 의존시킬 수 없기 때문입니다. 설계 §15.4가 fake 기반 검증을 명시한 것도 같은 이유입니다.
+
+단, `tests/test_linux_seqpacket.py`는 Linux에서 실제 `AF_UNIX/SOCK_SEQPACKET`으로 전체 runtime을
+기동해 PACKET→VERDICT, HEARTBEAT, ACTIVE policy source·9개 DROP rule, 300ms 미만 송신 완료를
+검증합니다. macOS에서는 명시적으로 skip되고 `ubuntu-latest` CI와 `linux/amd64` 이미지 검증에서
+실행됩니다. 공식 스켈레톤이 제공되면 이 검사를 대체하는 것이 아니라 그 위에 skeleton Compose
+E2E를 추가합니다.
 
 Windows에서도 그대로 돌아갑니다. `AGENT_SOCKET` 검증은 호스트 OS 규칙이 아니라 `posixpath`로 하고(컨테이너 안 Linux 경로이므로), 측정값 출력은 ASCII만 씁니다(CP949 콘솔에서 `µ`가 `UnicodeEncodeError`를 냅니다).
 

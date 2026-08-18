@@ -220,10 +220,14 @@ class HeartbeatScheduler:
     # ── 스레드 lifecycle ────────────────────────────────────────────────────
 
     def start(self) -> None:
-        if self._thread is not None:
+        if self.is_alive():
             return
         self._thread = threading.Thread(target=self.run, name="heartbeat", daemon=True)
         self._thread.start()
+
+    def is_alive(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
 
     def stop(self, timeout: float = 2.0) -> None:
         self._stop.set()

@@ -47,6 +47,20 @@ bundle `defender-2026-08-15-full-corpus-hardening`을 104개 PCAP에 재생한 �
 
 `coalesced` 21건은 하나의 TCP payload에 여러 HTTP request line이 있고 그중 하나가 exact exploit인 경우다. Broker verdict는 IP packet 단위이므로 같은 packet의 일부만 통과시킬 수 없다. 이 수치는 rollback 판단 시 별도 관찰한다.
 
+### 현재 정책 자동 재현
+
+과거 표는 stream 연결을 포함한 당시 분석 결과다. 현재 저장소에는 같은 원본을 실제
+`parse_ip`와 `HotPolicy`에 넣는 `agents/defender/tools/replay_pcaps.py`가 있으며, macOS/Linux에서는
+`scripts/replay-defender-pcaps.sh`로 실행한다. `2026-08-18T00:00:00Z` 기준 104개 PCAP 재현 결과는
+packet-local 완전 HTTP 요청 79,474건, 관측 공격 형태 14,407/14,407 차단, 기타 요청 65,046건
+통과, 같은 packet에 병합된 기타 요청 21건, 예상 밖 기타 요청 차단 0건이었다. 실제 packet
+verdict는 14,496 DROP이며 그중 89건은 현재 packet만으로 완전한 header를 세지 못했지만 runtime의
+bounded TCP stitcher가 판정한 경우다. FLAG 응답 연계 대리값은 2,133건 중 2,121건 차단이다.
+
+두 집계의 분모가 다르므로 79,507과 79,474를 회귀로 서로 동일하다고 가정하지 않는다. 자동 검사는
+정책 source, ACTIVE rule 9개, 공격 형태 차단률 100%, 예상 밖 기타 요청 차단 0건을 실패 조건으로
+사용한다. 이 값은 여전히 공식 SLA 또는 Broker 실제 송신 E2E가 아니다.
+
 ## R17 증분 관측과 재생
 
 R17 원본 gzip SHA-256은 attacker log `C51F72D0...1C7F4`, defender log

@@ -9,6 +9,11 @@ class TestRedactor(unittest.TestCase):
         r = Redactor()
         self.assertEqual(r.scrub("got FLAG{abc123} here"), "got [FLAG] here")
 
+    def test_scrub_long_final_format_flag(self):
+        r = Redactor()
+        secret = "FLAG{" + ("a" * 512) + "}"
+        self.assertNotIn("a" * 32, r.scrub("got " + secret))
+
     def test_scrub_secrets(self):
         r = Redactor(secrets={"tok-team1", "sk-supersecret"})
         out = r.scrub("token=tok-team1 key=sk-supersecret")

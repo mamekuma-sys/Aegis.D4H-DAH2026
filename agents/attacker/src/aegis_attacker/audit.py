@@ -11,7 +11,7 @@ import re
 import sys
 import threading
 
-FLAG_PATTERN = re.compile(r"FLAG\{[^}]*\}")
+FLAG_PATTERN = re.compile(r"FLAG\{[^{}\r\n]{1,1024}\}")
 FLAG_PLACEHOLDER = "[FLAG]"
 SECRET_PLACEHOLDER = "[REDACTED]"
 

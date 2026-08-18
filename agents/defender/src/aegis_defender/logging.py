@@ -28,10 +28,10 @@ MAX_FIELD_CHARS = 200
 
 REDACTED = "[REDACTED]"
 
-# flag는 챌린지 컨테이너의 `/flags/LAYER{n}_CHALL1_FLAG` 파일로 주입되고 형식은
-# `FLAG{32 hex}`다(§0.4). 아웃바운드를 볼 수 없으므로 이 형식은 차단 패턴이 아니라
-# **로그 유출 금지 대상**으로만 취급한다(§12).
-_FLAG_PATTERN = re.compile(r"FLAG\{[^}\r\n]{0,128}\}", re.IGNORECASE)
+# 최신 직접 안내에서 보장된 것은 대문자 ``FLAG{...}`` 형식뿐이다. 과거 리허설의
+# 32-hex 길이를 본선 계약으로 고정하지 않는다. 아웃바운드를 볼 수 없으므로 이
+# 패턴은 차단 근거가 아니라 **로그 유출 금지 대상**으로만 사용한다(§12).
+_FLAG_PATTERN = re.compile(r"FLAG\{[^{}\r\n]{1,1024}\}", re.IGNORECASE)
 # 키워드 뒤 **줄 끝까지** 지운다. `Authorization: Bearer <값>` 처럼 키워드가 연달아
 # 나오면 값 하나만 소비하는 패턴은 정작 비밀인 뒷부분을 남긴다.
 _BEARER_PATTERN = re.compile(
@@ -114,11 +114,15 @@ class AuditLogger:
         self.dropped = 0
 
     def start(self) -> None:
-        if self._thread is not None:
+        if self.is_alive():
             return
         self._stop.clear()
         self._thread = threading.Thread(target=self._drain, name="audit-log", daemon=True)
         self._thread.start()
+
+    def is_alive(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
 
     def stop(self, timeout: float = 2.0) -> None:
         self._stop.set()

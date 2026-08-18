@@ -157,14 +157,22 @@ class AttackerRuntime:
 
     # ---- flag 처리 ----
 
-    def _process_flags(self, body: str) -> bool:
-        captured = False
-        for fp, state, submitted in self._pipeline.process(body):
-            if submitted:
-                self._report.record_submit(fp, state)
-            if state == SubmitState.ACCEPTED:
-                captured = True
-        return captured
+    def _process_flags(self, body: str, headers=None) -> bool:
+        """본문과 응답 헤더의 flag를 모두 처리한다.
+
+        반환값은 이 호출에서 **새로 제출해 accepted 된 flag가 있는가**다. 이미 같은
+        Round에서 처리한 flag를 다시 본 것은 endpoint 탐색 진전으로 세지 않는다.
+        """
+        newly_accepted = False
+        texts = [body or ""]
+        texts.extend(str(value) for value in (headers or {}).values() if value is not None)
+        for text in texts:
+            for fp, state, submitted in self._pipeline.process(text):
+                if submitted:
+                    self._report.record_submit(fp, state)
+                if submitted and state == SubmitState.ACCEPTED:
+                    newly_accepted = True
+        return newly_accepted
 
     def _remember_evidence(self, endpoint, evidence_ref) -> None:
         if evidence_ref is None:
@@ -226,7 +234,7 @@ class AttackerRuntime:
                 return None, False
             self._report.record_request()
             self._remember_evidence(plan.target, vresult.observation.evidence_ref)
-            if self._process_flags(vresult.body):
+            if self._process_flags(vresult.body, vresult.observation.redacted_header_hints):
                 return vresult, True
             if vresult.outcome == Outcome.SUCCESS and first_success is None:
                 first_success = vresult
@@ -241,6 +249,7 @@ class AttackerRuntime:
         노출한 path·parameter만 다음 결정론 공격의 배너 근거로 사용한다.
         """
         discovery = []
+        captured_any = False
         for path in COMMON_PROBE_PATHS:
             now = self.clock()
             plan = ExecutionPlan(
@@ -256,15 +265,17 @@ class AttackerRuntime:
             except (PlanBindingError, EgressError):
                 continue
             self._report.record_request()
-            if self._process_flags(result.body):
-                self.audit.log("hit", target=endpoint.key(), path=path, reason="recon")
-                return True, "", result.observation.evidence_ref
             evidence_ref = result.observation.evidence_ref  # 다음 프로브용 신선한 증거
             self._remember_evidence(endpoint, evidence_ref)
+            if self._process_flags(result.body, result.observation.redacted_header_hints):
+                self.audit.log("hit", target=endpoint.key(), path=path, reason="recon")
+                captured_any = True
+                # flag 원문이 포함된 응답은 discovery/LLM 입력으로 넘기지 않는다.
+                continue
             body = (result.body or "").strip()
             if body:
                 discovery.append(body[:MAX_DISCOVERY_BODY])
-        return False, "\n".join(discovery)[:MAX_DISCOVERY_TEXT], evidence_ref
+        return captured_any, "\n".join(discovery)[:MAX_DISCOVERY_TEXT], evidence_ref
 
     def _run_bound_exploit(self, endpoint, args, evidence_ref, reason):
         """비밀 없는 exploit 형태(method·path)를 READ_ONLY 계획으로 실행한다(playbook 재사용용)."""
@@ -285,7 +296,7 @@ class AttackerRuntime:
             return None, False
         self._report.record_request()
         self._remember_evidence(endpoint, result.observation.evidence_ref)
-        captured = self._process_flags(result.body)
+        captured = self._process_flags(result.body, result.observation.redacted_header_hints)
         if not captured and result.outcome == Outcome.TIMEOUT:
             evaded, captured = self._try_evasion(plan, result.observation.evidence_ref)
             if evaded is not None:
@@ -317,7 +328,7 @@ class AttackerRuntime:
             return None, False
         self._report.record_request()
         self._remember_evidence(endpoint, result.observation.evidence_ref)
-        if self._process_flags(result.body):
+        if self._process_flags(result.body, result.observation.redacted_header_hints):
             return result, True
         if result.outcome == Outcome.TIMEOUT:
             evaded, captured = self._try_evasion(plan, result.observation.evidence_ref)
@@ -354,9 +365,10 @@ class AttackerRuntime:
         attempted_keys = attempted_keys if attempted_keys is not None else set()
         cookie_name, cookie_val = self._cookie_from_headers(banner_headers)
         pivoted = set()            # 이미 피벗한 내부 URL(중복 방지)
+        captured_any = False
 
         def run(attempt) -> bool:
-            nonlocal evidence_ref, cookie_name, cookie_val
+            nonlocal evidence_ref, cookie_name, cookie_val, captured_any
             attempt_key = (
                 attempt.method,
                 attempt.path,
@@ -383,9 +395,9 @@ class AttackerRuntime:
                 self.audit.log("hit", target=endpoint.key(),
                                path=winning_args.get("path", attempt.path),
                                vuln=attempt.vuln.value, reason="det:" + attempt.reason)
-                return True
+                captured_any = True
             if result is None:
-                return False
+                return captured
             evidence_ref = result.observation.evidence_ref
             if cookie_name is None:
                 cn, cv = self._cookie_from_headers(result.observation.redacted_header_hints)
@@ -400,21 +412,18 @@ class AttackerRuntime:
                 fresh = [u for u in extract_internal_urls(result.body) if u not in pivoted]
                 pivoted.update(fresh)
                 for pivot in ssrf_pivot_attempts(base, param, fresh):
-                    if run(pivot):
-                        return True
-            return False
+                    run(pivot)
+            return captured
 
         for attempt in attempts:
-            if run(attempt):
-                return True
+            run(attempt)
 
         # AUTH 세션 변조 — 노출된 토큰을 관리자 권한으로 올려 재전송한다
         if include_cookie_tamper and cookie_name and cookie_val:
             tokens = tamper_token(cookie_val)
             for attempt in auth_tamper_attempts(cookie_name, tokens):
-                if run(attempt):
-                    return True
-        return False
+                run(attempt)
+        return captured_any
 
     # ---- 단일 표적 공격 ----
 
@@ -430,41 +439,49 @@ class AttackerRuntime:
         current_evidence = obs.evidence_ref
         banner_fp = service_fingerprint(obs.status, resp.body or "", resp.headers)
         banner = (resp.body or "").strip()
-        if self._process_flags(resp.body):
+        captured_any = self._process_flags(resp.body, resp.headers)
+        if captured_any:
             self.audit.log("hit", target=endpoint.key(), turn=0, path="/", reason="banner")
+            # 한 응답 안의 본문·헤더에 있는 모든 flag는 이미 처리했다. 배너에서
+            # 직접 성공한 endpoint에 추가 탐색을 붙이면 매 scan cycle마다 request
+            # budget을 크게 소모하므로 여기서는 즉시 완료한다.
             return True
 
         attempted_keys = set()
 
         # TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 일반 정찰보다 먼저 실행한다.
         confirmed = observed_attempts(endpoint.port)
-        if confirmed and self._deterministic_exploit(
+        if confirmed:
+            captured_any = self._deterministic_exploit(
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
                 attempts=confirmed, attempted_keys=attempted_keys,
-                include_cookie_tamper=False):
-            return True
+                include_cookie_tamper=False) or captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # root 배너가 취약 부류를 직접 노출하면 정찰 sweep보다 먼저 zero-token 공격한다.
         root_hints = suggest_vuln_classes(banner)
-        if root_hints != [VulnClass.OTHER] and self._deterministic_exploit(
+        if root_hints != [VulnClass.OTHER]:
+            captured_any = self._deterministic_exploit(
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
-                attempted_keys=attempted_keys):
-            return True
+                attempted_keys=attempted_keys) or captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # L4/UGV를 포함한 미지 인터페이스는 실제 probe 응답에서 route를 발견한 뒤에만 공격한다.
         captured, discovery, current_evidence = self._recon(endpoint, current_evidence)
-        if captured:
-            return True
+        captured_any = captured or captured_any
         observed_banner = "\n".join(part for part in (banner, discovery) if part)
 
         # 결정론적 exploit 엔진 — 관측된 route·parameter를 우선해 LLM 전에 실행한다.
-        if self._deterministic_exploit(
-                endpoint, observed_banner, banner_fp, resp.headers, current_evidence,
-                attempted_keys=attempted_keys):
-            return True
+        captured_any = self._deterministic_exploit(
+            endpoint, observed_banner, banner_fp, resp.headers, current_evidence,
+            attempted_keys=attempted_keys) or captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
+
+        # 플래그를 찾은 endpoint도 위 bounded 관측·결정론 세트는 끝까지 수행해 같은
+        # 서비스/포트의 추가 flag를 회수한다. 이미 진전이 있으면 비용이 큰 LLM까지
+        # 확장하지 않고 완료한다.
+        if captured_any:
+            return True
 
         # single-flight + 재사용: 같은 배너(같은 이미지)는 한 표적만 LLM으로 풀고, 나머지는
         # 그 성공 형태(method·path·headers·body)를 재사용한다(§7.6, 제22조). 병렬 첫 사이클에
@@ -490,7 +507,7 @@ class AttackerRuntime:
             if slot == "reuse":
                 continue          # 대기 중 다른 표적이 새로 풀었다 — 새 항목으로 재시도
             if slot == "skip":
-                return False      # 다른 표적이 아직 LLM으로 푸는 중 — 다음 사이클에 재사용
+                return captured_any  # 다른 표적이 푸는 중 — 다음 사이클에 재사용
             break                 # slot == "solve" → 아래 LLM 루프로 직접 푼다
 
         state = EndpointState(endpoint)
@@ -513,7 +530,7 @@ class AttackerRuntime:
                         self._report.record_observation()
                         self._report.record_request()
                         self._remember_evidence(endpoint, refresh_obs.evidence_ref)
-                        if self._process_flags(refresh_resp.body):
+                        if self._process_flags(refresh_resp.body, refresh_resp.headers):
                             self.audit.log("hit", target=endpoint.key(), turn=state.turn,
                                            path="/", reason="evidence-refresh")
                             return True
@@ -540,7 +557,7 @@ class AttackerRuntime:
                 self._report.record_request()
                 self._remember_evidence(endpoint, result.observation.evidence_ref)
 
-                if self._process_flags(result.body):
+                if self._process_flags(result.body, result.observation.redacted_header_hints):
                     self._playbook.record(banner_fp, plan.args)  # 교차 재사용용 기록(비밀 없음)
                     self.audit.log("hit", target=endpoint.key(), turn=state.turn,
                                    path=plan.args["path"], vuln=str(plan.scenario),
@@ -566,7 +583,7 @@ class AttackerRuntime:
         finally:
             self._playbook.finish_llm(banner_fp)  # 대기 중인 같은-배너 표적을 깨운다
 
-        return False
+        return captured_any
 
     # ---- 라운드 루프 ----
 

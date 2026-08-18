@@ -126,6 +126,56 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(arena.submits[0]["flag"], "FLAG{recon_win}")
         self.assertEqual(arena.llm_calls, 0)  # 토큰 0
 
+    def test_recon_collects_multiple_flags_from_one_service(self):
+        class MultiFlagArena:
+            def __init__(self):
+                self.submits = []
+                self.paths = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    return HttpResponse(500, "unused")
+                parts = urlsplit(url)
+                self.paths.append(parts.path)
+                if parts.path == "/flag":
+                    return HttpResponse(200, "FLAG{service_primary}")
+                if parts.path == "/secret":
+                    return HttpResponse(200, "FLAG{service_secondary}")
+                return HttpResponse(200, "service online")
+
+        arena = MultiFlagArena()
+        rt = make_runtime(arena)
+        report = rt.run_once()
+
+        self.assertEqual(report.accepted_count(), 2)
+        self.assertIn("/secret", arena.paths)
+        self.assertEqual(
+            {item["flag"] for item in arena.submits},
+            {"FLAG{service_primary}", "FLAG{service_secondary}"},
+        )
+
+    def test_flag_in_notable_response_header_is_submitted(self):
+        class HeaderFlagArena:
+            def __init__(self):
+                self.submits = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if urlsplit(url).path == "/":
+                    return HttpResponse(200, "service online", {"X-Flag": "FLAG{header_win}"})
+                return HttpResponse(200, "online")
+
+        arena = HeaderFlagArena()
+        report = make_runtime(arena).run_once()
+
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{header_win}")
+
     def test_flag_in_banner_captured(self):
         arena = FakeArena("welcome FLAG{banner_flag} here", "/x", "irrelevant")
         rt = make_runtime(arena)

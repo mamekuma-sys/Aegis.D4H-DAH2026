@@ -49,11 +49,27 @@ Use a short-lived branch for one task and delete it after merge. Never create pe
 
 Run before committing repository-foundation changes:
 
+macOS/Linux:
+
+```bash
+bash scripts/check-layout.sh
+```
+
+Windows:
+
 ```powershell
 pwsh -NoProfile -File scripts/check-layout.ps1
 ```
 
 When an external skeleton is available, also run:
+
+macOS/Linux:
+
+```bash
+bash scripts/validate-skeleton.sh <path>
+```
+
+Windows:
 
 ```powershell
 pwsh -NoProfile -File scripts/validate-skeleton.ps1 -SkeletonPath <path>

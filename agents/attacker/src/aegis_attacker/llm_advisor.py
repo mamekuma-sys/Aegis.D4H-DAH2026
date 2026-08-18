@@ -17,6 +17,25 @@ from .planner import parse_exploit
 MAX_LLM_CALLS_PER_ROUND = 48  # R17의 111회/93k token 무진전 확산을 막고 대표 service solver에 집중.
 LLM_TIMEOUT = 20.0
 
+# 2026-08-18 본선 제공표 중 Chat Completions 계열. 아래 모델만 현재
+# `/v1/chat/completions` 어댑터로 호출할 수 있다. Responses 전용 모델은 이름만
+# 바꿔 호출하지 않고, 별도 어댑터가 생기기 전까지 LLM 사용만 fail-safe로 생략한다.
+CHAT_COMPLETIONS_MODELS = frozenset({
+    "gpt-4o-mini",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+    "gpt-4o",
+    "gpt-5",
+    "gpt-5.2",
+    "gpt-5-mini",
+    "gpt-5.4",
+    "gpt-5.6-luna",
+    "gpt-5.6-terra",
+    "gpt-5.6-sol",
+    "o3",
+    "o4-mini",
+})
+
 # 실패가 쌓이면 더 센 모델로 승급한다(cheap-first). 동점 시 토큰 비용이 적은 팀이
 # 이기므로(운영세칙 제22조) 값비싼 모델은 저비용 모델이 막혔을 때만 쓴다.
 ESCALATION_MODELS = ("gpt-4.1", "gpt-5.2")
@@ -78,6 +97,9 @@ class LLMAdvisor:
     def advise_exploit(self, banner: str, feedback: str, hints, model: str = None):
         if self._key_handle is None:
             return None
+        model_id = model or self._config.llm_model
+        if model_id not in CHAT_COMPLETIONS_MODELS:
+            return None
         if not self._budget.try_reserve_llm(self._max_calls):
             return None  # 예산 소진 → 결정론 경로로 (검사·예약 원자적, 병렬 초과 방지)
 
@@ -93,7 +115,7 @@ class LLMAdvisor:
         user_content = redactor.scrub("\n".join(x for x in (hint_line, observed) if x))
 
         payload = json.dumps({
-            "model": model or self._config.llm_model,
+            "model": model_id,
             "temperature": 0,
             "max_tokens": 300,
             "messages": [

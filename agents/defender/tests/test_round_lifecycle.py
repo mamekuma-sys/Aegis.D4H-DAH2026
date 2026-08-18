@@ -28,7 +28,8 @@ from aegis_defender.config import (
     load_config,
 )
 from aegis_defender.logging import AuditLogger
-from aegis_defender.main import DefenderRuntime
+from aegis_defender.main import DefenderRuntime, MAX_OBSERVED_SERVICES
+from aegis_defender.packet import ObservedTrafficProfile
 from aegis_defender.protocol import (
     MSG_VERDICT,
     VERDICT_ACCEPT,
@@ -257,6 +258,31 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(startup[0]["demotions"], [])
         self.assertFalse(startup[0]["advisory_enabled"])
 
+    def test_new_l4_services_are_logged_once_without_changing_verdict(self):
+        frames = [
+            packet_frame(1, ipv4_tcp(http_request(), dst_port=8085)),
+            packet_frame(2, ipv4_tcp(http_request(), dst_port=8085)),
+            packet_frame(
+                3,
+                ipv4_tcp(
+                    http_request(),
+                    dst_ip=bytes((10, 1, 4, 4)),
+                    dst_port=9090,
+                ),
+            ),
+        ]
+        harness = RuntimeHarness(frames)
+        harness.start()
+        time.sleep(0.3)
+        harness.stop()
+
+        self.assertTrue(all(value == VERDICT_ACCEPT for _, value in harness.verdicts()))
+        lines = [json.loads(line) for line in harness.stream.getvalue().splitlines() if line]
+        observed = [line for line in lines if line["event"] == "service-observed"]
+        self.assertEqual(len(observed), 2)
+        self.assertEqual({line["dst_port"] for line in observed}, {8085, 9090})
+        self.assertTrue(all(line["authority"] == "observation-only" for line in observed))
+
 
 class TestFailureIsolation(unittest.TestCase):
     def test_missing_policy_directory_still_runs(self):
@@ -283,7 +309,7 @@ class TestFailureIsolation(unittest.TestCase):
         running = [
             thread.name for thread in threading.enumerate() if thread.name not in before
         ]
-        for name in ("socket-writer", "heartbeat", "correlation"):
+        for name in ("socket-writer", "heartbeat", "correlation", "worker-watchdog"):
             self.assertEqual(running.count(name), 1, f"{name} 스레드가 하나가 아니다")
 
         harness.stop()
@@ -310,7 +336,9 @@ class TestShutdown(unittest.TestCase):
         time.sleep(0.1)
 
         names = {thread.name for thread in threading.enumerate()}
-        for name in ("socket-writer", "heartbeat", "correlation", "audit-log"):
+        for name in (
+            "socket-writer", "heartbeat", "correlation", "audit-log", "worker-watchdog"
+        ):
             self.assertNotIn(name, names)
 
     def test_shutdown_log_carries_nonsensitive_summary(self):
@@ -324,6 +352,8 @@ class TestShutdown(unittest.TestCase):
         self.assertEqual(len(shutdown), 1)
         self.assertIn("counters", shutdown[0])
         self.assertIn("advisory", shutdown[0])
+        self.assertIn("verdict_send_e2e", shutdown[0])
+        self.assertGreaterEqual(shutdown[0]["verdict_send_e2e"]["count"], 1.0)
         self.assertEqual(shutdown[0]["advisory"]["calls"], 0)
 
 
@@ -346,6 +376,22 @@ class TestRoundStateBoundary(unittest.TestCase):
         self.assertEqual(second.runtime.correlation.builder.flow_count, 0)
         self.assertIsNone(second.runtime.snapshot_ref.read())
         self.assertEqual(second.runtime.event_queue.qsize(), 0)
+
+    def test_observed_service_inventory_is_bounded(self):
+        harness = RuntimeHarness([])
+        for offset in range(MAX_OBSERVED_SERVICES + 5):
+            harness.runtime._record_service_observation(
+                ObservedTrafficProfile(
+                    protocol=6,
+                    dst_port=10000 + offset,
+                    dst_subnet_candidate=4,
+                )
+            )
+
+        self.assertEqual(len(harness.runtime._observed_services), MAX_OBSERVED_SERVICES)
+        lines = [json.loads(line) for line in harness.stream.getvalue().splitlines() if line]
+        full = [line for line in lines if line["event"] == "service-inventory-full"]
+        self.assertEqual(len(full), 1)
 
     def test_round_writes_nothing_to_disk(self):
         """PCAP·로그·cache·생성 결과가 파일로 남지 않는다(§15.7)."""

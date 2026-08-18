@@ -8,6 +8,15 @@ permissions:
   contents: read
 
 jobs:
+  portable-foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate portable repository entrypoints
+        run: bash scripts/tests/test-shell-entrypoints.sh
+
   repository-foundation:
     runs-on: windows-latest
     steps:
@@ -42,3 +51,33 @@ jobs:
       - name: Run defender unit and contract tests
         working-directory: agents/defender
         run: python -m unittest discover -s tests -t . -v
+
+  attacker-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run attacker unit and contract tests
+        working-directory: agents/attacker
+        run: python -m unittest discover -s tests -t . -v
+
+  linux-amd64-images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Test the immutable image build contract
+        run: bash scripts/tests/test-build-images.sh
+
+      - name: Build and inspect both linux/amd64 images
+        run: bash scripts/build-images.sh

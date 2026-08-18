@@ -254,6 +254,12 @@ class TestAuditRedaction(unittest.TestCase):
         self.assertNotIn("aaaaaaaabbbbbbbb", output)
         self.assertIn("REDACTED", output)
 
+    def test_long_final_format_flag_is_redacted(self):
+        secret = "FLAG{" + ("z" * 512) + "}"
+        output = self._emit(note="captured " + secret)
+        self.assertNotIn("z" * 32, output)
+        self.assertIn("REDACTED", output)
+
     def test_api_key_is_redacted(self):
         output = self._emit(note="using sk-abcdefghijklmnop for auth")
         self.assertNotIn("abcdefghijklmnop", output)

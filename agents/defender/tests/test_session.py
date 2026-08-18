@@ -7,7 +7,7 @@ import threading
 import unittest
 
 from aegis_defender.config import RuntimeConfig
-from aegis_defender.metrics import Metrics
+from aegis_defender.metrics import L_VERDICT_SEND_E2E, Metrics
 from aegis_defender.protocol import (
     HEARTBEAT_FRAME,
     VERDICT_ACCEPT,
@@ -166,6 +166,15 @@ class TestSocketWriterBudget(unittest.TestCase):
         result = self.writer.send_once(0.0)
         self.assertIs(result.outcome, SendOutcome.SENT)
         self.assertAlmostEqual(self.transport.timeouts[-1], SOCKET_FAULT_TIMEOUT, places=6)
+
+    def test_verdict_e2e_latency_reaches_full_socket_send_completion(self):
+        self.queue.put_nowait(verdict_item(self.queue, 1, received_at=0.0))
+        self.clock.advance(0.025)
+        result = self.writer.send_once(0.0)
+        self.assertIs(result.outcome, SendOutcome.SENT)
+        summary = self.metrics.latency_summary(L_VERDICT_SEND_E2E)
+        self.assertEqual(summary["count"], 1.0)
+        self.assertAlmostEqual(summary["p99_us"], 25_000.0, places=6)
 
     def test_verdict_expires_at_internal_hard_cutoff(self):
         # broker_remaining <= 100ms 는 내부 200ms hard cutoff 도달과 같다.

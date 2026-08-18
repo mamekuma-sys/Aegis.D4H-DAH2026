@@ -5,7 +5,9 @@ from aegis_attacker.egress import EgressGateway, build_allowlists
 from aegis_attacker.models import Endpoint
 from aegis_attacker.observation import (
     HttpResponse,
+    MAX_RESPONSE_BYTES,
     Observer,
+    UrllibHttp,
     fingerprint,
     notable_headers,
 )
@@ -49,6 +51,43 @@ class TestHelpers(unittest.TestCase):
         self.assertIn("Set-Cookie", picked)
         self.assertIn("X-Role", picked)
         self.assertNotIn("Content-Type", picked)
+
+
+class TestBoundedTransport(unittest.TestCase):
+    def test_response_body_is_capped_at_one_megabyte(self):
+        class Response:
+            status = 200
+            headers = {"Content-Type": "text/plain"}
+
+            def __init__(self):
+                self.requested = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, size=-1):
+                self.requested = size
+                return b"x" * size
+
+        class Opener:
+            def __init__(self, response):
+                self.response = response
+
+            def open(self, _request, timeout):
+                return self.response
+
+        response = Response()
+        transport = UrllibHttp()
+        transport._opener = Opener(response)
+
+        result = transport.request("GET", "http://example.invalid/")
+
+        self.assertEqual(response.requested, MAX_RESPONSE_BYTES + 1)
+        self.assertEqual(len(result.body), MAX_RESPONSE_BYTES)
+        self.assertTrue(result.truncated)
 
 
 class TestObserver(unittest.TestCase):

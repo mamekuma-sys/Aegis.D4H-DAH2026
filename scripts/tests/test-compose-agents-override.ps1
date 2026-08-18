@@ -2,11 +2,12 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $composeOverride = Join-Path $repoRoot 'integration/compose.agents.yml'
 $runner = Join-Path $repoRoot 'integration/run-with-skeleton.ps1'
+$shellRunner = Join-Path $repoRoot 'integration/run-with-skeleton.sh'
 $attackerRunbook = Join-Path $repoRoot 'integration/attacker-deploy.md'
 $defenderRunbook = Join-Path $repoRoot 'integration/defender-deploy.md'
 $dockerfile = Join-Path $repoRoot 'agents/defender/Dockerfile'
 
-foreach ($path in @($composeOverride, $runner, $attackerRunbook, $defenderRunbook, $dockerfile)) {
+foreach ($path in @($composeOverride, $runner, $shellRunner, $attackerRunbook, $defenderRunbook, $dockerfile)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         Write-Error "Missing required file: $path"
         exit 1
@@ -25,6 +26,17 @@ if ($overrideText -notmatch 'AEGIS_DEFENDER_CONTEXT') {
 }
 if ($overrideText -notmatch 'team1-defender:') {
     throw 'compose.agents.yml does not override team1-defender.'
+}
+if (([regex]::Matches($overrideText, 'platform:\s*linux/amd64')).Count -ne 2) {
+    throw 'compose.agents.yml does not force linux/amd64 for both agents.'
+}
+
+$shellRunnerText = [System.IO.File]::ReadAllText($shellRunner)
+if ($shellRunnerText -notmatch '--config-only' -or $shellRunnerText -notmatch '--reapply-agents') {
+    throw 'run-with-skeleton.sh is missing macOS/Linux preflight or reapply support.'
+}
+if ($shellRunnerText -match 'down\s+-v') {
+    throw 'run-with-skeleton.sh deletes named volumes.'
 }
 
 $runnerText = [System.IO.File]::ReadAllText($runner)
@@ -95,6 +107,12 @@ if ($attackerText -notmatch '(?s)LLM_MODEL.*gpt-4o-mini') {
 if ($attackerText -notmatch "throw 'docker build failed'") {
     throw 'attacker-deploy.md does not stop when docker build fails.'
 }
+if ($attackerText -notmatch 'docker buildx build --platform linux/amd64 --load') {
+    throw 'attacker-deploy.md does not force a linux/amd64 image build.'
+}
+if ($attackerText -notmatch "throw 'attacker image platform mismatch'") {
+    throw 'attacker-deploy.md does not inspect the built image platform.'
+}
 if ($attackerText -notmatch "throw 'docker push failed'") {
     throw 'attacker-deploy.md does not stop when docker push fails.'
 }
@@ -130,6 +148,12 @@ if ($defenderText -notmatch 'COPY policy /policy') {
 if ($defenderText -notmatch "throw 'docker build failed'") {
     throw 'defender-deploy.md does not stop when docker build fails.'
 }
+if ($defenderText -notmatch 'docker buildx build --platform linux/amd64 --load') {
+    throw 'defender-deploy.md does not force a linux/amd64 image build.'
+}
+if ($defenderText -notmatch "throw 'defender image platform mismatch'") {
+    throw 'defender-deploy.md does not inspect the built image platform.'
+}
 if ($defenderText -notmatch "throw 'docker push failed'") {
     throw 'defender-deploy.md does not stop when docker push fails.'
 }
@@ -143,4 +167,4 @@ if ($defenderText -notmatch "throw 'reapply team agent images failed'") {
     throw 'defender-deploy.md does not stop when team image reapply fails.'
 }
 
-Write-Output 'Agent Compose override tests passed: 29 cases.'
+Write-Output 'Agent Compose override tests passed: 36 cases.'
