@@ -48,7 +48,7 @@ agents/defender/
 │   ├── logging.py       AuditLogger (비밀 없는 구조화 로그)
 │   └── metrics.py       Metrics
 ├── tests/               unittest 14개 모듈 + fakes.py
-├── Dockerfile           **초안 — Docker 담당자 확정 필요**
+├── Dockerfile           linux/amd64 제출 이미지 정의
 └── requirements.txt     표준 라이브러리 전용(비어 있음)
 ```
 
@@ -114,9 +114,9 @@ bash scripts/replay-defender-pcaps.sh capture \
 
 표준 라이브러리 `unittest`만 사용합니다(외부 설치 불필요).
 
-```powershell
+```bash
 cd agents/defender
-python -m unittest discover -s tests -t .
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:. python3 -m unittest discover -s tests -t .
 ```
 
 CI의 `defender-tests` job이 `ubuntu-latest` + Python 3.12(= 이미지와 같은 플랫폼·버전)에서 같은 명령을 실행합니다.
@@ -137,10 +137,10 @@ Windows에서도 그대로 돌아갑니다. `AGENT_SOCKET` 검증은 호스트 O
 
 ## 로컬 실행 (환경변수 주입)
 
-```powershell
-$env:AGENT_SOCKET="/run/agent.sock"
-$env:LLM_BASE_URL="http://litellm.lig.internal:4000"
-$env:PYTHONPATH="src"; python -m aegis_defender
+```bash
+AGENT_SOCKET="/run/agent.sock" \
+LLM_BASE_URL="http://litellm.lig.internal:4000" \
+PYTHONPATH=src python3 -m aegis_defender
 ```
 
 `LLM_API_KEY`가 없으면 advisory worker를 아예 기동하지 않습니다. 장애가 아니라 정상 동작이며 HEARTBEAT·verdict에 영향이 없습니다.
