@@ -54,3 +54,6 @@ Defender 종료 후 Broker가 agent disconnect를 감지하고 다음 연결 대
    `ModuleNotFoundError: packaging`으로 종료됐다. 공식 수정본에서는 공격·방어 전체 demo
    stack을 다시 실행해야 한다. 이 문제를 우회하기 위해 공식 challenge 소스를 저장소에
    복사하거나 수정하지 않는다.
+
+다음 세션은 [본선 준비 후속 작업 인계](../superpowers/handoffs/2026-08-19-finals-readiness-continuation.md)의
+재개 순서에서 계속한다.
