@@ -2,6 +2,11 @@
 
 예선 보고서(`PRELIM-REPORT`, SHA-256 `1DD42B99…`, 54쪽)의 방어 개념을 본선 방어 런타임 관점에서 재분류한다. 페이지별 전수 검토 근거는 `docs/references/preliminary-report-defender-map.md`, 설계 본문은 `docs/superpowers/specs/2026-08-11-defender-runtime-design.md`에 있다. 세 문서는 서로 모순되지 않아야 한다.
 
+L1~L4 규칙의 현재 승격 판정과 다음 Break의 동일한 증거 gate는
+`docs/superpowers/specs/2026-08-19-all-layer-promotion-meta-prompt.md`를 따른다. 현재 결과는
+L1 3개·L2 4개·L3 2개 규칙 ACTIVE, L4 observation-only이며, 이는 레이어 일괄 승격이 아니라
+규칙별 positive·negative·SLA·리뷰를 통과한 결과다.
+
 ## 전제
 
 본선 방어 에이전트의 계약된 판정 입력은 Broker가 전달하는 **인바운드 `raw_ip` 패킷뿐**이다(운영세칙 제13조 1항, `contracts/defender/README.md`). 예선 보고서에 등장하는 신호는 이름을 옮기지 않는다. parser와 입력 fixture가 존재를 증명하지 못하면 비동기 연구 가설로 낮추거나 본선 런타임에서 제외한다.

@@ -4,6 +4,9 @@
 공격 에이전트는 하드코딩된 시나리오 순서를 강제하지 않고, 표적의 배너·응답·오류·프로토콜 특징을
 근거로 가설을 선택하고 중단한다. 용어와 활성화·중단 기준은 설계 문서
 `docs/superpowers/specs/2026-08-11-attacker-runtime-design.md`의 §9.8 가설 플래너와 동일하다.
+L1~L4 전체의 적용·승격 판단은
+`docs/superpowers/specs/2026-08-19-all-layer-promotion-meta-prompt.md`의 증거 gate와 자기 적용 결과를
+공동 기준으로 사용한다.
 
 ## 원칙
 

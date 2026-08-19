@@ -8,6 +8,11 @@
 공격자는 104개 리허설 PCAP 회귀와 단위·이미지 검증을 통과했지만, 공식 demo challenge
 전체 기동은 외부 skeleton의 의존성 drift 때문에 이번 검증 범위에 포함하지 못했다.
 
+L1~L4 전체의 증거 기반 자기 적용 절차와 현재 레이어별 판정은
+[`2026-08-19-all-layer-promotion-meta-prompt.md`](../superpowers/specs/2026-08-19-all-layer-promotion-meta-prompt.md)에
+고정했다. 현재 검증된 ACTIVE는 L1 3개, L2 4개, L3 2개이고 L4는 실제 interface 증거가 없어
+observation-only다.
+
 ## 입력 동일성
 
 - 공식 ZIP: `C7C67CFB10CF6D1FA0997D19EAF1DF0D7347E2C66E4F417637D866B6CCA6DF2C`
