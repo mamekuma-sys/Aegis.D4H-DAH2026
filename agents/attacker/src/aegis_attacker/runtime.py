@@ -23,6 +23,7 @@ from .exploits import (
     observed_attempts,
     ssrf_pivot_attempts,
     tamper_token,
+    uses_observed_read_only_interface,
 )
 from .flags import FlagPipeline, SubmitClient
 from .llm_advisor import LLMAdvisor
@@ -351,7 +352,8 @@ class AttackerRuntime:
 
     def _deterministic_exploit(self, endpoint, banner, banner_fp,
                                banner_headers, evidence_ref, attempts=None,
-                               attempted_keys=None, include_cookie_tamper=True) -> bool:
+                               attempted_keys=None, include_cookie_tamper=True,
+                               observed_only=False) -> bool:
         """배너 힌트로 4개 취약 부류(SSRF·LFI·AUTH·SQLI)를 토큰 0으로 시도한다.
 
         SSRF 2단 피벗은 base 시도 직후 **즉시** 실행한다. 승리 경로(예: /registry가 흘린
@@ -360,7 +362,8 @@ class AttackerRuntime:
         성공 형태는 playbook에 기록해 같은 배너의 다른 표적에 재사용한다.
         """
         hints = suggest_vuln_classes(banner)
-        attempts = (build_attempts(banner, hints, endpoint.port)
+        attempts = (build_attempts(
+                        banner, hints, endpoint.port, observed_only=observed_only)
                     if attempts is None else list(attempts))
         attempted_keys = attempted_keys if attempted_keys is not None else set()
         cookie_name, cookie_val = self._cookie_from_headers(banner_headers)
@@ -419,7 +422,7 @@ class AttackerRuntime:
             run(attempt)
 
         # AUTH 세션 변조 — 노출된 토큰을 관리자 권한으로 올려 재전송한다
-        if include_cookie_tamper and cookie_name and cookie_val:
+        if include_cookie_tamper and not observed_only and cookie_name and cookie_val:
             tokens = tamper_token(cookie_val)
             for attempt in auth_tamper_attempts(cookie_name, tokens):
                 run(attempt)
@@ -451,6 +454,7 @@ class AttackerRuntime:
 
         # TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 일반 정찰보다 먼저 실행한다.
         confirmed = observed_attempts(endpoint.port)
+        observed_only = not bool(confirmed)
         if confirmed:
             captured_any = self._deterministic_exploit(
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
@@ -463,7 +467,8 @@ class AttackerRuntime:
         if root_hints != [VulnClass.OTHER]:
             captured_any = self._deterministic_exploit(
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
-                attempted_keys=attempted_keys) or captured_any
+                attempted_keys=attempted_keys,
+                observed_only=observed_only) or captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # L4/UGV를 포함한 미지 인터페이스는 실제 probe 응답에서 route를 발견한 뒤에만 공격한다.
@@ -474,7 +479,8 @@ class AttackerRuntime:
         # 결정론적 exploit 엔진 — 관측된 route·parameter를 우선해 LLM 전에 실행한다.
         captured_any = self._deterministic_exploit(
             endpoint, observed_banner, banner_fp, resp.headers, current_evidence,
-            attempted_keys=attempted_keys) or captured_any
+            attempted_keys=attempted_keys,
+            observed_only=observed_only) or captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # 플래그를 찾은 endpoint도 위 bounded 관측·결정론 세트는 끝까지 수행해 같은
@@ -490,6 +496,12 @@ class AttackerRuntime:
         tried_reuse = False
         while True:
             known = self._playbook.lookup(banner_fp)
+            if (known and observed_only
+                    and not uses_observed_read_only_interface(known, observed_banner)):
+                # 같은 root fingerprint의 다른 서비스에서 얻은 경로라도 현 endpoint가
+                # 읽기 전용 interface로 직접 노출하지 않았으면 재사용하지 않는다.
+                known = None
+                tried_reuse = True
             if known:
                 result, captured = self._run_bound_exploit(
                     endpoint, known, current_evidence, "playbook")
@@ -519,6 +531,13 @@ class AttackerRuntime:
                 plan = self._planner.plan_next(endpoint, observed_banner, feedback, state,
                                                model=self.config.llm_model)
                 if plan is None:
+                    break
+                if (observed_only
+                        and not uses_observed_read_only_interface(plan.args, observed_banner)):
+                    self.audit.log(
+                        "reject", target=endpoint.key(), turn=state.turn,
+                        reason="unobserved-read-only-interface",
+                    )
                     break
                 self._bind_plan(plan, endpoint, current_evidence)
                 try:

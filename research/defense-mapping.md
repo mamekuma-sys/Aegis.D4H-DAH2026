@@ -58,6 +58,12 @@
 
 여기서 "전량 로깅"은 raw payload·PCAP·flag·credential 저장이 아니다. 모든 packet에 대해 protocol/profile 후보, parser status, reason code, latency와 비민감 feature를 빠짐없이 집계한다는 뜻이다. 원본 PCAP는 운영진이 제공하는 공식 자료만 Break 분석 입력으로 사용하고 저장소나 이미지에 포함하지 않는다.
 
+L4 실자료가 없는 현재 bundle에는 L4 baseline이나 DROP rule을 추가하지 않는다. 런타임은 새 TCP·UDP
+service 좌표를 `protocol`, `dst_port`, `dst_subnet_candidate`, `parser_version`으로 한 번씩만 기록하며
+`authority=observation-only`를 고정한다. 이 inventory는 port·subnet을 L4로 확정하지 않고 verdict와
+effective policy를 바꾸지 않는다. 테스트의 8085·9090·9091은 bounded inventory와 fail-open을 검증하는
+합성 값일 뿐 본선 port mapping 근거가 아니다.
+
 ## S1~S5 시나리오별 매핑
 
 | 예선 개념·시나리오 | 보고서 페이지 | 필요한 신호 | 본선 관측 상태 | parser·fixture 증거 | 방어 경로 | ACCEPT/DROP 영향 | SLA 보호·fallback | 관련 FinalsPhase·레이어 | 테스트 |

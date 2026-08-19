@@ -44,6 +44,7 @@ class FakeArena:
         self.llm_status = llm_status
         self.submits = []
         self.llm_calls = 0
+        self.target_requests = []
 
     def request(self, method, url, headers=None, body=None, timeout=6.0):
         if "/v1/chat/completions" in url:
@@ -64,6 +65,7 @@ class FakeArena:
         # 표적 요청
         parts = urlsplit(url)
         full = parts.path + (("?" + parts.query) if parts.query else "")
+        self.target_requests.append(full)
         if parts.path == "/" and not parts.query:
             return HttpResponse(200, self.banner, {})
         low = full.lower()
@@ -115,6 +117,27 @@ class TestRuntimeEndToEnd(unittest.TestCase):
     def test_probe_list_includes_fetch(self):
         from aegis_attacker.recon import COMMON_PROBE_PATHS
         self.assertIn("/fetch", COMMON_PROBE_PATHS)
+
+    def test_unknown_l4_rejects_llm_invented_route(self):
+        arena = FakeArena(
+            "Phase 4 UGV URL gateway online",
+            "/invented?url=x",
+            "irrelevant",
+            flag_when=lambda full: False,
+        )
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8085,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
+            llm_model="gpt-4o-mini",
+        )
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+        self.assertEqual(report.accepted_count(), 0)
+        self.assertEqual(arena.llm_calls, 1)
+        self.assertFalse(any(path.startswith("/invented") for path in arena.target_requests))
 
     def test_recon_captures_without_llm(self):
         # 흔한 경로 /flag 에서 flag → recon이 LLM 토큰 없이 획득
@@ -434,7 +457,9 @@ class TestPlaybookReuse(unittest.TestCase):
                 if parts.path == "/" and not parts.query:
                     return HttpResponse(
                         200,
-                        f'<html><form action="/magic?probe=<value>">service for {parts.hostname}</form></html>',
+                        (f'<html><p>GET /magic?probe=&lt;value&gt;</p>'
+                         f'<form action="/magic?probe=<value>">'
+                         f'service for {parts.hostname}</form></html>'),
                         {"Content-Type": "text/html"},
                     )
                 if parts.path == "/magic" and parts.query == "probe=unlock":
@@ -610,7 +635,7 @@ class TestHeaderExploitReuse(unittest.TestCase):
     def test_admin_header_exploit_reused_across_ports_one_llm_call(self):
         arena = AdminHeaderArena()
         cfg = AttackerConfig(
-            targets=("t2.lig.internal",), ports=(8083, 8084, 8085),
+            targets=("t2.lig.internal",), ports=(8082, 8083, 8084),
             submit_url="http://backend:4100/submit", submit_token="tok-team1",
             llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
             llm_model="gpt-4o-mini", concurrency=3)
@@ -753,6 +778,7 @@ class UgvDiscoveryArena:
     def __init__(self):
         self.submits = []
         self.llm_calls = 0
+        self.target_requests = []
 
     def request(self, method, url, headers=None, body=None, timeout=6.0):
         from urllib.parse import parse_qs, unquote, urlsplit
@@ -765,6 +791,7 @@ class UgvDiscoveryArena:
             return HttpResponse(500, "unused")
 
         parts = urlsplit(url)
+        self.target_requests.append(parts.path + (("?" + parts.query) if parts.query else ""))
         if parts.path == "/" and not parts.query:
             return HttpResponse(200, "Phase 4 UGV online", {})
         if parts.path == "/status":
@@ -790,6 +817,9 @@ class TestUgvObservedDiscovery(unittest.TestCase):
         self.assertEqual(report.accepted_count(), 1)
         self.assertEqual(arena.submits[0]["flag"], "FLAG{fixture_l4}")
         self.assertEqual(arena.llm_calls, 0)
+        exploit_queries = [path for path in arena.target_requests if "?" in path]
+        self.assertTrue(exploit_queries)
+        self.assertTrue(all(path.startswith("/telemetry?source=") for path in exploit_queries))
 
 
 class TestRuntimeInert(unittest.TestCase):

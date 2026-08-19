@@ -242,6 +242,7 @@ class DefenderRuntime:
             protocol=profile.protocol,
             dst_port=profile.dst_port,
             dst_subnet_candidate=profile.dst_subnet_candidate,
+            parser_version=profile.parser_version,
             authority="observation-only",
         )
 

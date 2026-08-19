@@ -37,7 +37,7 @@ from aegis_defender.protocol import (
     decode_verdict,
 )
 
-from .fakes import FakeTransport, http_request, ipv4_tcp, packet_frame
+from .fakes import FakeTransport, http_request, ipv4_tcp, ipv4_udp, packet_frame
 
 _POLICY_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "policy"))
 
@@ -270,6 +270,14 @@ class TestEndToEnd(unittest.TestCase):
                     dst_port=9090,
                 ),
             ),
+            packet_frame(
+                4,
+                ipv4_udp(
+                    b"ugv-observation",
+                    dst_ip=bytes((10, 1, 4, 4)),
+                    dst_port=9091,
+                ),
+            ),
         ]
         harness = RuntimeHarness(frames)
         harness.start()
@@ -279,8 +287,10 @@ class TestEndToEnd(unittest.TestCase):
         self.assertTrue(all(value == VERDICT_ACCEPT for _, value in harness.verdicts()))
         lines = [json.loads(line) for line in harness.stream.getvalue().splitlines() if line]
         observed = [line for line in lines if line["event"] == "service-observed"]
-        self.assertEqual(len(observed), 2)
-        self.assertEqual({line["dst_port"] for line in observed}, {8085, 9090})
+        self.assertEqual(len(observed), 3)
+        self.assertEqual({line["dst_port"] for line in observed}, {8085, 9090, 9091})
+        self.assertEqual({line["protocol"] for line in observed}, {6, 17})
+        self.assertEqual({line["parser_version"] for line in observed}, {1})
         self.assertTrue(all(line["authority"] == "observation-only" for line in observed))
 
 

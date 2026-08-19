@@ -41,11 +41,26 @@ SHA-256 및 분석 방법을 공동 근거로 사용한다. 공격 런타임에�
 | L1 / 8082 | `helper-box:8080/secret`, Docker IP의 IPv4·정수·16진수·IPv4-mapped IPv6 표현, `/config?file=../../../../flag` | 관측된 SSRF target 표현과 exact config traversal을 먼저 실행 |
 | L2 / 8083 | Base64-JSON `session`의 `role=admin`, loopback `/secret`·`/registry` SSRF | 비민감 claim 구조와 관측된 느슨한 padding 한 종을 재생성; `127.0.0.1`·`127.1` exact target 실행 |
 | L3 / 8084 | `/product?id=... UNION SELECT ... FROM app_meta`, `/rc/status`·`/teleop/status`·`/debug`·`/admin` 직접 노출 | SQLi projection 뒤에 네 route를 읽기 전용으로 확인하고 flag가 있을 때만 제출 |
-| L4 / UGV | Phase 4 도메인과 L1~L4 누적 개방만 공식 확인, 취약 route 미관측 | UGV 이름만으로 endpoint를 추측하지 않음. 실제 root·probe 응답이 노출한 path·parameter만 공격 후보로 승격 |
+| L4 / UGV | Phase 4 도메인과 L1~L4 누적 개방만 공식 확인, 취약 route 미관측 | 사전 확인되지 않은 포트에서는 범용 exploit 경로를 생성하지 않음. 실제 root·probe 응답이 명시한 `GET` path와 query parameter, 또는 OpenAPI의 `get` operation만 공격 후보로 승격 |
 
 Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한다. 알려진 데모 포트는
 `L4→L1→L2→L3` 순환으로 섞어 새 UGV 레이어를 초반에 시작하면서도 기존 레이어를 굶기지 않는다.
 포트 매핑이 관측되지 않으면 입력 순서를 보존한다.
+
+### L4 증거 gate
+
+현재 L4에 대해 확정된 것은 Phase 4의 UGV 명칭과 L1~L4 누적 개방뿐이다. 테스트의 `8085`,
+`9001`, `/telemetry`, `source`는 **관측-계획-실행 결속을 검증하는 합성 fixture**이며 본선 port·route
+사실이 아니다. 따라서 다음 경계를 런타임 회귀 조건으로 둔다.
+
+- PCAP 또는 실제 HTTP 응답이 없는 포트에는 `observed_attempts`를 만들지 않는다.
+- 미확인 포트의 배너가 단순히 UGV·URL·telemetry 같은 단어만 포함하면 공격 요청을 만들지 않는다.
+- root, bounded probe, `robots.txt`, OpenAPI 문서가 명시한 읽기 전용 `GET` route와 query parameter만
+  해당 endpoint의 신선한 evidence로 사용한다. 쓰기 method만 있는 route는 무시한다.
+- 다른 endpoint의 성공 playbook은 구조 fingerprint가 같더라도 현 endpoint의 정찰과 evidence 갱신 뒤에만
+  실행한다.
+- 새 L4 PCAP이 들어오면 protocol·port·route·method·parameter를 먼저 inventory하고, positive와 정상
+  negative fixture가 함께 생기기 전에는 port별 fast path를 추가하지 않는다.
 
 ### R17 피드백에 따른 적응 전략
 
