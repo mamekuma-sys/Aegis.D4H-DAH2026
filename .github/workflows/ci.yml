@@ -17,6 +17,20 @@ jobs:
       - name: Validate portable repository entrypoints
         run: bash scripts/tests/test-shell-entrypoints.sh
 
+  macos-entrypoints:
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate zsh and PowerShell Core entrypoints
+        run: zsh scripts/tests/test-macos-entrypoints.zsh
+
   repository-foundation:
     runs-on: windows-latest
     steps:
@@ -34,6 +48,10 @@ jobs:
       - name: Test attacker and defender Compose override contract
         shell: pwsh
         run: ./scripts/tests/test-compose-agents-override.ps1
+
+      - name: Test Break Copilot PowerShell safety entrypoints
+        shell: pwsh
+        run: ./scripts/tests/test-break-copilot-powershell.ps1
 
   defender-tests:
     # 방어 런타임은 python:3.12-slim 컨테이너에서 동작하므로, 병합 게이트도 같은
@@ -66,6 +84,20 @@ jobs:
       - name: Run attacker unit and contract tests
         working-directory: agents/attacker
         run: python -m unittest discover -s tests -t . -v
+
+  break-copilot-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test break evidence, patch, approval, rubric, and scrimmage gates
+        run: python -m unittest discover -s scripts/tests -p 'test_*.py' -v
 
   linux-amd64-images:
     runs-on: ubuntu-latest

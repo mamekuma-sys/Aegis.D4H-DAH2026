@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.local/contracts/break-copilot/scrimmage.schema.json",
+  "title": "Baseline-candidate 2x2 scrimmage runs",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "runs"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "runs": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["cell", "attacker_variant", "defender_variant", "valid"],
+        "properties": {
+          "cell": {"enum": ["BB", "CB", "BC", "CC"]},
+          "attacker_variant": {"enum": ["baseline", "candidate"]},
+          "defender_variant": {"enum": ["baseline", "candidate"]},
+          "valid": {"type": "boolean"},
+          "invalid_reason": {"type": "string", "minLength": 1},
+          "seed": {"type": ["string", "integer"]},
+          "started_at": {"type": "string", "format": "date-time"},
+          "attacker_image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "defender_image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+          "skeleton_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "attacker_score": {"type": "number"},
+          "availability": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"valid": {"const": true}}},
+            "then": {"required": ["seed", "started_at", "attacker_image_digest", "defender_image_digest", "skeleton_sha256", "attacker_score", "availability"]},
+            "else": {"required": ["invalid_reason"]}
+          }
+        ]
+      }
+    }
+  }
+}

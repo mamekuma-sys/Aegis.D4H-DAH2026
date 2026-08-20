@@ -13,11 +13,29 @@ fail() {
     exit 1
 }
 
+if python3 -c 'pass' >/dev/null 2>&1; then
+    python_cmd='python3'
+elif python -c 'pass' >/dev/null 2>&1; then
+    python_cmd='python'
+else
+    fail 'python interpreter not available'
+fi
+export PYTHON_CMD="$python_cmd"
+
 bash -n \
     "$repo_root/scripts/check-layout.sh" \
     "$repo_root/scripts/replay-defender-pcaps.sh" \
     "$repo_root/scripts/validate-skeleton.sh" \
     "$repo_root/integration/run-with-skeleton.sh"
+
+for zsh_script in \
+        "$repo_root/scripts/break-copilot.zsh" \
+        "$repo_root/scripts/macos-preflight.zsh" \
+        "$repo_root/integration/scrimmage/run-scrimmage.zsh" \
+        "$repo_root/integration/promote-candidate.zsh"; do
+    grep -q '^#!/bin/zsh$' "$zsh_script" \
+        || fail "macOS entrypoint must use /bin/zsh: $zsh_script"
+done
 
 bash "$repo_root/scripts/check-layout.sh" >/dev/null \
     || fail 'portable layout check rejected the repository'
@@ -60,7 +78,7 @@ if [[ "$*" == 'compose version' ]]; then
     exit 0
 fi
 if [[ "$1" == 'compose' && "$*" == *' config --format json'* ]]; then
-    python3 -c '
+    "$PYTHON_CMD" -c '
 import json, os
 print(json.dumps({"services": {
     "team1-attacker": {

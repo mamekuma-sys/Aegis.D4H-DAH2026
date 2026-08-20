@@ -1,6 +1,15 @@
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $validator = Join-Path $repoRoot 'scripts/validate-skeleton.ps1'
+$windowsPowerShell = Join-Path $PSHOME 'powershell.exe'
+$powerShellCore = Join-Path $PSHOME 'pwsh.exe'
+if (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf) {
+    $pwshCommand = $windowsPowerShell
+} elseif (Test-Path -LiteralPath $powerShellCore -PathType Leaf) {
+    $pwshCommand = $powerShellCore
+} else {
+    $pwshCommand = (Get-Command pwsh -ErrorAction Stop).Source
+}
 
 if (-not (Test-Path -LiteralPath $validator -PathType Leaf)) {
     Write-Error 'Validator not implemented: scripts/validate-skeleton.ps1'
@@ -14,8 +23,11 @@ try {
     $invalidRoot = Join-Path $testRoot 'invalid'
     New-Item -ItemType Directory -Path $invalidRoot -Force | Out-Null
 
-    & pwsh -NoProfile -File $validator -SkeletonPath $invalidRoot *> $null
-    if ($LASTEXITCODE -eq 0) {
+    $ErrorActionPreference = 'Continue'
+    & $pwshCommand -NoProfile -File $validator -SkeletonPath $invalidRoot *> $null
+    $invalidExitCode = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($invalidExitCode -eq 0) {
         throw 'Validator accepted a skeleton with all required files missing.'
     }
 
@@ -34,7 +46,7 @@ try {
         New-Item -ItemType File -Path $fullPath -Force | Out-Null
     }
 
-    $output = & pwsh -NoProfile -File $validator -SkeletonPath $validRoot
+    $output = & $pwshCommand -NoProfile -File $validator -SkeletonPath $validRoot
     if ($LASTEXITCODE -ne 0) {
         throw 'Validator rejected a skeleton containing every required file.'
     }

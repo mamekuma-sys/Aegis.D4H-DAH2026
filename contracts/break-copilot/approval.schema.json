@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.local/contracts/break-copilot/approval.schema.json",
+  "title": "Break candidate human approval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "decision", "candidate_commit", "evaluation_sha256", "rubric_sha256", "side", "reviews"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "decision": {"enum": ["PENDING", "APPROVE", "REJECT"]},
+    "candidate_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "evaluation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "rubric_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "side": {"enum": ["attacker", "defender"]},
+    "reviews": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "reviewer", "decision", "reviewed_at"],
+        "properties": {
+          "role": {"enum": ["agent_owner", "team_lead", "docker_owner"]},
+          "reviewer": {"type": "string", "minLength": 1, "maxLength": 128},
+          "decision": {"enum": ["PENDING", "APPROVE", "REJECT"]},
+          "reviewed_at": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    "notes": {"type": "string", "maxLength": 4000}
+  }
+}

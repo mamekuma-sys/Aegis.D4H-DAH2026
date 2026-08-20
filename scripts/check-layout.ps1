@@ -22,6 +22,12 @@ $requiredFiles = @(
     'contracts/defender/README.md'
     'contracts/llm/README.md'
     'contracts/llm/model-quotas.json'
+    'contracts/break-copilot/readiness.schema.json'
+    'contracts/break-copilot/approval.schema.json'
+    'contracts/break-copilot/combined-rubric.schema.json'
+    'contracts/break-copilot/manifest.schema.json'
+    'contracts/break-copilot/evaluation.schema.json'
+    'contracts/break-copilot/scrimmage.schema.json'
     'contracts/fixtures/README.md'
     'docs/architecture.md'
     'docs/development-setup.md'
@@ -38,16 +44,33 @@ $requiredFiles = @(
     'research/defense-mapping.md'
     'scripts/check-layout.sh'
     'scripts/replay-defender-pcaps.sh'
+    'scripts/break-copilot.ps1'
+    'scripts/break-copilot.zsh'
+    'scripts/macos-preflight.zsh'
+    'scripts/break_copilot/__main__.py'
+    'scripts/break_copilot/cli.py'
     'scripts/validate-skeleton.sh'
     'scripts/validate-skeleton.ps1'
     'scripts/tests/test-shell-entrypoints.sh'
     'scripts/tests/test-validate-skeleton.ps1'
     'scripts/tests/test-compose-agents-override.ps1'
+    'scripts/tests/test-break-copilot-powershell.ps1'
+    'scripts/tests/test-macos-entrypoints.zsh'
     'integration/compose.agents.yml'
     'integration/run-with-skeleton.sh'
     'integration/run-with-skeleton.ps1'
     'integration/attacker-deploy.md'
     'integration/defender-deploy.md'
+    'integration/promote-candidate.ps1'
+    'integration/promote-candidate.zsh'
+    'integration/scrimmage/compose.images.yml'
+    'integration/scrimmage/run-scrimmage.ps1'
+    'integration/scrimmage/run-scrimmage.zsh'
+    'integration/scrimmage/compare_results.py'
+    'docs/validation/break-copilot-protocol.md'
+    'docs/validation/readiness-rubric.md'
+    'docs/validation/scrimmage-protocol.md'
+    'docs/validation/macos-finals-runbook.md'
 )
 
 $missing = @()
@@ -83,17 +106,19 @@ $forbiddenHomePatterns = @(
 
 $pathLeaks = @()
 $trackedFiles = git -C $repoRoot -c core.quotePath=false ls-files
-$forbiddenTrackedExtensions = @('.pdf', '.zip', '.tar', '.gz', '.pcap', '.pcapng')
+$forbiddenTrackedExtensions = @('.pdf', '.zip', '.tar', '.gz', '.pcap', '.pcapng', '.log')
 $forbiddenTrackedBasenames = @(
     'DAH2026_본선_당일_진행_안내.md',
     'DAH2026_스켈레톤코드_상세_설명.md'
 )
 $trackedArtifacts = @()
 foreach ($relativePath in $trackedFiles) {
+    $normalizedPath = $relativePath -replace '\\', '/'
     $extension = [System.IO.Path]::GetExtension($relativePath).ToLowerInvariant()
     $basename = [System.IO.Path]::GetFileName($relativePath)
     if (($forbiddenTrackedExtensions -contains $extension) -or
-        ($forbiddenTrackedBasenames -contains $basename)) {
+        ($forbiddenTrackedBasenames -contains $basename) -or
+        ($normalizedPath -match '^(capture|captures|log|logs|output|tmp)/')) {
         $trackedArtifacts += $relativePath
     }
 }

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.local/contracts/break-copilot/combined-rubric.schema.json",
+  "title": "Conservatively combined human and AI readiness rubric",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate_id", "ai_assessment_sha256", "human_assessment_sha256", "score", "grade", "hard_gates_passed", "arbitration_required", "score_values"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "ai_assessment_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "human_assessment_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "score": {"type": "number", "minimum": 0, "maximum": 100},
+    "grade": {"enum": ["READY", "CONDITIONAL", "NOT_READY"]},
+    "hard_gates_passed": {"type": "boolean"},
+    "arbitration_required": {"type": "array", "items": {"type": "string"}},
+    "score_values": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence", "attacker", "defender", "generalization", "performance", "operations", "llm"],
+      "properties": {
+        "evidence": {"type": "integer", "minimum": 0, "maximum": 4},
+        "attacker": {"type": "integer", "minimum": 0, "maximum": 4},
+        "defender": {"type": "integer", "minimum": 0, "maximum": 4},
+        "generalization": {"type": "integer", "minimum": 0, "maximum": 4},
+        "performance": {"type": "integer", "minimum": 0, "maximum": 4},
+        "operations": {"type": "integer", "minimum": 0, "maximum": 4},
+        "llm": {"type": "integer", "minimum": 0, "maximum": 4}
+      }
+    }
+  }
+}

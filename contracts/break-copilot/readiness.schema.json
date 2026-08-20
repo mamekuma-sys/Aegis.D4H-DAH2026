@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.local/contracts/break-copilot/readiness.schema.json",
+  "title": "Break Copilot independent readiness assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "evaluator", "candidate_id", "hard_gates", "scores", "limitations"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "evaluator": {"type": "string", "enum": ["ai", "human"]},
+    "candidate_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "hard_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope_rules", "evidence_traceability", "contract_preservation", "defender_safety", "isolation_reproducibility"],
+      "properties": {
+        "scope_rules": {"$ref": "#/$defs/gate"},
+        "evidence_traceability": {"$ref": "#/$defs/gate"},
+        "contract_preservation": {"$ref": "#/$defs/gate"},
+        "defender_safety": {"$ref": "#/$defs/gate"},
+        "isolation_reproducibility": {"$ref": "#/$defs/gate"}
+      }
+    },
+    "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence", "attacker", "defender", "generalization", "performance", "operations", "llm"],
+      "properties": {
+        "evidence": {"$ref": "#/$defs/score"},
+        "attacker": {"$ref": "#/$defs/score"},
+        "defender": {"$ref": "#/$defs/score"},
+        "generalization": {"$ref": "#/$defs/score"},
+        "performance": {"$ref": "#/$defs/score"},
+        "operations": {"$ref": "#/$defs/score"},
+        "llm": {"$ref": "#/$defs/score"}
+      }
+    },
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "evidence_ids", "reason"],
+      "properties": {
+        "status": {"enum": ["PASS", "FAIL", "NOT_TESTED", "NOT_APPLICABLE"]},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "reason": {"type": "string"}
+      }
+    },
+    "score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence_ids", "reason"],
+      "properties": {
+        "value": {"type": "integer", "minimum": 0, "maximum": 4},
+        "evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "reason": {"type": "string"}
+      }
+    }
+  }
+}

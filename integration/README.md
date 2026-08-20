@@ -2,6 +2,12 @@
 
 공식 스켈레톤은 이 저장소에 포함하지 않습니다.
 
+Break 후보의 baseline/candidate 2×2 교차 검증은
+[`스크리미지 프로토콜`](../docs/validation/scrimmage-protocol.md)과
+`integration/scrimmage/run-scrimmage.ps1`을 사용합니다. 이 override는 image만 바꾸고
+`--no-build`를 강제하므로 공식 파일과 runtime lock을 수정하지 않습니다.
+macOS zsh에서는 동일한 image-only 계약의 `integration/scrimmage/run-scrimmage.zsh`을 사용합니다.
+
 > 공격 이미지 빌드·라이브 스모크·Registry 배포 절차는 `integration/attacker-deploy.md`를 참조합니다.
 > 방어 이미지 절차는 `integration/defender-deploy.md`를 참조합니다.
 >
@@ -40,6 +46,16 @@ Compose override가 공격·방어 이미지 모두 `linux/amd64`로 빌드·실
 Homebrew 등으로 설치한 standalone `docker-compose`를 자동으로 사용합니다.
 Apple Silicon에서 공식 x86-64 Broker의 NFQUEUE까지 실기 검증할 때는 단순 컨테이너
 에뮬레이션이 아니라 x86_64 Linux VM을 사용해야 합니다.
+
+Break 후보의 image-only 구성만 zsh에서 검사할 때는 다음 명령을 사용합니다.
+
+```zsh
+zsh integration/scrimmage/run-scrimmage.zsh \
+  --skeleton <스켈레톤-루트> \
+  --attacker-image <attacker-image> \
+  --defender-image <defender-image> \
+  --config-only
+```
 
 ## 이미지 제출 계약
 

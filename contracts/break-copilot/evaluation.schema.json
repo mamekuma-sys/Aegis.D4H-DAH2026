@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.local/contracts/break-copilot/evaluation.schema.json",
+  "title": "Fixed-command break candidate evaluation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "created_at", "side", "candidate_branch", "candidate_commit", "base_ref", "base_commit", "sandbox_image", "sandbox_image_id", "status", "checks", "limitations"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "side": {"enum": ["attacker", "defender"]},
+    "candidate_branch": {"type": "string", "pattern": "^break/"},
+    "candidate_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "base_ref": {"type": "string", "minLength": 1},
+    "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sandbox_image": {"type": "string", "minLength": 1},
+    "sandbox_image_id": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "status": {"enum": ["PASS", "FAIL"]},
+    "checks": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": {"type": "string"},
+          "status": {"enum": ["PASS", "FAIL"]}
+        }
+      }
+    },
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  }
+}

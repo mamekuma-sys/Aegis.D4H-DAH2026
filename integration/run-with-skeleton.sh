@@ -23,6 +23,17 @@ case "$action" in
     *) usage ;;
 esac
 
+if [[ -n "${PYTHON_CMD:-}" ]]; then
+    python_cmd="$PYTHON_CMD"
+elif python3 -c 'pass' >/dev/null 2>&1; then
+    python_cmd='python3'
+elif python -c 'pass' >/dev/null 2>&1; then
+    python_cmd='python'
+else
+    printf '%s\n' 'ERROR: Python interpreter not found.' >&2
+    exit 1
+fi
+
 [[ -d "$skeleton_arg" ]] || {
     printf 'ERROR: Skeleton root does not exist: %s\n' "$skeleton_arg" >&2
     exit 1
@@ -65,7 +76,7 @@ compose() {
 config_value() {
     local service="$1"
     local field="$2"
-    compose config --format json | python3 -c '
+    compose config --format json | "$python_cmd" -c '
 import json, sys
 document = json.load(sys.stdin)
 service, field = sys.argv[1:]
@@ -78,6 +89,17 @@ print(value.strip())
 ' "$service" "$field"
 }
 
+normalize_context() {
+    local value="${1//\\//}"
+    if [[ "$value" =~ ^([A-Za-z]):/(.*)$ ]]; then
+        local drive
+        drive="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
+        printf '/%s/%s\n' "$drive" "${BASH_REMATCH[2]}"
+    else
+        printf '%s\n' "$value"
+    fi
+}
+
 assert_build_context() {
     local service="$1"
     local expected="$2"
@@ -85,7 +107,7 @@ assert_build_context() {
     actual="$(config_value "$service" 'build.context')"
     actual="${actual%/}"
     expected="${expected%/}"
-    [[ "$actual" == "$expected" ]] || {
+    [[ "$(normalize_context "$actual")" == "$(normalize_context "$expected")" ]] || {
         printf "ERROR: %s.build.context is '%s', expected '%s'\n" \
             "$service" "$actual" "$expected" >&2
         exit 1
