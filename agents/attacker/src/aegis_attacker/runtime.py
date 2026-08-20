@@ -465,15 +465,33 @@ class AttackerRuntime:
     def attack_endpoint(self, endpoint) -> bool:
         if self._stop_event.is_set():
             return False
-        obs, resp = self._observer.observe_banner(endpoint)
-        self._report.record_observation()
-        self._report.record_request()
+        obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
+        for _ in range(bootstrap_requests):
+            self._report.record_observation()
+            self._report.record_request()
         self._remember_evidence(endpoint, obs.evidence_ref)
         if self._stop_event.is_set():
             return False
         if obs.no_response:
-            self.audit.log("skip", target=endpoint.key(), reason="no-response")
+            tcp_obs, tcp_resp = self._observer.observe_passive_banner(endpoint)
+            self._report.record_observation()
+            self._report.record_request()
+            self._remember_evidence(endpoint, tcp_obs.evidence_ref)
+            captured = self._process_flags(tcp_resp.body, tcp_resp.headers)
+            if captured:
+                self.audit.log(
+                    "hit", target=endpoint.key(), turn=0,
+                    path="PASSIVE_TCP_BANNER", reason="passive-tcp-banner",
+                )
+                return True
+            self.audit.log(
+                "skip", target=endpoint.key(),
+                reason="no-http-https-or-passive-banner",
+            )
             return False
+
+        if endpoint.scheme == "https":
+            self.audit.log("protocol-observed", target=endpoint.key(), scheme="https")
 
         current_evidence = obs.evidence_ref
         banner_fp = service_fingerprint(obs.status, resp.body or "", resp.headers)

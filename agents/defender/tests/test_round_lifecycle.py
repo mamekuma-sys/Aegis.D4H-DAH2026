@@ -294,6 +294,14 @@ class TestEndToEnd(unittest.TestCase):
                     dst_port=9091,
                 ),
             ),
+            packet_frame(
+                5,
+                ipv4_tcp(
+                    b"\x16\x03\x01\x00\x10synthetic-tls",
+                    dst_ip=bytes((10, 1, 4, 4)),
+                    dst_port=9092,
+                ),
+            ),
         ]
         harness = RuntimeHarness(frames)
         harness.start()
@@ -303,8 +311,8 @@ class TestEndToEnd(unittest.TestCase):
         self.assertTrue(all(value == VERDICT_ACCEPT for _, value in harness.verdicts()))
         lines = [json.loads(line) for line in harness.stream.getvalue().splitlines() if line]
         observed = [line for line in lines if line["event"] == "service-observed"]
-        self.assertEqual(len(observed), 3)
-        self.assertEqual({line["dst_port"] for line in observed}, {8085, 9090, 9091})
+        self.assertEqual(len(observed), 4)
+        self.assertEqual({line["dst_port"] for line in observed}, {8085, 9090, 9091, 9092})
         self.assertEqual({line["protocol"] for line in observed}, {6, 17})
         self.assertEqual({line["parser_version"] for line in observed}, {1})
         self.assertTrue(all(line["authority"] == "observation-only" for line in observed))

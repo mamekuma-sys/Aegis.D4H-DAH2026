@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import socket
+import ssl
 import threading
 import time
 import urllib.error
@@ -26,6 +27,8 @@ NOTABLE_HEADERS = (
 # 공격 대상은 신뢰 경계 밖이다. Content-Length가 없거나 거짓이어도 한 응답이
 # 컨테이너 메모리와 LLM prompt를 무제한 점유하지 못하도록 실제 read를 제한한다.
 MAX_RESPONSE_BYTES = 1024 * 1024
+MAX_PASSIVE_BANNER_BYTES = 4096
+PASSIVE_BANNER_TIMEOUT = 0.75
 
 
 def fingerprint(text: str, length: int = 16) -> str:
@@ -59,15 +62,32 @@ class UrllibHttp:
         # 환경 프록시 비활성(ProxyHandler({})) + 리다이렉트 미추적.
         self._opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), _NoRedirect())
+        # 경기 대상은 self-signed 인증서를 사용할 수 있다. 이 opener는
+        # ATTACK_TARGET 전용이며 제출·LLM에는 절대 사용하지 않는다.
+        self._target_opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=ssl._create_unverified_context()),
+            _NoRedirect(),
+        )
 
     def request(self, method: str, url: str, headers=None, body=None,
                 timeout: float = 6.0) -> HttpResponse:
+        return self._request_with(self._opener, method, url, headers, body, timeout)
+
+    def request_target(self, method: str, url: str, headers=None, body=None,
+                       timeout: float = 6.0) -> HttpResponse:
+        """ATTACK_TARGET 전용 HTTP(S). 경기 대상 TLS만 인증서 검증을 완화한다."""
+        return self._request_with(self._target_opener, method, url, headers, body, timeout)
+
+    @staticmethod
+    def _request_with(opener, method: str, url: str, headers=None, body=None,
+                      timeout: float = 6.0) -> HttpResponse:
         data = body.encode() if isinstance(body, str) else body
         req = urllib.request.Request(url, data=data, method=method)
         for k, v in (headers or {}).items():
             req.add_header(k, v)
         try:
-            with self._opener.open(req, timeout=timeout) as r:
+            with opener.open(req, timeout=timeout) as r:
                 raw = r.read(MAX_RESPONSE_BYTES + 1)
                 truncated = len(raw) > MAX_RESPONSE_BYTES
                 return HttpResponse(
@@ -92,6 +112,28 @@ class UrllibHttp:
             )
         except Exception:
             # timeout·연결거부·필터 DROP 모두 status 0 관측으로 수렴
+            return HttpResponse(0, "", {})
+
+    @staticmethod
+    def read_passive_banner(host: str, port: int,
+                            timeout: float = PASSIVE_BANNER_TIMEOUT,
+                            max_bytes: int = MAX_PASSIVE_BANNER_BYTES) -> HttpResponse:
+        """TCP handshake 뒤 서버가 먼저 보내는 bytes만 bounded read한다."""
+        limit = max(1, min(int(max_bytes), MAX_PASSIVE_BANNER_BYTES))
+        wait = max(0.01, min(float(timeout), PASSIVE_BANNER_TIMEOUT))
+        try:
+            with socket.create_connection((host, port), timeout=wait) as connection:
+                connection.settimeout(wait)
+                raw = connection.recv(limit + 1)
+            if not raw:
+                return HttpResponse(0, "", {})
+            return HttpResponse(
+                200,
+                raw[:limit].decode("utf-8", "replace"),
+                {},
+                truncated=len(raw) > limit,
+            )
+        except OSError:
             return HttpResponse(0, "", {})
 
 
@@ -165,3 +207,38 @@ class Observer:
     def observe_banner(self, endpoint: Endpoint, timeout: float = 6.0):
         """기초 관측: GET / 배너."""
         return self.observe(endpoint, "GET", "/", timeout=timeout)
+
+    def observe_banner_adaptive(self, endpoint: Endpoint, timeout: float = 6.0):
+        """평문 HTTP 무응답일 때만 같은 endpoint를 HTTPS로 한 번 재관측한다."""
+        obs, resp = self.observe_banner(endpoint, timeout=timeout)
+        if resp.status != 0 or endpoint.scheme == "https":
+            return obs, resp, endpoint, 1
+        secure = endpoint.with_scheme("https")
+        secure_obs, secure_resp = self.observe_banner(secure, timeout=timeout)
+        return secure_obs, secure_resp, secure, 2
+
+    def observe_passive_banner(self, endpoint: Endpoint):
+        """HTTP(S) 무응답 endpoint에서 client application write 없이 TCP banner를 읽는다."""
+        self._rate.acquire_request()
+        start = self._clock()
+        resp = self._egress.read_passive_banner(
+            Capability.ATTACK_TARGET,
+            endpoint.host,
+            endpoint.port,
+            timeout=PASSIVE_BANNER_TIMEOUT,
+            max_bytes=MAX_PASSIVE_BANNER_BYTES,
+        )
+        latency_ms = (self._clock() - start) * 1000.0
+        body_fp = fingerprint(resp.body)
+        obs = Observation(
+            endpoint=endpoint,
+            request_fingerprint=fingerprint("TCP PASSIVE_BANNER"),
+            status=resp.status,
+            redacted_header_hints={},
+            body_fingerprint=body_fp,
+            latency_ms=latency_ms,
+            note="no-response" if resp.status == 0 else "passive-tcp-banner",
+            round_id=self._round_id,
+            evidence_ref=self._evidence.make(endpoint, body_fp),
+        )
+        return obs, resp

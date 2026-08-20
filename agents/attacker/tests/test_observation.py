@@ -1,3 +1,5 @@
+import socket
+import threading
 import unittest
 
 from aegis_attacker.config import AttackerConfig
@@ -89,6 +91,40 @@ class TestBoundedTransport(unittest.TestCase):
         self.assertEqual(len(result.body), MAX_RESPONSE_BYTES)
         self.assertTrue(result.truncated)
 
+    def test_passive_tcp_banner_reads_bounded_server_bytes_without_client_write(self):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        received = []
+
+        def serve():
+            try:
+                connection, _ = listener.accept()
+                with connection:
+                    connection.sendall(b"x" * 5000)
+                    connection.settimeout(1.0)
+                    try:
+                        received.append(connection.recv(1))
+                    except ConnectionResetError:
+                        # Windows closes a socket with unread server bytes using RST.
+                        # RST still proves that no client application byte arrived.
+                        received.append(b"")
+            finally:
+                listener.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        response = UrllibHttp.read_passive_banner(
+            "127.0.0.1", port, timeout=0.75, max_bytes=4096
+        )
+        thread.join(timeout=2.0)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(len(response.body), 4096)
+        self.assertTrue(response.truncated)
+        self.assertEqual(received, [b""])
+
 
 class TestObserver(unittest.TestCase):
     def _observer(self, resp):
@@ -118,6 +154,37 @@ class TestObserver(unittest.TestCase):
         obs_er, _ = self._observer(HttpResponse(200, "ok", {}))
         for _ in range(25):
             obs_er.observe_banner(EP)
+
+    def test_adaptive_banner_falls_back_to_https_only_after_http_no_response(self):
+        class SchemeTransport:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                self.calls.append(url)
+                if url.startswith("https://"):
+                    return HttpResponse(200, "secure service", {})
+                return HttpResponse(0, "", {})
+
+        clk = FakeClock()
+        transport = SchemeTransport()
+        observer = Observer(
+            EgressGateway(transport, build_allowlists(CFG)),
+            RateLimiter(clock=clk, sleep=lambda dt: clk.advance(dt)),
+            round_id="r1",
+            clock=clk,
+        )
+
+        obs, resp, selected, attempts = observer.observe_banner_adaptive(EP)
+
+        self.assertEqual(obs.status, 200)
+        self.assertEqual(resp.body, "secure service")
+        self.assertEqual(selected.scheme, "https")
+        self.assertEqual(attempts, 2)
+        self.assertEqual(
+            transport.calls,
+            ["http://team2.lig.internal:8082/", "https://team2.lig.internal:8082/"],
+        )
 
 
 if __name__ == "__main__":

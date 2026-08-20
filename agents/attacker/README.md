@@ -12,6 +12,12 @@ probe 응답이 실제로 노출한 route·parameter만 bounded discovery text�
 결속합니다. traversal·파괴적 action route는 실행하지 않으며, 포트별 인터페이스와 flag 상태를 섞지
 않습니다.
 
+공식 `PORTS`에 여러 protocol이 올 수 있으므로 bootstrap은 평문 HTTP `GET /`을 먼저 실행하고,
+무응답일 때만 같은 endpoint의 HTTPS `GET /`, 다시 무응답일 때만 passive TCP banner read로
+이어집니다. TCP 단계는 최대 4KiB·750ms이며 client application byte를 보내지 않습니다. 경기 대상의
+self-signed TLS는 `ATTACK_TARGET`에서만 허용하고 제출·LLM 인증서 검증에는 영향을 주지 않습니다.
+UDP·protocol별 command는 관측 근거 없이 생성하지 않습니다.
+
 공식 `PORTS`에 L1~L4가 함께 들어오면 알려진 데모 포트는 `L4→L1→L2→L3` wave로 섞습니다.
 새 UGV 레이어를 초반에 시작하면서도 이전 세 레이어를 모두 같은 wave에 유지합니다. 데모 포트가
 아닌 경우 운영 측 입력 순서를 그대로 보존합니다.

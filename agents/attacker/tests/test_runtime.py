@@ -952,6 +952,99 @@ class TestUgvObservedDiscovery(unittest.TestCase):
             self.assertNotIn("/admin", requests)
             self.assertNotIn("/.git/config", requests)
 
+    def test_https_only_l4_uses_observed_route_and_collects_multiple_flags(self):
+        class HttpsUgvArena:
+            def __init__(self):
+                self.submits = []
+                self.target_urls = []
+                self.llm_calls = 0
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                from urllib.parse import parse_qs, unquote, urlsplit
+
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
+                    return HttpResponse(500, "unused")
+                self.target_urls.append(url)
+                parts = urlsplit(url)
+                if parts.scheme == "http":
+                    return HttpResponse(0, "", {})
+                if parts.path == "/":
+                    return HttpResponse(200, "secure Phase 4 service", {})
+                if parts.path == "/status":
+                    return HttpResponse(200, "GET /inspect?uri=<url>", {})
+                if parts.path == "/inspect":
+                    target = unquote((parse_qs(parts.query).get("uri") or [""])[0])
+                    if target == "http://127.0.0.1:9443/registry":
+                        return HttpResponse(
+                            200,
+                            "FLAG{synthetic_https_l4_a} FLAG{synthetic_https_l4_b}",
+                            {},
+                        )
+                return HttpResponse(200, "online", {})
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(9443,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        arena = HttpsUgvArena()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 2)
+        self.assertEqual(len(arena.submits), 2)
+        self.assertEqual(arena.llm_calls, 0)
+        self.assertTrue(arena.target_urls[0].startswith("http://"))
+        self.assertTrue(all(url.startswith("https://") for url in arena.target_urls[1:]))
+
+    def test_non_http_l4_passive_banner_collects_flag_without_client_payload(self):
+        class PassiveBannerArena:
+            def __init__(self):
+                self.submits = []
+                self.http_calls = []
+                self.banner_calls = []
+                self.llm_calls = 0
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
+                    return HttpResponse(500, "unused")
+                self.http_calls.append((method, url, body))
+                return HttpResponse(0, "", {})
+
+            def read_passive_banner(self, host, port, timeout, max_bytes):
+                self.banner_calls.append((host, port, timeout, max_bytes))
+                return HttpResponse(200, "FLAG{synthetic_passive_tcp_l4}", {})
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(9100,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        arena = PassiveBannerArena()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(len(arena.submits), 1)
+        self.assertEqual(len(arena.http_calls), 2)
+        self.assertTrue(all(body is None for _, _, body in arena.http_calls))
+        self.assertEqual(len(arena.banner_calls), 1)
+        self.assertLessEqual(arena.banner_calls[0][2], 0.75)
+        self.assertLessEqual(arena.banner_calls[0][3], 4096)
+        self.assertEqual(arena.llm_calls, 0)
+
 
 class TestRuntimeInert(unittest.TestCase):
     def test_inert_without_targets_returns(self):
