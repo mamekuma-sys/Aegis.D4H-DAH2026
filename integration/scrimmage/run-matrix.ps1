@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$SkeletonPath,
-    [int[]]$Seeds = @(1, 2, 3),
+    [string[]]$Seeds = @('1', '2', '3'),
     [ValidateRange(10, 1200)][int]$RoundSeconds = 30,
     [ValidateRange(1, 100)][int]$SamplesPerRoute = 5,
     [string]$OutputRoot = ''
@@ -9,16 +9,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$seedModule = Join-Path $here 'SeedArguments.psm1'
+Import-Module $seedModule -Force
 $runner = Join-Path $here 'run-match.ps1'
 if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) {
     throw "match runner missing: $runner"
 }
-if ($Seeds.Count -eq 0 -or @($Seeds | Where-Object { $_ -lt 0 }).Count -gt 0) {
-    throw 'Seeds must contain non-negative integers'
-}
-if (@($Seeds | Select-Object -Unique).Count -ne $Seeds.Count) {
-    throw 'Seeds must be unique'
-}
+$Seeds = @(ConvertFrom-ScrimmageSeedArguments -SeedArguments $Seeds -Label 'Seeds')
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $batch = 'matrix-{0}' -f ([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
     $OutputRoot = Join-Path (Join-Path ([IO.Path]::GetTempPath()) 'Aegis.D4H-scrimmage') $batch

@@ -1,13 +1,18 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$ResultRoot,
-    [int[]]$ExpectedSeeds = @(1, 2, 3),
+    [string[]]$ExpectedSeeds = @('1', '2', '3'),
     [string]$HumanScoreFile = 'PENDING',
     [string]$OutputPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$seedModule = Join-Path $here 'SeedArguments.psm1'
+Import-Module $seedModule -Force
+$ExpectedSeeds = @(
+    ConvertFrom-ScrimmageSeedArguments -SeedArguments $ExpectedSeeds -Label 'ExpectedSeeds'
+)
 $repoRoot = Split-Path -Parent (Split-Path -Parent $here)
 $resultSchemaPath = Join-Path $repoRoot 'contracts/scrimmage/match-result.schema.json'
 if (-not (Test-Path -LiteralPath $resultSchemaPath -PathType Leaf)) {
