@@ -12,12 +12,12 @@ fail() {
     exit 1
 }
 
-for path in \
+for script_path in \
     "$repo_root/scripts/break-copilot.zsh" \
     "$repo_root/scripts/macos-preflight.zsh" \
     "$repo_root/integration/scrimmage/run-scrimmage.zsh" \
     "$repo_root/integration/promote-candidate.zsh"; do
-    zsh -n "$path" || fail "zsh parse failed: $path"
+    zsh -n "$script_path" || fail "zsh parse failed: $script_path"
 done
 
 zsh_output="$(zsh "$repo_root/scripts/break-copilot.zsh" preflight)" \
