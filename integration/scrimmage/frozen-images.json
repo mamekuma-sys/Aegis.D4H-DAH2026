@@ -8,8 +8,8 @@
       "platform": "linux/amd64"
     },
     "A1": {
-      "commit": "5b29b9538d83e4214bdaff0ce14285c81b040cb7",
-      "reference": "aegis/scrimmage-candidate-attacker@sha256:4c56e5ce80b843c22ef3fa42b27f21c7ccc7a8d5dc2d969c31217062886befa7",
+      "commit": "3c9609cadc601f7e21ed544f3b04d8f1a57345c7",
+      "reference": "aegis/scrimmage-candidate-attacker@sha256:99f2520b3908c357f641ddb586892bb9e686ed13c52f1a1f5084e5817d99e9e9",
       "platform": "linux/amd64"
     },
     "D0": {
@@ -18,8 +18,8 @@
       "platform": "linux/amd64"
     },
     "D1": {
-      "commit": "503332f92843316fb7d9c85ad604eea0c09ce3b9",
-      "reference": "aegis/scrimmage-candidate-defender@sha256:08fb5675ea3ce7ef39c4cf0d6055b2f1352a5c8d5a6681a5aa947208fc189aba",
+      "commit": "3c9609cadc601f7e21ed544f3b04d8f1a57345c7",
+      "reference": "aegis/scrimmage-candidate-defender@sha256:6affb7da905d3c9603b290adbfe0f01846273684bef0460f9e279a567b206709",
       "platform": "linux/amd64"
     }
   }
