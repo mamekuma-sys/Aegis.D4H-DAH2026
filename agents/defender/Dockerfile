@@ -15,6 +15,10 @@ WORKDIR /app
 COPY src/aegis_defender /app/aegis_defender
 COPY policy /policy
 
+# Python import가 Broker 연결보다 먼저 실행되므로 build 시 bytecode를 만들어
+# container startup의 fail-open 창을 줄인다. runtime policy·verdict 의미는 바꾸지 않는다.
+RUN python -m compileall -q -f /app/aegis_defender
+
 # 레퍼런스 이미지와 동일하게 비특권 사용자로 실행한다.
 USER 65534
 
