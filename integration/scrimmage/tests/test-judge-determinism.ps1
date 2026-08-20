@@ -113,6 +113,82 @@ try {
     if ($hashes[0] -cne $hashes[1]) {
         throw "judge output is not deterministic: $($hashes -join ', ')"
     }
+
+    $validHumanScore = Join-Path $tempRoot 'valid-human-score.json'
+    $humanArea = [ordered]@{
+        score = 2
+        confidence = 'MEDIUM'
+        evidence_ids = @('MATCH-A0D0-S1')
+        gaps = @('BLIND_HOLDOUT_MISSING')
+        judgement = 'CONCERN'
+    }
+    [ordered]@{
+        schema_version = 1
+        areas = [ordered]@{
+            evidence_traceability = $humanArea
+            attack_effectiveness = $humanArea
+            defense_effect_availability = $humanArea
+            generalization_adaptability = $humanArea
+            performance_resilience = $humanArea
+            operational_reproducibility = $humanArea
+            llm_cost_observability = $humanArea
+        }
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $validHumanScore -Encoding utf8NoBOM
+    $validJudgement = Join-Path $tempRoot 'valid-judgement.json'
+    & pwsh -NoProfile -File $judge `
+        -ResultRoot $tempRoot `
+        -ExpectedSeeds 1,2,3 `
+        -HumanScoreFile $validHumanScore `
+        -OutputPath $validJudgement | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'judge rejected a valid human score' }
+    $judgement = Get-Content -Raw -LiteralPath $validJudgement | ConvertFrom-Json
+    if ($judgement.human_score -ne 'PROVIDED' -or $null -eq $judgement.final_weighted_score) {
+        throw 'judge did not apply a valid human score'
+    }
+
+    $invalidHumanScore = Join-Path $tempRoot 'invalid-human-score.json'
+    $invalidHumanArea = [ordered]@{
+        score = 2
+        confidence = 'MEDIUM'
+        evidence_ids = @('MATCH-A0D0-S1')
+        gaps = @('BLIND_HOLDOUT_MISSING')
+        judgement = 'CONCERN'
+    }
+    [ordered]@{
+        schema_version = 1
+        areas = [ordered]@{
+            evidence_traceability = [ordered]@{
+                score = 5
+                confidence = 'MEDIUM'
+                evidence_ids = @('MATCH-A0D0-S1')
+                gaps = @('BLIND_HOLDOUT_MISSING')
+                judgement = 'CONCERN'
+            }
+            attack_effectiveness = $invalidHumanArea
+            defense_effect_availability = $invalidHumanArea
+            generalization_adaptability = $invalidHumanArea
+            performance_resilience = $invalidHumanArea
+            operational_reproducibility = $invalidHumanArea
+            llm_cost_observability = $invalidHumanArea
+        }
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $invalidHumanScore -Encoding utf8NoBOM
+    & pwsh -NoProfile -File $judge `
+        -ResultRoot $tempRoot `
+        -ExpectedSeeds 1,2,3 `
+        -HumanScoreFile $invalidHumanScore `
+        -OutputPath (Join-Path $tempRoot 'invalid-judgement.json') *> $null
+    if ($LASTEXITCODE -eq 0) {
+        throw 'judge accepted an out-of-range human score'
+    }
+
+    & pwsh -NoProfile -File $judge `
+        -ResultRoot $tempRoot `
+        -ExpectedSeeds 1,2,3 `
+        -HumanScoreFile (Join-Path $tempRoot 'missing-human-score.json') `
+        -OutputPath (Join-Path $tempRoot 'missing-judgement.json') *> $null
+    if ($LASTEXITCODE -eq 0) {
+        throw 'judge silently treated a missing human score file as PENDING'
+    }
 } finally {
     if ($tempRoot.StartsWith([IO.Path]::GetTempPath(), [StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force

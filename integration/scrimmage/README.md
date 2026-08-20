@@ -27,5 +27,52 @@ agent summary에는 Docker가 기록한 container 시작 Unix 시각과 event별
 Judge는 사람 점수가 `PENDING`이면 필수 게이트가 모두 통과해도 `NOT_READY`를 반환한다. 개발은
 seed 3개, 최종 후보는 Arena/Judge만 접근하는 blind seed 5개 이상으로 다시 실행해야 한다.
 
+사람 점수를 제공할 때는 `contracts/scrimmage/human-score.schema.json`을 만족하는 독립 파일을
+사용한다. 7개 영역은 각각 0–4 정수 점수, 확신도, Evidence ID, 결손 코드, 판정을 가져야 한다.
+누락·추가 필드·범위 밖 값은 Judge가 거부한다.
+파일 경로 오타를 `PENDING`으로 조용히 처리하지 않으므로, 미채점 상태는 문자열 `PENDING`으로만
+명시한다.
+
+```json
+{
+  "schema_version": 1,
+  "areas": {
+    "evidence_traceability": {
+      "score": 2,
+      "confidence": "MEDIUM",
+      "evidence_ids": ["MATCH-INDEX-FINAL-404-408"],
+      "gaps": ["BLIND_HOLDOUT_MISSING"],
+      "judgement": "CONCERN"
+    },
+    "attack_effectiveness": {
+      "score": 2, "confidence": "MEDIUM", "evidence_ids": ["MATCH-A1D0-S404"],
+      "gaps": ["L4_EVIDENCE_MISSING"], "judgement": "CONCERN"
+    },
+    "defense_effect_availability": {
+      "score": 2, "confidence": "MEDIUM", "evidence_ids": ["MATCH-A1D1-S404"],
+      "gaps": ["OFFICIAL_SLA_GENERATOR_MISSING"], "judgement": "CONCERN"
+    },
+    "generalization_adaptability": {
+      "score": 2, "confidence": "LOW", "evidence_ids": ["MATCH-INDEX-FINAL-404-408"],
+      "gaps": ["BLIND_HOLDOUT_MISSING"], "judgement": "UNKNOWN"
+    },
+    "performance_resilience": {
+      "score": 2, "confidence": "MEDIUM", "evidence_ids": ["MATCH-A1D1-S404"],
+      "gaps": ["OFFICIAL_20_MIN_LOAD_MISSING"], "judgement": "CONCERN"
+    },
+    "operational_reproducibility": {
+      "score": 2, "confidence": "MEDIUM", "evidence_ids": ["MATCH-INDEX-FINAL-404-408"],
+      "gaps": ["OFFICIAL_ARENA_REPRODUCIBILITY_MISSING"], "judgement": "CONCERN"
+    },
+    "llm_cost_observability": {
+      "score": 2, "confidence": "LOW", "evidence_ids": ["MATCH-A1D0-S404"],
+      "gaps": ["USD_PRICE_SCHEDULE_MISSING"], "judgement": "UNKNOWN"
+    }
+  }
+}
+```
+
+예시 숫자는 사전 점수가 아니다. 사람 심판은 증거를 독립 검토한 뒤 값을 작성해야 한다.
+
 이 디렉터리는 Docker/Compose 통합 영역이다. 변경 승격에는 Docker owner, 영향받는 agent owner,
 팀장 이경준 검토가 필요하고 `contracts/scrimmage/**` 변경은 팀장 승인이 필요하다.

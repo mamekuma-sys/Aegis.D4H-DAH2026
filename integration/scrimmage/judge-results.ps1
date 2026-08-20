@@ -15,8 +15,12 @@ $ExpectedSeeds = @(
 )
 $repoRoot = Split-Path -Parent (Split-Path -Parent $here)
 $resultSchemaPath = Join-Path $repoRoot 'contracts/scrimmage/match-result.schema.json'
+$humanScoreSchemaPath = Join-Path $repoRoot 'contracts/scrimmage/human-score.schema.json'
 if (-not (Test-Path -LiteralPath $resultSchemaPath -PathType Leaf)) {
     throw "result schema missing: $resultSchemaPath"
+}
+if (-not (Test-Path -LiteralPath $humanScoreSchemaPath -PathType Leaf)) {
+    throw "human score schema missing: $humanScoreSchemaPath"
 }
 $matrices = @('A0D0', 'A1D0', 'A0D1', 'A1D1')
 $forbidden = @('FLAG{', 'tok-team', 'sk-local', 'SUBMIT_TOKEN', 'LLM_API_KEY')
@@ -344,24 +348,90 @@ $areas = [ordered]@{
     llm_cost_observability = [ordered]@{ weight = 5; ai = $(if ($isolationOk -and $integrityOk) { 2 } else { 1 }) }
 }
 
-$humanPending = $HumanScoreFile -eq 'PENDING' -or -not (Test-Path -LiteralPath $HumanScoreFile -PathType Leaf)
+$allEvidenceIds = @($records | ForEach-Object { $_.evidence_id })
+$areaEvidence = [ordered]@{
+    evidence_traceability = $allEvidenceIds
+    attack_effectiveness = @($records | Where-Object {
+        $_.result.matrix -in 'A0D0', 'A1D0'
+    } | ForEach-Object { $_.evidence_id })
+    defense_effect_availability = $allEvidenceIds
+    generalization_adaptability = $allEvidenceIds
+    performance_resilience = @($records | Where-Object {
+        $_.result.matrix -in 'A0D1', 'A1D1'
+    } | ForEach-Object { $_.evidence_id })
+    operational_reproducibility = $allEvidenceIds
+    llm_cost_observability = @($records | Where-Object {
+        $_.result.matrix -in 'A1D0', 'A1D1'
+    } | ForEach-Object { $_.evidence_id })
+}
+$areaGaps = [ordered]@{
+    evidence_traceability = @('BLIND_HOLDOUT_MISSING', 'L4_EVIDENCE_MISSING')
+    attack_effectiveness = @(
+        'BLIND_HOLDOUT_MISSING', 'L4_EVIDENCE_MISSING', 'BASELINE_REQUEST_SUMMARY_MISSING'
+    )
+    defense_effect_availability = @(
+        'BLIND_HOLDOUT_MISSING', 'L4_EVIDENCE_MISSING', 'OFFICIAL_SLA_GENERATOR_MISSING'
+    )
+    generalization_adaptability = @('BLIND_HOLDOUT_MISSING', 'L4_EVIDENCE_MISSING')
+    performance_resilience = @(
+        'OFFICIAL_20_MIN_LOAD_MISSING', 'FORCED_WORKER_RECONNECT_FINAL_MISSING'
+    )
+    operational_reproducibility = @('OFFICIAL_ARENA_REPRODUCIBILITY_MISSING')
+    llm_cost_observability = @(
+        'USD_PRICE_SCHEDULE_MISSING', 'BASELINE_TOKEN_SUMMARY_MISSING'
+    )
+}
+foreach ($areaName in $areas.Keys) {
+    $area = $areas[$areaName]
+    $area['ai_confidence'] = $(if ([int]$area.ai -ge 2) { 'MEDIUM' } else { 'LOW' })
+    $area['ai_evidence_ids'] = @($areaEvidence[$areaName])
+    $area['ai_gaps'] = @($areaGaps[$areaName])
+    $area['ai_judgement'] = $(if ([int]$area.ai -ge 2) { 'PROXY_PASS' } else { 'CONCERN' })
+}
+
+$humanPending = $HumanScoreFile -eq 'PENDING'
 $human = $null
-if (-not $humanPending) { $human = Get-Content -Raw -LiteralPath $HumanScoreFile | ConvertFrom-Json }
+if (-not $humanPending) {
+    if (-not (Test-Path -LiteralPath $HumanScoreFile -PathType Leaf)) {
+        throw "human score file missing: $HumanScoreFile"
+    }
+    $humanRaw = Get-Content -Raw -LiteralPath $HumanScoreFile
+    $humanValid = $humanRaw | Test-Json -SchemaFile $humanScoreSchemaPath -ErrorAction SilentlyContinue
+    if (-not $humanValid) {
+        throw 'human score file does not satisfy contracts/scrimmage/human-score.schema.json'
+    }
+    $human = $humanRaw | ConvertFrom-Json -ErrorAction Stop
+}
 $aiTotal = 0.0
 $finalTotal = 0.0
 foreach ($areaName in $areas.Keys) {
     $area = $areas[$areaName]
     $aiTotal += [double]$area.weight * [double]$area.ai / 4.0
     if (-not $humanPending) {
-        $humanScore = [int]$human.scores.$areaName
+        $humanArea = $human.areas.$areaName
+        $humanScore = [int]$humanArea.score
         $area['human'] = $humanScore
         $area['final'] = [Math]::Min([int]$area.ai, $humanScore)
         $area['arbitration'] = [Math]::Abs([int]$area.ai - $humanScore) -ge 2
+        $area['human_confidence'] = [string]$humanArea.confidence
+        $area['human_evidence_ids'] = @($humanArea.evidence_ids)
+        $area['human_gaps'] = @($humanArea.gaps)
+        $area['human_judgement'] = [string]$humanArea.judgement
+        $area['final_judgement'] = $(if ($area['arbitration']) {
+            'ARBITRATION'
+        } else {
+            [string]$humanArea.judgement
+        })
         $finalTotal += [double]$area.weight * [double]$area['final'] / 4.0
     } else {
         $area['human'] = $null
         $area['final'] = $null
         $area['arbitration'] = $false
+        $area['human_confidence'] = $null
+        $area['human_evidence_ids'] = @()
+        $area['human_gaps'] = @()
+        $area['human_judgement'] = 'PENDING'
+        $area['final_judgement'] = 'PENDING'
     }
 }
 

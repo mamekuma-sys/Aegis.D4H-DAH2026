@@ -51,7 +51,7 @@ UID 65534이고 네 이미지 모두 `linux/amd64`다.
   `b6533e8eaed96769e53b19f60a1189ed7c0d795c4b1795ca2eb2025afe59ba0b`
 - judgement Evidence: `JUDGE-FINAL-404-408`
 - deterministic judgement SHA-256:
-  `83cb9b34003bd6ea6a2b90d466444094259d16f5199aa86164c20ab65bc08c76`
+  `d49d57cdd378092ebfb8f1179a13bba492b9845c7a2ec7c657ec526684124dd8`
 
 | Evidence ID | SHA-256 |
 |---|---|
@@ -169,7 +169,7 @@ AI 가중 점수는 **50.00/100**이다. known evidence만 있으므로 각 영�
 |---|---|---|---|---|---|---|
 | P0 완료(PROXY) | startup timing, `MATCH-A*D1-*` | startup 연결 전 보호 편차 | known 5 seed pre-session capture 0, D1 capture 0 | import·bytecode·timing tests; defender Dockerfile/advisory/scrimmage | import 지연·이미지 변경; 이전 digest rollback | 방어자 + Docker owner + 팀장 |
 | P0 | L4 evidence 없음 | L4 효과 미검증 | 실 L4 capture/log inventory와 negative corpus 확보 | Evidence ID와 분석 fixture만 먼저 추가, ACTIVE behavior 금지 | 추측 rule 오탐; 변경 없음이 rollback | 팀장 + 양 agent owner |
-| P0 | `JUDGE-FINAL-404-408` | 사람 점수 부재 | 독립 사람 채점과 2단계 이상 차이 arbitration 완료 | human score schema validation | 부정확 승인; HOLD 유지 | 팀장 |
+| P0 | `JUDGE-FINAL-404-408` | 사람 점수 부재 | 구조화된 독립 사람 채점과 2단계 이상 차이 arbitration 완료 | human score 유효·범위 초과·누락 파일 회귀 | 부정확 승인; HOLD 유지 | 팀장 |
 | P1 | final known seed 5개 | blind·공식 SLA 미검증 | blind 5개 중 4개 이상 baseline 이상, 정상 가용성 비퇴행 | official Arena lifecycle/SLA test | known-data 과적합; HOLD | Arena operator + Judge |
 | P1 | `MATCH-A1D0-*` | 요청 효율의 baseline 비교 불완전 | A0/A1 모두 graceful summary, accepted/request 직접 비교 | baseline-compatible summary reader | baseline 의미 변경; 기존 A0 digest 유지 | 공격자 owner + Judge |
 | P1 | `PCAP-001`–`104` | TCP·부하 일반화 미검증 | encoding·TCP split·retransmit·worker death·reconnect mutation 통과 | Broker E2E mutation tests | 오탐·deadline 위험; D1 rollback | 방어자 + Docker owner + 팀장 |
@@ -199,6 +199,8 @@ Docker owner, 각 agent owner, 팀장 검토 없이는 승격하지 않는다.
 - attacker·defender 이미지의 `linux/amd64`와 precompiled bytecode 확인.
 - defender main import가 `urllib.request`를 startup에 불러오지 않는 회귀.
 - 동일 합성 2×2×3 결과를 별도 심판 프로세스에서 두 번 채점해 SHA-256이 같은 결정성 회귀.
+- 사람 평가 7개 영역의 점수·확신도·Evidence ID·결손·판정을 schema로 검증하고 범위 초과,
+  누락 필드와 잘못된 파일 경로를 거부하는 회귀.
 - 기존 LLM prompt cap, graceful signal, cooldown stop, capture-derived parser·policy 회귀.
 
 ## 12. 실행 검증과 실제 결과
@@ -211,7 +213,7 @@ Docker owner, 각 agent owner, 팀장 검토 없이는 승격하지 않는다.
 - scrimmage unittest: Python 2개 PASS; seed·log timing·attacker bytecode·defender bytecode·judge
   determinism PASS.
 - 실제 20-match judgement를 연속 두 번 생성해 SHA-256
-  `83cb9b34003bd6ea6a2b90d466444094259d16f5199aa86164c20ab65bc08c76` 일치.
+  `d49d57cdd378092ebfb8f1179a13bba492b9845c7a2ec7c657ec526684124dd8` 일치.
 - `scripts/check-layout.ps1`: PASS.
 - `scripts/validate-skeleton.ps1`: PASS.
 - final matrix: 20/20 schema PASS, hash mismatch 0, 정상 실패 0, GC DROP 0, D1 300ms 초과 0,

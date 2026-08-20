@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.local/contracts/scrimmage/human-score.schema.json",
+  "title": "Aegis independent human scrimmage assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "areas"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "areas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_traceability",
+        "attack_effectiveness",
+        "defense_effect_availability",
+        "generalization_adaptability",
+        "performance_resilience",
+        "operational_reproducibility",
+        "llm_cost_observability"
+      ],
+      "properties": {
+        "evidence_traceability": {"$ref": "#/$defs/area"},
+        "attack_effectiveness": {"$ref": "#/$defs/area"},
+        "defense_effect_availability": {"$ref": "#/$defs/area"},
+        "generalization_adaptability": {"$ref": "#/$defs/area"},
+        "performance_resilience": {"$ref": "#/$defs/area"},
+        "operational_reproducibility": {"$ref": "#/$defs/area"},
+        "llm_cost_observability": {"$ref": "#/$defs/area"}
+      }
+    }
+  },
+  "$defs": {
+    "area": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "confidence", "evidence_ids", "gaps", "judgement"],
+      "properties": {
+        "score": {"type": "integer", "minimum": 0, "maximum": 4},
+        "confidence": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+        "evidence_ids": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Z0-9][A-Z0-9._:-]{0,127}$"}
+        },
+        "gaps": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,95}$"}
+        },
+        "judgement": {"enum": ["PASS", "CONCERN", "FAIL", "UNKNOWN"]}
+      }
+    }
+  }
+}
