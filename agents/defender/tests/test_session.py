@@ -728,11 +728,6 @@ class TestBrokerSessionLifecycle(unittest.TestCase):
         self.assertEqual(queue.in_flight(), 0)
         self.assertTrue(all(transport.closed for transport in made))
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class _ClockDrivenStop:
     """`stop_event` 대체. `wait()`마다 FakeClock을 전진시킨다.
 
@@ -821,3 +816,7 @@ class TestStartupConnectRace(unittest.TestCase):
         session.sessions_opened = 1  # 이미 한 번 붙었던 session
         self.assertIsNotNone(session._connect_with_backoff())
         self.assertEqual(stop.waits, [0.05, 0.1, 0.2, 0.4, 0.8])
+
+
+if __name__ == "__main__":
+    unittest.main()
