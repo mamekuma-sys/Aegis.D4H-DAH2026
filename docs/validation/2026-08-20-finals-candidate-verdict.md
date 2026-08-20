@@ -12,6 +12,9 @@
 
 - 실제 PCAP: 104개, `2026-08-15T01:00:14.748452Z`–`2026-08-15T12:40:17.443263Z`.
 - 실제 agent log: 공격자 10개, 방어자 11개.
+- fresh filename audit에서 canonical `capture/`는 P1–P3/L1–L3, `log/`는 P2–P3이며
+  P4/L4 파일은 0개였다. 제외 대상인 기존 `captures/` generated/history tree도 P1–P3/L1–L3뿐이고,
+  그 안의 PCAP 70개 SHA-256은 모두 canonical 104개 중 하나와 일치했다.
 - 최종 proxy: L1–L3, 2팀, 2×2 matrix, seed 404–408, 경기당 10초, 정상 요청 6개.
   총 20경기·정상 요청 120개다.
 - 사용자 제공 최신 본선 조건 중 총 LLM 예산 1,360달러, `FLAG{...}` 형식, 레이어별 복수
@@ -87,7 +90,11 @@ OS 임시 폴더에 있으며 Git에 포함하지 않았다.
 | A1의 D0 상대 효과 비퇴행 | `OBSERVED` (`PROXY`) | `MATCH-A0D0-*`, `MATCH-A1D0-*` | capture delta seed별 +3/+3/+6/+6/0, median +3, 최악 0이다. |
 | D1의 known proxy 보호 | `OBSERVED` (`PROXY`) | `MATCH-A0D1-*`, `MATCH-A1D1-*` | 10경기 모두 capture 0, 정상 실패 0, 연결 전 capture 0이다. |
 | bytecode·lazy import가 startup 보호를 개선한 원인 | `INFERRED` | startup timing regression, `MATCH-A*D1-*` | D1 session offset은 448–584ms이고 최종 탈취는 0이지만 blind 인과 검증은 없다. |
+| L4 readiness branch 상태 | `OBSERVED` | `d1107ca`, `e2e8200` | `fix/finals-multiflag-l4-readiness` 변경은 main과 후보에 이미 포함됐다. 공격은 응답이 명시한 GET route로 제한되고 방어는 service observation만 기록하며 verdict를 바꾸지 않는다. |
 | P4/L4 공격·방어 효과 | `UNKNOWN` | 해당 capture/log 없음 | 공식 개방 사실 외에 실트래픽 근거가 없다. |
+
+테스트의 `8085`, UGV banner, 합성 route와 합성 flag는 parser·계약 회귀용이며 실제 L4 interface
+Evidence로 승격하지 않았다.
 
 ## 5. 확인된 실제 공격 성공·실패 패턴
 
