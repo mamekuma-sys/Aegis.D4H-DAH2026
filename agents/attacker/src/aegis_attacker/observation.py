@@ -23,6 +23,10 @@ NOTABLE_HEADERS = (
     "www-authenticate", "location", "server", "x-powered-by", "x-flag",
 )
 
+# 공격 대상은 신뢰 경계 밖이다. Content-Length가 없거나 거짓이어도 한 응답이
+# 컨테이너 메모리와 LLM prompt를 무제한 점유하지 못하도록 실제 read를 제한한다.
+MAX_RESPONSE_BYTES = 1024 * 1024
+
 
 def fingerprint(text: str, length: int = 16) -> str:
     """본문·요청의 비민감 단방향 지문. 원문 대신 로그·중복 식별에 쓴다."""
@@ -38,6 +42,7 @@ class HttpResponse:
     status: int  # 0 = 응답 없음(연결거부/timeout/필터 DROP)
     body: str = ""
     headers: dict = field(default_factory=dict)
+    truncated: bool = False
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -63,15 +68,28 @@ class UrllibHttp:
             req.add_header(k, v)
         try:
             with self._opener.open(req, timeout=timeout) as r:
-                return HttpResponse(getattr(r, "status", 200),
-                                    r.read().decode("utf-8", "replace"),
-                                    dict(r.headers.items()))
+                raw = r.read(MAX_RESPONSE_BYTES + 1)
+                truncated = len(raw) > MAX_RESPONSE_BYTES
+                return HttpResponse(
+                    getattr(r, "status", 200),
+                    raw[:MAX_RESPONSE_BYTES].decode("utf-8", "replace"),
+                    dict(r.headers.items()),
+                    truncated=truncated,
+                )
         except urllib.error.HTTPError as e:
             try:
-                text = e.read().decode("utf-8", "replace")
+                raw = e.read(MAX_RESPONSE_BYTES + 1)
+                truncated = len(raw) > MAX_RESPONSE_BYTES
+                text = raw[:MAX_RESPONSE_BYTES].decode("utf-8", "replace")
             except Exception:
                 text = ""
-            return HttpResponse(e.code, text, dict(e.headers.items()) if e.headers else {})
+                truncated = False
+            return HttpResponse(
+                e.code,
+                text,
+                dict(e.headers.items()) if e.headers else {},
+                truncated=truncated,
+            )
         except Exception:
             # timeout·연결거부·필터 DROP 모두 status 0 관측으로 수렴
             return HttpResponse(0, "", {})

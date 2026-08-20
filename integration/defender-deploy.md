@@ -55,8 +55,9 @@ if ($LASTEXITCODE -ne 0) { throw 'validate-skeleton failed' }
 # (게이트 4) 병합 Compose context 검증 + 로컬 이미지 빌드
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -ConfigOnly
 if ($LASTEXITCODE -ne 0) { throw 'compose context check failed' }
-docker build -t aegis/defender:latest agents/defender
+docker buildx build --platform linux/amd64 --load -t aegis/defender:latest agents/defender
 if ($LASTEXITCODE -ne 0) { throw 'docker build failed' }
+if ((docker image inspect aegis/defender:latest --format '{{.Os}}/{{.Architecture}}') -ne 'linux/amd64') { throw 'defender image platform mismatch' }
 
 # (게이트 5) 스켈레톤 위 공격·방어 동시 기동
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>"

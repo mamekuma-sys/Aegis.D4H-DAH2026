@@ -53,8 +53,9 @@ if ($LASTEXITCODE -ne 0) { throw 'validate-skeleton failed' }
 # (게이트 4) 병합 Compose context 검증 + 로컬 이미지 빌드
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -ConfigOnly
 if ($LASTEXITCODE -ne 0) { throw 'compose context check failed' }
-docker build -t aegis/attacker:latest agents/attacker
+docker buildx build --platform linux/amd64 --load -t aegis/attacker:latest agents/attacker
 if ($LASTEXITCODE -ne 0) { throw 'docker build failed' }
+if ((docker image inspect aegis/attacker:latest --format '{{.Os}}/{{.Architecture}}') -ne 'linux/amd64') { throw 'attacker image platform mismatch' }
 
 # (게이트 5) 스켈레톤 위 라이브 스모크 — 공/방 기동 후 공격 로그 확인
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>"

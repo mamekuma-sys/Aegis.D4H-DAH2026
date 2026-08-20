@@ -436,6 +436,12 @@ startup validation
 - writer 상태는 `DISCONNECTED → READY → SENDING → READY|FAULT → DISCONNECTED`와 `STOPPED`로 한정한다. timeout·partial send·socket 오류·로컬 만료는 current session item을 폐기하고 재연결하며 새 session에 verdict를 replay하지 않는다.
 - VERDICT의 `broker_remaining = received_at + 300ms - monotonic_now`, `send_wait = min(50ms, broker_remaining - 100ms)`를 dequeue 직후와 send 직전에 계산한다. `broker_remaining <= 100ms`이면 200ms 내부 hard cutoff로 로컬 폐기·재연결한다. HEARTBEAT는 `heartbeat_epoch+1s` due, `heartbeat_epoch+2s` service deadline과 `send_wait = min(50ms, service_deadline-now)`를 사용한다. 최초 epoch는 성공한 연결의 monotonic `session_connected_at`이고 `last_successful_heartbeat=None`이다. 전체 HEARTBEAT frame 송신 성공 후에만 epoch를 `send_completed_at_monotonic`으로 갱신하며 timeout·partial send·socket 오류에서는 갱신하지 않는다. 어느 deadline도 충족할 수 없으면 stale frame을 송신하지 않고 session queue를 폐기해 재연결하며 verdict를 새 session에 replay하지 않는다.
 - 50ms는 socket fault timeout이고 정상 p99 send 목표가 아니다. shutdown과 reconnect 중 중복 writer·heartbeat thread, orphan queue, stale socket이 남지 않게 한다.
+- `latency.send`는 socket 호출 구간만, `latency.verdict_send_e2e`는 PACKET 수신부터 전체 VERDICT
+  frame send 성공까지의 producer·queue·send 합계를 기록한다. Broker ACK 계약이 없으므로 후자를
+  에이전트에서 관측 가능한 실제 송신 완료 경계로 인계한다.
+- packet 경로 밖 watchdog은 500ms마다 helper 생존을 확인한다. 죽은 worker를 같은 bounded 객체로
+  재기동하고 writer·HEARTBEAT의 경우 기존 session을 폐기해 새 generation으로 재연결한다. packet,
+  payload, policy는 읽거나 변경하지 않는다.
 - reference skeleton의 한 스레드 `recv → verdict → send`와 달리, 승인 모델은 단일 receive/decision producer와 단일 SocketWriter를 분리한다. producer는 inbound queue 없이 한 packet씩 판정하고 VERDICT enqueue 성공 후 physical send를 기다리지 않고 다음 `recv`로 진행한다.
 - outbound in-flight는 현재 `SENDING`과 pending VERDICT·HEARTBEAT를 합쳐 session당 최대 256건이고 pending HEARTBEAT는 최대 1건이다. VERDICT `put_nowait` 실패 시 기다리거나 drop하지 않고 같은 session 수신을 중단해 queued item을 폐기하고 reconnect한다. producer 추가와 inbound queue 도입은 별도 설계 승인 전까지 금지한다.
 

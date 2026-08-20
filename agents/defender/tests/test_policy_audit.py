@@ -336,6 +336,31 @@ class TestLoadOrder(unittest.TestCase):
         self.assertEqual(report.drop_capable_rules, 9)
         self.assertEqual(report.demotions, ())
 
+    def test_shipped_active_rules_are_evidence_scoped_by_observed_layer(self):
+        compiled, _ = load_policy(_POLICY_DIR, now_epoch=1787356800.0)
+        active_by_port = {}
+        for rule in compiled.rules_by_id.values():
+            if rule.promotion_state is not PromotionState.ACTIVE:
+                continue
+            self.assertEqual(rule.protocol, 6, rule.rule_id)
+            self.assertEqual(len(rule.ports), 1, rule.rule_id)
+            self.assertNotIn("PENDING", rule.evidence_id.upper(), rule.rule_id)
+            self.assertNotEqual(rule.positive_fixture_id.lower(), "pending", rule.rule_id)
+            self.assertNotEqual(rule.negative_fixture_id.lower(), "pending", rule.rule_id)
+            self.assertNotEqual(rule.sla_fixture_id.lower(), "pending", rule.rule_id)
+            self.assertEqual(rule.owner_review, "approved", rule.rule_id)
+            self.assertEqual(rule.lead_review, "approved", rule.rule_id)
+            self.assertTrue(rule.rollback_condition.strip(), rule.rule_id)
+            self.assertTrue(rule.promoted_in_bundle.strip(), rule.rule_id)
+            active_by_port.setdefault(rule.ports[0], set()).add(rule.rule_id)
+
+        # 104개 실 PCAP이 증명한 profile만 ACTIVE다. 실제 L4 profile이 들어오면
+        # 같은 evidence gate를 통과시킨 뒤 이 기대값과 bundle을 함께 갱신한다.
+        self.assertEqual(
+            {port: len(rule_ids) for port, rule_ids in active_by_port.items()},
+            {8082: 3, 8083: 4, 8084: 2},
+        )
+
     def test_shipped_bundle_expires_after_finals_validity_window(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1788220800.0)
         self.assertEqual(report.drop_capable_rules, 0)

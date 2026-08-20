@@ -22,4 +22,10 @@ COMMON_PROBE_PATHS = (
     "/api/flag",
     "/status",
     "/debug",
+    # L4를 특정 도메인 경로로 추측하지 않고, 서비스가 스스로 route/schema를
+    # 공개하는 표준적인 읽기 전용 진입점만 확인한다.
+    "/health",
+    "/api",
+    "/openapi.json",
+    "/swagger.json",
 )

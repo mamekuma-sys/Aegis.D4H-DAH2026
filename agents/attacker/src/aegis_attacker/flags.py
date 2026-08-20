@@ -17,7 +17,12 @@ from .models import Capability, SubmitState
 from .rate_limit import Backoff, parse_retry_after
 from .secrets import KIND_FLAG
 
-FLAG_RE = re.compile(r"FLAG\{[^}]*\}")
+# 운영진이 명시한 형식은 대문자 ``FLAG{...}``이다. 빈 값·개행·중첩 brace는
+# 제출 후보가 아니며, 비정상적으로 큰 응답 하나가 메모리와 제출 큐를 점유하지
+# 않도록 후보 길이를 제한한다. 실제 flag 원문은 여전히 Round 비밀 저장소 밖으로
+# 나가지 않는다.
+MAX_FLAG_CONTENT_CHARS = 1024
+FLAG_RE = re.compile(rf"FLAG\{{[^{{}}\r\n]{{1,{MAX_FLAG_CONTENT_CHARS}}}\}}")
 MAX_SUBMIT_RETRIES = 3
 
 _STATE_MAP = {

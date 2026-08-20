@@ -47,20 +47,23 @@ src/aegis_attacker/
 
 표준 라이브러리 `unittest` 만 사용한다(외부 설치 불필요).
 
-```powershell
+```bash
 cd agents/attacker
-python -m unittest discover -s tests -t .
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:. python3 -m unittest discover -s tests -t .
 ```
 
 ## 로컬 실행 (환경변수 주입)
 
 주소·토큰·키는 하드코딩하지 않고 환경변수로만 받는다(운영세칙 제7·16조).
 
-```powershell
-$env:TARGETS="team2.lig.internal"; $env:PORTS="8082,8083,8084,8085"
-$env:SUBMIT_URL="http://backend:4100/submit"; $env:SUBMIT_TOKEN="tok-team1"
-$env:LLM_BASE_URL="http://litellm.lig.internal:4000"; $env:LLM_API_KEY="<key>"
-$env:PYTHONPATH="src"; python -m aegis_attacker
+```bash
+TARGETS="team2.lig.internal" \
+PORTS="8082,8083,8084,8085" \
+SUBMIT_URL="http://backend:4100/submit" \
+SUBMIT_TOKEN="<token>" \
+LLM_BASE_URL="http://litellm.lig.internal:4000" \
+LLM_API_KEY="<key>" \
+PYTHONPATH=src python3 -m aegis_attacker
 ```
 
 표적(TARGETS·PORTS)이 없으면 inert(fail-open, 공격 없음)로 동작한다. LLM 키가 없어도 결정론 정찰은 수행한다.
@@ -70,20 +73,28 @@ $env:PYTHONPATH="src"; python -m aegis_attacker
 
 `nfnetlink_queue` 지원 Linux + Docker 호스트에서:
 
-```powershell
-pwsh -File ../../integration/run-with-skeleton.ps1 -SkeletonPath <스켈레톤-루트>
+```bash
+bash ../../integration/run-with-skeleton.sh <스켈레톤-루트>
 ```
+
+Windows에서는 기존 `run-with-skeleton.ps1`을 사용합니다.
 
 공식 스켈레톤 파일을 수정하지 않고 `integration/compose.agents.yml`로 team1-attacker 이미지만
 교체한다. 스켈레톤 compose가 주입하는 공식 변수는 TARGETS·PORTS·SUBMIT_*·LLM_BASE_URL·LLM_API_KEY 이다.
 
 ## 이미지 제출 (본선)
 
-```
-docker build -t attacker:latest agents/attacker
+```bash
+docker buildx build --platform linux/amd64 --load \
+  -t attacker:latest agents/attacker
+docker image inspect attacker:latest --format '{{.Os}}/{{.Architecture}}'
 docker tag attacker:latest ligacr.azurecr.io/team{N}/attacker:latest
 docker push ligacr.azurecr.io/team{N}/attacker:latest
 ```
+
+호스트가 arm64여도 제출 이미지는 반드시 `linux/amd64`로 빌드하며, push 전에
+`docker image inspect attacker:latest --format '{{.Os}}/{{.Architecture}}'`가
+`linux/amd64`인지 확인한다.
 
 Docker 변경은 공격 담당과 팀장 이경준 검토를 받는다(integration/README).
 

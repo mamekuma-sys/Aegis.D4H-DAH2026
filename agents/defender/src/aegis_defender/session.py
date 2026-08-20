@@ -33,6 +33,7 @@ from .config import RuntimeConfig
 from .logging import AuditLogger
 from .metrics import (
     L_SEND,
+    L_VERDICT_SEND_E2E,
     M_FRAME_LENGTH_MISMATCH,
     M_FRAME_SHORT_HEADER,
     M_FRAME_TRAILING_BYTES,
@@ -383,6 +384,10 @@ class SocketWriter:
     def state(self) -> WriterState:
         return self._state
 
+    def is_alive(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
     def attach(self, transport: SocketTransport, session_id: int) -> None:
         with self._lock:
             self._transport = transport
@@ -455,7 +460,7 @@ class SocketWriter:
         return True
 
     def start(self) -> None:
-        if self._thread is not None:
+        if self.is_alive():
             return
         self._stop.clear()
         self._thread = threading.Thread(target=self.run, name="socket-writer", daemon=True)
@@ -548,6 +553,11 @@ class SocketWriter:
         self._count_outcome(result)
         if outcome is SendOutcome.SENT and started is not None:
             self._observe(L_SEND, result.completed_at - started)
+            if item.is_verdict:
+                # Broker ACK은 계약에 없으므로 socket.send가 전체 frame을 받아들인
+                # 시각이 관측 가능한 물리 송신 완료 경계다. producer의 enqueue 지연과
+                # writer queue 대기까지 포함해 PACKET 수신 시각부터 잰다.
+                self._observe(L_VERDICT_SEND_E2E, result.completed_at - item.received_at)
         self._queue.complete(item)
         self.last_result = result
 

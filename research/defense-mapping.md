@@ -2,6 +2,11 @@
 
 예선 보고서(`PRELIM-REPORT`, SHA-256 `1DD42B99…`, 54쪽)의 방어 개념을 본선 방어 런타임 관점에서 재분류한다. 페이지별 전수 검토 근거는 `docs/references/preliminary-report-defender-map.md`, 설계 본문은 `docs/superpowers/specs/2026-08-11-defender-runtime-design.md`에 있다. 세 문서는 서로 모순되지 않아야 한다.
 
+L1~L4 규칙의 현재 승격 판정과 다음 Break의 동일한 증거 gate는
+`docs/superpowers/specs/2026-08-19-all-layer-promotion-meta-prompt.md`를 따른다. 현재 결과는
+L1 3개·L2 4개·L3 2개 규칙 ACTIVE, L4 observation-only이며, 이는 레이어 일괄 승격이 아니라
+규칙별 positive·negative·SLA·리뷰를 통과한 결과다.
+
 ## 전제
 
 본선 방어 에이전트의 계약된 판정 입력은 Broker가 전달하는 **인바운드 `raw_ip` 패킷뿐**이다(운영세칙 제13조 1항, `contracts/defender/README.md`). 예선 보고서에 등장하는 신호는 이름을 옮기지 않는다. parser와 입력 fixture가 존재를 증명하지 못하면 비동기 연구 가설로 낮추거나 본선 런타임에서 제외한다.
@@ -57,6 +62,12 @@
 | R13~R14 | L1~L4 | 검증된 L4 rule만 승격, 효과 없는 rule 제거, H 후보는 계속 SHADOW | 네 레이어 누적 회귀, 300ms 초과 0건, bounded memory 유지 |
 
 여기서 "전량 로깅"은 raw payload·PCAP·flag·credential 저장이 아니다. 모든 packet에 대해 protocol/profile 후보, parser status, reason code, latency와 비민감 feature를 빠짐없이 집계한다는 뜻이다. 원본 PCAP는 운영진이 제공하는 공식 자료만 Break 분석 입력으로 사용하고 저장소나 이미지에 포함하지 않는다.
+
+L4 실자료가 없는 현재 bundle에는 L4 baseline이나 DROP rule을 추가하지 않는다. 런타임은 새 TCP·UDP
+service 좌표를 `protocol`, `dst_port`, `dst_subnet_candidate`, `parser_version`으로 한 번씩만 기록하며
+`authority=observation-only`를 고정한다. 이 inventory는 port·subnet을 L4로 확정하지 않고 verdict와
+effective policy를 바꾸지 않는다. 테스트의 8085·9090·9091은 bounded inventory와 fail-open을 검증하는
+합성 값일 뿐 본선 port mapping 근거가 아니다.
 
 ## S1~S5 시나리오별 매핑
 

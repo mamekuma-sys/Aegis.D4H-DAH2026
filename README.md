@@ -24,7 +24,7 @@ scripts/              공통 검증 및 실행 도구
 
 ## 현재 단계
 
-공격·방어 런타임, 독립 Dockerfile, 공식 스켈레톤 Compose override와 단위·계약 테스트가 구현되어 있습니다. 공격자는 TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 zero-token fast path로 우선 실행하고, Phase 4 UGV는 실제 응답에서 발견한 route만 공격하며 L1~L4를 누적 순회합니다. 방어 정책은 같은 PCAP에서 직접 확인한 L1~L3 exploit 네 종류만 `ACTIVE`로 집행하고 나머지 휴리스틱은 `SHADOW`로 유지합니다. flow 재조립, 실제 Broker verdict 송신 E2E 계측과 worker watchdog은 후속 설계·검증 항목입니다.
+공격·방어 런타임, 독립 Dockerfile, 공식 스켈레톤 Compose override와 단위·계약 테스트가 구현되어 있습니다. 공격자는 TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 zero-token fast path로 우선 실행하고, Phase 4 UGV는 실제 응답에서 발견한 route만 공격하며 L1~L4를 누적 순회합니다. 방어 정책은 같은 PCAP에서 직접 확인한 L1~L3 exploit 형태에 대응하는 9개 규칙만 `ACTIVE`로 집행하고 나머지 휴리스틱은 `SHADOW`로 유지합니다. bounded HTTP stream stitching, worker watchdog, PACKET 수신부터 실제 verdict socket 송신 완료까지의 E2E 계측이 연결되어 있습니다. Linux 계약 테스트에 더해 공식 Broker 실기에서도 65초간 heartbeat 65회, PACKET 116개, ACCEPT 80/DROP 36, verdict 송신 E2E 최대 14.12ms를 확인했습니다. 상세 증거는 [`본선 준비 검증 기록`](docs/reviews/2026-08-19-finals-readiness-verification.md)에 있습니다.
 
 ## 처음 시작하기
 
@@ -32,21 +32,39 @@ scripts/              공통 검증 및 실행 도구
 
 ## 로컬 검사
 
-```powershell
-pwsh -NoProfile -File scripts/check-layout.ps1
+```bash
+bash scripts/check-layout.sh
+bash scripts/build-images.sh
+```
+
+두 번째 명령은 Docker가 실행 중이어야 하며 깨끗한 현재 commit을 `linux/amd64`로
+빌드한 뒤 revision label, CMD, 방어 이미지 비루트 사용자와 비밀 환경변수 미포함을 검사합니다.
+Windows에서는 `pwsh -NoProfile -File scripts/check-layout.ps1`을 사용합니다.
+
+Git 제외 경로 `capture/`에 리허설 PCAP이 있을 때는 다음 회귀도 실행합니다.
+
+```bash
+bash scripts/replay-defender-pcaps.sh capture \
+  --as-of 2026-08-18T00:00:00Z \
+  --require-files 104 \
+  --require-drop-rules 9 \
+  --min-exploit-block-rate 1.0 \
+  --require-zero-unexpected-other-drops
 ```
 
 외부 스켈레톤 검증 방법은 [`integration/README.md`](integration/README.md)를 따릅니다.
 
 ## CI
 
-모든 push와 pull request에서 저장소 경계와 스켈레톤 검증기 테스트를 실행합니다. 공격·방어 구현이 시작되면 각 이미지의 단위 테스트, 계약 테스트, 독립 Docker 빌드를 같은 CI에 추가합니다.
+모든 push와 pull request에서 저장소 경계·스켈레톤 검증기, 공격·방어 단위 테스트와
+두 독립 `linux/amd64` 이미지의 clean build·inspect 검증을 실행합니다.
 
 ## 다음 검증 게이트
 
-1. 외부 공식 스켈레톤에서 두 이미지를 함께 실행해 Broker 수신부터 verdict 송신까지 E2E 300ms를 계측합니다.
-2. packet-local ACTIVE rule의 TCP 분할 우회를 막을 bounded flow 재조립 경계를 승인합니다.
-3. 필수 worker watchdog과 attacker·image build CI를 추가합니다.
+1. 본선 L4 PCAP/인터페이스를 확보한 뒤 관측 fixture와 방어 rule 승격 여부를 승인합니다.
+2. 공식 스켈레톤 challenge 의존성 drift가 해소된 배포본에서 공격·방어 전체 demo stack을 재확인합니다.
+3. [`LLM 계약`](contracts/llm/README.md)에 당일 운영진 가격·과금 기준을 반영한 뒤
+   팀 공용 `$1360` 비용 ledger와 공격·방어 배분을 확정합니다.
 
 ## 팀 작업 방식
 

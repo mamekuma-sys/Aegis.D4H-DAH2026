@@ -14,8 +14,8 @@
       → Corr / Advisory / 로그 분석
       → 연결 끊김 시 재연결하고 위 흐름 재개
 
-스레드는 다섯 개다. 수신·판정 producer(메인), `SocketWriter`, HEARTBEAT
-scheduler, correlation worker, 그리고 선택적 advisory. §5.3의 승인된 실행
+수신·판정 producer(메인) 외 helper는 `SocketWriter`, HEARTBEAT scheduler,
+correlation worker, audit logger, worker watchdog, 그리고 선택적 advisory다. §5.3의 승인된 실행
 모델대로 producer는 하나이고 inbound queue는 없다. producer worker를 늘리거나
 inbound queue를 추가하는 것은 단순 최적화가 아니라 packet ordering·memory
 상한·deadline backpressure를 바꾸는 변경이므로 별도 설계 승인이 필요하다.
@@ -38,6 +38,7 @@ from .logging import AuditLogger
 from .metrics import (
     L_HOT_PATH,
     L_PARSE,
+    L_VERDICT_SEND_E2E,
     M_EVENT_DROPPED_NEWEST,
     M_EVENT_ENQUEUED,
     M_PARSER_FAILURE,
@@ -58,9 +59,12 @@ from .session import (
     VerdictSender,
 )
 from .state import CorrelationSnapshotRef, CorrelationWorker
+from .watchdog import WorkerProbe, WorkerWatchdog
 
 SHUTDOWN_JOIN_TIMEOUT = 2.0
 ANOMALY_EVALUATION_INTERVAL = 10.0
+HEALTH_SUMMARY_INTERVAL_SECONDS = 60.0
+MAX_OBSERVED_SERVICES = 64
 
 
 class DefenderRuntime:
@@ -79,6 +83,7 @@ class DefenderRuntime:
         self.metrics = metrics or Metrics()
         self.audit = audit or AuditLogger()
         self.stop_event = threading.Event()
+        self._last_health_summary = self.clock()
 
         compiled, report = load_policy(config.policy_dir)
         self.policy_report = report
@@ -129,7 +134,35 @@ class DefenderRuntime:
             connect_fn=connect_fn,
             stop_event=self.stop_event,
         )
+        self.watchdog = WorkerWatchdog(
+            probes=(
+                WorkerProbe(
+                    "socket-writer", self.writer.is_alive, self.writer.start, critical=True
+                ),
+                WorkerProbe(
+                    "heartbeat", self.heartbeat.is_alive, self.heartbeat.start, critical=True
+                ),
+                WorkerProbe("correlation", self.correlation.is_alive, self.correlation.start),
+                WorkerProbe("audit-log", self.audit.is_alive, self.audit.start),
+                WorkerProbe(
+                    "advisory",
+                    self.advisory.is_alive,
+                    self.advisory.start,
+                    expected=lambda: self.advisory.enabled,
+                ),
+            ),
+            metrics=self.metrics,
+            audit=self.audit,
+            runtime_stop=self.stop_event,
+            on_critical_restart=self._on_critical_worker_restart,
+            on_tick=self._emit_health_summary_if_due,
+        )
         self._last_anomaly_check = 0.0
+        # producer 한 곳에서만 갱신하는 Round 한정 관측 목록. 본선 L4의 포트/프로토콜을
+        # 사전 추측해 차단하지 않고, 실제로 받은 raw IP에서 처음 본 service 좌표만
+        # 비동기 감사 로그로 남긴다. verdict나 policy에는 어떤 영향도 주지 않는다.
+        self._observed_services: set[tuple[int, int, int | None]] = set()
+        self._service_inventory_full_logged = False
 
     # ── hot path ────────────────────────────────────────────────────────────
 
@@ -192,6 +225,29 @@ class DefenderRuntime:
         else:
             # queue full 은 DROP 사유가 아니다(§6.2). 지표만 남기고 진행한다.
             self.metrics.incr(M_EVENT_DROPPED_NEWEST)
+        self._record_service_observation(parsed.profile)
+
+    def _record_service_observation(self, profile) -> None:
+        """처음 본 protocol/port/subnet 후보를 bounded observation으로만 기록한다."""
+        if profile is None:
+            return
+        key = (profile.protocol, profile.dst_port, profile.dst_subnet_candidate)
+        if key in self._observed_services:
+            return
+        if len(self._observed_services) >= MAX_OBSERVED_SERVICES:
+            if not self._service_inventory_full_logged:
+                self._service_inventory_full_logged = True
+                self.audit.log("service-inventory-full", capacity=MAX_OBSERVED_SERVICES)
+            return
+        self._observed_services.add(key)
+        self.audit.log(
+            "service-observed",
+            protocol=profile.protocol,
+            dst_port=profile.dst_port,
+            dst_subnet_candidate=profile.dst_subnet_candidate,
+            parser_version=profile.parser_version,
+            authority="observation-only",
+        )
 
     def _record_anomaly(self, decision, parser_failed: bool) -> None:
         rule = self.compiled_policy.rules_by_id.get(decision.rule_id)
@@ -225,12 +281,41 @@ class DefenderRuntime:
         """
         self.session.request_reconnect(reason, session_id)
 
+    def _on_critical_worker_restart(self, worker: str) -> None:
+        # writer/heartbeat가 죽었던 session의 queue와 epoch를 그대로 재사용하지
+        # 않는다. 새 generation으로 넘겨 stale verdict replay를 구조적으로 막는다.
+        self.session.request_reconnect(f"watchdog-restarted:{worker}")
+
+    def _emit_health_summary_if_due(self) -> None:
+        """저빈도 운영 요약을 watchdog 스레드에서 기록한다.
+
+        packet producer나 SocketWriter에서 snapshot 정렬·JSON 직렬화를 하지 않는다.
+        따라서 로그 I/O와 percentile 계산은 300ms verdict hot path 밖에 있다.
+        """
+        now = self.clock()
+        if now - self._last_health_summary < HEALTH_SUMMARY_INTERVAL_SECONDS:
+            return
+        self._last_health_summary = now
+        self.audit.log(
+            "health-summary",
+            policy_source=self.policy_report.source,
+            bundle_id=self.policy_report.bundle_id,
+            drop_capable_rules=self.policy_report.drop_capable_rules,
+            sessions=self.session.sessions_opened,
+            heartbeats=self.heartbeat.sent_count,
+            audit_dropped=self.audit.dropped,
+            counters=self.metrics.counters(),
+            hot_path=self.metrics.latency_summary(L_HOT_PATH),
+            verdict_send_e2e=self.metrics.latency_summary(L_VERDICT_SEND_E2E),
+        )
+
     def start_workers(self) -> None:
         self.audit.start()
         self.writer.start()
         self.heartbeat.start()
         self.correlation.start()
         self.advisory.start()
+        self.watchdog.start()
 
     def run(self) -> int:
         self.start_workers()
@@ -255,6 +340,7 @@ class DefenderRuntime:
         """SIGTERM에서 2초 안에 정리 종료한다(§15.2)."""
         self.stop_event.set()
         self.session.stop()
+        self.watchdog.stop(SHUTDOWN_JOIN_TIMEOUT)
         self.heartbeat.stop(SHUTDOWN_JOIN_TIMEOUT)
         self.writer.stop(SHUTDOWN_JOIN_TIMEOUT)
         self.correlation.stop(SHUTDOWN_JOIN_TIMEOUT)
@@ -266,6 +352,7 @@ class DefenderRuntime:
             advisory=self.advisory.usage_evidence(),
             counters=self.metrics.counters(),
             hot_path=self.metrics.latency_summary(L_HOT_PATH),
+            verdict_send_e2e=self.metrics.latency_summary(L_VERDICT_SEND_E2E),
         )
         self.audit.stop(SHUTDOWN_JOIN_TIMEOUT)
 

@@ -30,7 +30,8 @@ fix/defender-verdict-timeout
 2. 필요한 경우 설계 PR을 먼저 제출합니다.
 3. 테스트를 먼저 작성하고 실패를 확인합니다.
 4. 최소 구현으로 테스트를 통과시킵니다.
-5. 전체 관련 테스트와 `scripts/check-layout.ps1`을 실행합니다.
+5. 전체 관련 테스트와 macOS/Linux의 `bash scripts/check-layout.sh` 또는 Windows의
+   `scripts/check-layout.ps1`을 실행합니다.
 6. PR 템플릿에 명령과 결과, 위험과 롤백 방법을 기록합니다.
 7. 필수 검토자 승인 후 팀장이 병합합니다.
 

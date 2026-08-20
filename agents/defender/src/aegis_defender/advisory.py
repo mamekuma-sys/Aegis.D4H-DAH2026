@@ -254,7 +254,7 @@ class AdvisoryWorker:
             "model": self._config.llm_model,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": 600,
+            "max_completion_tokens": 600,
         }
         url = f"{self._config.llm_base_url}/v1/chat/completions"
 
@@ -310,10 +310,14 @@ class AdvisoryWorker:
     # ── 스레드 lifecycle ────────────────────────────────────────────────────
 
     def start(self) -> None:
-        if self._thread is not None or not self.enabled:
+        if self.is_alive() or not self.enabled:
             return
         self._thread = threading.Thread(target=self.run, name="advisory", daemon=True)
         self._thread.start()
+
+    def is_alive(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
 
     def stop(self, timeout: float = 2.0) -> None:
         self._stop.set()

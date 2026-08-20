@@ -141,6 +141,20 @@ class TestBudget(unittest.TestCase):
         self.assertIsNotNone(worker.run_once())
         self.assertEqual(worker.calls, 2)
 
+    def test_uses_official_completion_token_parameter(self):
+        clock = FakeClock()
+        sent = {}
+
+        def transport(url, key, body, timeout):
+            sent.update(body)
+            return self._ok_transport(url, key, body, timeout)
+
+        worker = self._worker(clock, transport=transport)
+        clock.advance(120.0)
+        self.assertIsNotNone(worker.run_once())
+        self.assertEqual(sent["max_completion_tokens"], 600)
+        self.assertNotIn("max_tokens", sent)
+
     def test_round_call_cap(self):
         clock = FakeClock()
         worker = self._worker(clock, max_calls=3)
@@ -252,6 +266,12 @@ class TestAuditRedaction(unittest.TestCase):
     def test_flag_value_is_redacted(self):
         output = self._emit(note="captured FLAG{aaaaaaaabbbbbbbbccccccccdddddddd}")
         self.assertNotIn("aaaaaaaabbbbbbbb", output)
+        self.assertIn("REDACTED", output)
+
+    def test_long_final_format_flag_is_redacted(self):
+        secret = "FLAG{" + ("z" * 512) + "}"
+        output = self._emit(note="captured " + secret)
+        self.assertNotIn("z" * 32, output)
         self.assertIn("REDACTED", output)
 
     def test_api_key_is_redacted(self):

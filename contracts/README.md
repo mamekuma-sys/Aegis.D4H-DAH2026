@@ -15,4 +15,5 @@
 
 - 공격 계약은 [`attacker/README.md`](attacker/README.md)에서 관리합니다.
 - 방어 계약은 [`defender/README.md`](defender/README.md)에서 관리합니다.
+- LLM 모델·API 종류·quota는 [`llm/`](llm/)에서 관리합니다.
 - 바이너리 예시는 [`fixtures/`](fixtures/)에 저장합니다.

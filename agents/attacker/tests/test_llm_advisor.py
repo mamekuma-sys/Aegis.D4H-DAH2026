@@ -3,7 +3,7 @@ import unittest
 
 from aegis_attacker.config import AttackerConfig
 from aegis_attacker.egress import EgressGateway
-from aegis_attacker.llm_advisor import LLMAdvisor
+from aegis_attacker.llm_advisor import LLMAdvisor, SUPPORTED_LLM_MODELS
 from aegis_attacker.models import Capability, RoundBudget, VulnClass
 from aegis_attacker.observation import HttpResponse
 from aegis_attacker.secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
@@ -74,6 +74,13 @@ class TestLLMAdvisor(unittest.TestCase):
         adv.advise_exploit("b", "", [])
         self.assertEqual(transport.last_headers["Authorization"], "Bearer sk-team1-secret")
 
+    def test_uses_official_completion_token_parameter(self):
+        adv, transport = make_advisor(chat_response('{"path":"/x"}'))
+        adv.advise_exploit("b", "", [])
+        payload = json.loads(transport.last_body)
+        self.assertEqual(payload["max_completion_tokens"], 300)
+        self.assertNotIn("max_tokens", payload)
+
     def test_budget_cap_returns_none(self):
         adv, transport = make_advisor(chat_response('{"path":"/x"}'),
                                       budget=RoundBudget(llm_calls=5), max_calls=5)
@@ -88,6 +95,26 @@ class TestLLMAdvisor(unittest.TestCase):
         adv, transport = make_advisor(chat_response('{"path":"/x"}'), with_key=False)
         self.assertIsNone(adv.advise_exploit("b", "", []))
         self.assertEqual(transport.calls, 0)
+
+    def test_responses_model_is_translated_by_proxy_chat_endpoint(self):
+        adv, transport = make_advisor(chat_response('{"path":"/x"}'))
+        self.assertIsNotNone(adv.advise_exploit("b", "", [], model="gpt-5-pro"))
+        self.assertEqual(transport.calls, 1)
+        self.assertEqual(json.loads(transport.last_body)["model"], "gpt-5-pro")
+
+    def test_supported_model_catalog_matches_finals_contract(self):
+        from pathlib import Path
+
+        contract_path = (
+            Path(__file__).resolve().parents[3]
+            / "contracts" / "llm" / "model-quotas.json"
+        )
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        expected = {item["id"] for item in contract["models"]}
+        self.assertEqual(set(SUPPORTED_LLM_MODELS), expected)
+        self.assertEqual(contract["proxy_request_endpoint"], "/v1/chat/completions")
+        self.assertIsNone(contract["price_schedule"])
+        self.assertEqual(contract["team_total_budget_usd"], 1360)
 
 
 if __name__ == "__main__":

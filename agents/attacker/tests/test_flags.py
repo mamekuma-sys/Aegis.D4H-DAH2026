@@ -4,6 +4,7 @@ from aegis_attacker.egress import EgressGateway
 from aegis_attacker.flags import (
     FlagPipeline,
     FlagStore,
+    MAX_FLAG_CONTENT_CHARS,
     SubmitClient,
     extract_flags,
     flag_fingerprint,
@@ -60,6 +61,17 @@ class TestExtract(unittest.TestCase):
     def test_valid(self):
         self.assertTrue(is_valid_flag("FLAG{x}"))
         self.assertFalse(is_valid_flag("FLAG{x} extra"))
+
+    def test_rejects_ambiguous_or_unbounded_candidates(self):
+        for candidate in (
+            "FLAG{}",
+            "FLAG{line\nbreak}",
+            "FLAG{nested{value}}",
+            "FLAG{" + ("x" * (MAX_FLAG_CONTENT_CHARS + 1)) + "}",
+        ):
+            with self.subTest(candidate=candidate[:40]):
+                self.assertFalse(is_valid_flag(candidate))
+                self.assertEqual(extract_flags(candidate), [])
 
     def test_fingerprint_hides(self):
         self.assertNotIn("secret", flag_fingerprint("FLAG{secret}"))

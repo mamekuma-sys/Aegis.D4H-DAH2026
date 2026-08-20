@@ -204,6 +204,9 @@ startup validation
 - `VerdictSender`는 `VerdictDecision`을 frame으로 pack하고 `received_at_monotonic`, `broker_deadline`, `absolute_send_deadline`, sequence를 붙여 `OutboundVerdict`를 `put_nowait`하며 enqueue 성공·실패와 writer가 돌려준 `SendResult`만 계측한다. socket, send timeout, deadline 만료, priority dequeue, reconnect 판단을 소유하지 않는다.
 - **`SocketWriter`만 write와 deadline을 소유한다.** writer 스레드는 남은 deadline 계산, priority dequeue, socket timeout 설정, send, `SendResult` publication과 session fault 신호만 수행하며 parsing, policy, correlation, LLM을 실행하지 않는다.
 - HEARTBEAT 주기 대기는 `sleep`이 아니라 shutdown 이벤트 대기로 구현해 종료 신호에 즉시 반응한다.
+- packet 경로 밖의 bounded watchdog이 helper thread 생존 여부를 500ms마다 확인한다. 죽은 worker는
+  동일 객체로 재기동하고, `SocketWriter` 또는 HEARTBEAT scheduler라면 현재 session을 폐기해 새
+  generation으로 재연결한다. watchdog은 packet·payload·policy를 읽지 않는다.
 - shutdown과 재연결 중 중복 writer·HEARTBEAT 스레드, orphan queue, stale socket이 남지 않게 한다.
 
 #### deadline-aware 단일 writer 상태기계
@@ -266,6 +269,10 @@ heartbeat_send_wait = min(50ms, heartbeat_remaining)
 steady-state 처리량 ≈ 1 / max(producer 처리시간, writer 정상 send 시간)
 packet end-to-end latency = producer + outbound queue wait + writer send
 ```
+
+`latency.send`는 writer의 `socket.send` 호출 구간이고, `latency.verdict_send_e2e`는
+`received_at_monotonic`부터 전체 frame send 성공 시각까지다. Broker ACK은 인터페이스에 없으므로
+후자를 에이전트가 직접 관측 가능한 물리 송신 완료 경계로 사용한다.
 
 부하 추정:
 
@@ -365,6 +372,7 @@ header가 유효해 `pkt_id`를 알지만 `raw_ip`가 잘렸거나 비정상이�
 | `RiskModel` | 본선 fixture로 보정된 비동기 우선순위 | 예선 합성 점수 미사용 |
 | `AdvisoryWorker` | redacted feature만 사용하는 LLM 조언 | 장애·quota 소진이 verdict에 무영향 |
 | `AuditLogger` | payload·secret·flag 없는 reason·latency·health 기록 | 로그 I/O가 hot path를 막지 않음 |
+| `WorkerWatchdog` | helper thread 사망 감지·동일 worker 재기동 | writer/HEARTBEAT 재기동 시 새 Broker session 요청. verdict·policy 권한 없음 |
 | `Metrics` | verdict count, accept/drop, parser failure, queue drop, heartbeat gap, latency 분포 | — |
 
 한 구성요소의 예외가 HEARTBEAT 또는 이미 수신한 PACKET의 verdict를 막지 않게 한다.

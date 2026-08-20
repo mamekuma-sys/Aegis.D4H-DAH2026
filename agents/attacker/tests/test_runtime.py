@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
+from aegis_attacker.audit import AuditLogger
 from aegis_attacker.config import AttackerConfig
 from aegis_attacker.models import SubmitState
 from aegis_attacker.observation import HttpResponse
@@ -44,6 +45,7 @@ class FakeArena:
         self.llm_status = llm_status
         self.submits = []
         self.llm_calls = 0
+        self.target_requests = []
 
     def request(self, method, url, headers=None, body=None, timeout=6.0):
         if "/v1/chat/completions" in url:
@@ -64,6 +66,7 @@ class FakeArena:
         # 표적 요청
         parts = urlsplit(url)
         full = parts.path + (("?" + parts.query) if parts.query else "")
+        self.target_requests.append(full)
         if parts.path == "/" and not parts.query:
             return HttpResponse(200, self.banner, {})
         low = full.lower()
@@ -116,6 +119,27 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         from aegis_attacker.recon import COMMON_PROBE_PATHS
         self.assertIn("/fetch", COMMON_PROBE_PATHS)
 
+    def test_unknown_l4_rejects_llm_invented_route(self):
+        arena = FakeArena(
+            "Phase 4 UGV URL gateway online",
+            "/invented?url=x",
+            "irrelevant",
+            flag_when=lambda full: False,
+        )
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8085,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
+            llm_model="gpt-4o-mini",
+        )
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+        self.assertEqual(report.accepted_count(), 0)
+        self.assertEqual(arena.llm_calls, 1)
+        self.assertFalse(any(path.startswith("/invented") for path in arena.target_requests))
+
     def test_recon_captures_without_llm(self):
         # 흔한 경로 /flag 에서 flag → recon이 LLM 토큰 없이 획득
         arena = FakeArena("plain service", "/unused", "FLAG{recon_win}",
@@ -125,6 +149,56 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(report.accepted_count(), 1)
         self.assertEqual(arena.submits[0]["flag"], "FLAG{recon_win}")
         self.assertEqual(arena.llm_calls, 0)  # 토큰 0
+
+    def test_recon_collects_multiple_flags_from_one_service(self):
+        class MultiFlagArena:
+            def __init__(self):
+                self.submits = []
+                self.paths = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    return HttpResponse(500, "unused")
+                parts = urlsplit(url)
+                self.paths.append(parts.path)
+                if parts.path == "/flag":
+                    return HttpResponse(200, "FLAG{service_primary}")
+                if parts.path == "/secret":
+                    return HttpResponse(200, "FLAG{service_secondary}")
+                return HttpResponse(200, "service online")
+
+        arena = MultiFlagArena()
+        rt = make_runtime(arena)
+        report = rt.run_once()
+
+        self.assertEqual(report.accepted_count(), 2)
+        self.assertIn("/secret", arena.paths)
+        self.assertEqual(
+            {item["flag"] for item in arena.submits},
+            {"FLAG{service_primary}", "FLAG{service_secondary}"},
+        )
+
+    def test_flag_in_notable_response_header_is_submitted(self):
+        class HeaderFlagArena:
+            def __init__(self):
+                self.submits = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if urlsplit(url).path == "/":
+                    return HttpResponse(200, "service online", {"X-Flag": "FLAG{header_win}"})
+                return HttpResponse(200, "online")
+
+        arena = HeaderFlagArena()
+        report = make_runtime(arena).run_once()
+
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{header_win}")
 
     def test_flag_in_banner_captured(self):
         arena = FakeArena("welcome FLAG{banner_flag} here", "/x", "irrelevant")
@@ -215,6 +289,35 @@ class TestRuntimeResilience(unittest.TestCase):
             self.assertEqual(rt._report.summary()["requests_made"], after_first)
         finally:
             rt.finish_round()
+
+    def test_unsolved_endpoint_retry_and_cooldown_are_auditable(self):
+        arena = FakeArena(
+            "plain service", "/never", "FLAG{never}",
+            flag_when=lambda full: False, llm_status=500,
+        )
+        clk = FakeClock()
+        lines = []
+        rt = AttackerRuntime(
+            make_cfg(), http=arena, clock=clk,
+            sleep=lambda dt: clk.advance(dt),
+            audit=AuditLogger(sink=lines.append, clock=clk),
+        )
+        rt.start_round()
+        try:
+            rt.run_cycle()
+            rt.run_cycle()
+        finally:
+            rt.finish_round()
+
+        events = [json.loads(line) for line in lines]
+        scheduled = [line for line in events if line["event"] == "endpoint-retry-scheduled"]
+        deferred = [line for line in events if line["event"] == "endpoint-deferred"]
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0]["reason"], "no-accepted-flag")
+        self.assertEqual(scheduled[0]["cooldown_seconds"], 30.0)
+        self.assertEqual(len(deferred), 1)
+        self.assertEqual(deferred[0]["reason"], "cooldown")
+        self.assertGreater(deferred[0]["remaining_seconds"], 0.0)
 
     def test_expired_evidence_is_refreshed_before_llm_plan_execution(self):
         clk = FakeClock()
@@ -384,7 +487,9 @@ class TestPlaybookReuse(unittest.TestCase):
                 if parts.path == "/" and not parts.query:
                     return HttpResponse(
                         200,
-                        f'<html><form action="/magic?probe=<value>">service for {parts.hostname}</form></html>',
+                        (f'<html><p>GET /magic?probe=&lt;value&gt;</p>'
+                         f'<form action="/magic?probe=<value>">'
+                         f'service for {parts.hostname}</form></html>'),
                         {"Content-Type": "text/html"},
                     )
                 if parts.path == "/magic" and parts.query == "probe=unlock":
@@ -560,7 +665,7 @@ class TestHeaderExploitReuse(unittest.TestCase):
     def test_admin_header_exploit_reused_across_ports_one_llm_call(self):
         arena = AdminHeaderArena()
         cfg = AttackerConfig(
-            targets=("t2.lig.internal",), ports=(8083, 8084, 8085),
+            targets=("t2.lig.internal",), ports=(8082, 8083, 8084),
             submit_url="http://backend:4100/submit", submit_token="tok-team1",
             llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
             llm_model="gpt-4o-mini", concurrency=3)
@@ -703,6 +808,7 @@ class UgvDiscoveryArena:
     def __init__(self):
         self.submits = []
         self.llm_calls = 0
+        self.target_requests = []
 
     def request(self, method, url, headers=None, body=None, timeout=6.0):
         from urllib.parse import parse_qs, unquote, urlsplit
@@ -715,6 +821,7 @@ class UgvDiscoveryArena:
             return HttpResponse(500, "unused")
 
         parts = urlsplit(url)
+        self.target_requests.append(parts.path + (("?" + parts.query) if parts.query else ""))
         if parts.path == "/" and not parts.query:
             return HttpResponse(200, "Phase 4 UGV online", {})
         if parts.path == "/status":
@@ -740,6 +847,9 @@ class TestUgvObservedDiscovery(unittest.TestCase):
         self.assertEqual(report.accepted_count(), 1)
         self.assertEqual(arena.submits[0]["flag"], "FLAG{fixture_l4}")
         self.assertEqual(arena.llm_calls, 0)
+        exploit_queries = [path for path in arena.target_requests if "?" in path]
+        self.assertTrue(exploit_queries)
+        self.assertTrue(all(path.startswith("/telemetry?source=") for path in exploit_queries))
 
 
 class TestRuntimeInert(unittest.TestCase):
