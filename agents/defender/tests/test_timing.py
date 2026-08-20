@@ -148,6 +148,25 @@ class TestMonotonicClock(unittest.TestCase):
         self.assertEqual(BROKER_SAFETY_MARGIN, 0.100)
         self.assertEqual(SOCKET_FAULT_TIMEOUT, 0.050)
 
+    def test_measured_budgets_are_pinned_too(self):
+        """§5.2 예산은 이 파일의 지역 상수지만 완화가 조용히 일어나면 안 된다.
+
+        `AGENTS.md`의 "defender의 packet별 동기 verdict 경로에 원격 LLM 호출을 두지
+        않는다"를 기계적으로 지키는 것은 결국 아래 p99 예산이다. 동기 네트워크
+        호출은 밀리초 단위라 반드시 이 한계를 넘긴다. Break Copilot의 평가
+        (`scripts/break_copilot/evaluate.py`)도 hot path를 직접 보지 않고
+        `{side}_unit_tests`로 이 검사에 기댄다.
+
+        따라서 예산을 늘리는 변경은 그 자체로 이 테스트를 깨야 하고, 방어자
+        owner와 팀장이 의도적으로 값을 고쳐야만 통과한다.
+        """
+        self.assertEqual(BUDGET_HOT_PATH_P50, 150e-6)
+        self.assertEqual(BUDGET_HOT_PATH_P99, 500e-6)
+        self.assertEqual(BUDGET_GATE_P99, 25e-6)
+        self.assertEqual(BUDGET_SIG_P99, 100e-6)
+        self.assertEqual(BUDGET_SCORE_P99, 25e-6)
+        self.assertEqual(BUDGET_POLICY_P99, 150e-6)
+
 
 class TestHotPathBudget(unittest.TestCase):
     """§15.4 — 1, 100, 550, 1100 packet/s 부하 프로파일 측정."""

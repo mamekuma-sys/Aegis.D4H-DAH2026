@@ -70,6 +70,16 @@ BACKOFF_INITIAL = 0.05
 BACKOFF_MAX = 1.0
 BACKOFF_FACTOR = 2.0
 
+# 최초 연결만은 Broker의 fail-open 창과 경주한다. 공식 router가 NFQUEUE를
+# `--queue-bypass`로 걸어두므로 agent session이 붙기 전 트래픽은 판정 없이
+# 통과하고, Broker는 운영진 바이너리라 그 동작을 우리가 끌 수 없다. 지수
+# backoff는 socket이 이미 열린 뒤에도 최대 390ms를 더 자므로 그 구간이 그대로
+# fail-open이 된다(`MATCH-A1D1-S404`·`S405`). 그래서 첫 연결은 짧은 고정
+# 간격으로 폴링하고, 재연결은 장애 중 broker를 두드리지 않도록 지수 backoff를
+# 유지한다.
+STARTUP_POLL_INTERVAL = 0.002
+STARTUP_FAST_WINDOW = 2.0
+
 READ_POLL_SECONDS = 0.2
 QUEUE_POLL_SECONDS = 0.2
 
@@ -779,7 +789,15 @@ class BrokerSession:
                 self._writer.detach(transport, session_id)
 
     def _connect_with_backoff(self) -> SocketTransport | None:
-        """연결될 때까지 재시도한다. `stop` 이외의 이유로 포기하지 않는다."""
+        """연결될 때까지 재시도한다. `stop` 이외의 이유로 포기하지 않는다.
+
+        아직 한 번도 붙은 적이 없으면 `STARTUP_FAST_WINDOW` 동안 짧은 고정
+        간격으로 폴링한다. 그 창을 넘기면 socket이 늦게 열리는 상황이므로 기존
+        지수 backoff로 넘어간다.
+        """
+        startup = self.sessions_opened == 0
+        started_at = self._clock()
+        startup_failure_logged = False
         delay = BACKOFF_INITIAL
         while not self._stop.is_set():
             self.connect_attempts += 1
@@ -787,14 +805,22 @@ class BrokerSession:
             try:
                 return self._connect_fn(self._config.agent_socket)
             except OSError as exc:
-                if self._audit is not None:
+                fast = startup and (self._clock() - started_at) < STARTUP_FAST_WINDOW
+                if fast:
+                    retry_in = STARTUP_POLL_INTERVAL
+                else:
+                    retry_in = delay
+                    delay = min(BACKOFF_MAX, delay * BACKOFF_FACTOR)
+                # 2ms 폴링 중 매 실패를 남기면 audit이 초당 수백 줄로 넘친다.
+                # startup 구간은 첫 실패만 남기고 나머지는 `connect_attempts`로 본다.
+                if self._audit is not None and not (fast and startup_failure_logged):
                     self._audit.log(
-                        "connect-failed", error=type(exc).__name__, retry_in=round(delay, 3)
+                        "connect-failed", error=type(exc).__name__, retry_in=round(retry_in, 3)
                     )
+                    startup_failure_logged = startup_failure_logged or fast
                 # shutdown 이벤트 대기로 backoff를 구현해 종료 신호에 즉시 반응한다.
-                if self._stop.wait(delay):
+                if self._stop.wait(retry_in):
                     return None
-                delay = min(BACKOFF_MAX, delay * BACKOFF_FACTOR)
         return None
 
     def _recv_loop(
