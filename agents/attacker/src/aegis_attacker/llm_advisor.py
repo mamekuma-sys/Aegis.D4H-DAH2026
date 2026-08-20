@@ -16,6 +16,25 @@ from .planner import parse_exploit
 
 MAX_LLM_CALLS_PER_ROUND = 48  # R17의 111회/93k token 무진전 확산을 막고 대표 service solver에 집중.
 LLM_TIMEOUT = 20.0
+# 공격 대상이 반환한 최대 1MiB 응답을 그대로 prompt로 보내지 않는다. 토큰 수는
+# tokenizer 없이 정확히 계산할 수 없으므로 UTF-8 byte를 보수적인 상한으로 사용한다.
+# 시작의 service 설명과 끝의 최신 error를 함께 남겨 관측 증거의 양쪽 경계를 보존한다.
+MAX_LLM_USER_CONTENT_BYTES = 8 * 1024
+_TRUNCATION_MARKER = "\n[OBSERVATION_TRUNCATED]\n"
+
+
+def _bounded_user_content(text: str) -> str:
+    raw = (text or "").encode("utf-8")
+    if len(raw) <= MAX_LLM_USER_CONTENT_BYTES:
+        return text or ""
+
+    marker = _TRUNCATION_MARKER.encode("utf-8")
+    remaining = MAX_LLM_USER_CONTENT_BYTES - len(marker)
+    head_size = (remaining + 1) // 2
+    tail_size = remaining - head_size
+    head = raw[:head_size].decode("utf-8", "ignore")
+    tail = raw[-tail_size:].decode("utf-8", "ignore") if tail_size else ""
+    return head + _TRUNCATION_MARKER + tail
 
 # 공식 skeleton guide는 제공 모델의 원래 API 유형과 무관하게 LiteLLM이 모두
 # `/v1/chat/completions` 요청을 투명 변환한다고 명시한다. 따라서 공지된 21개 ID만
@@ -120,7 +139,9 @@ class LLMAdvisor:
                 "Latest attempt feedback:\n" + feedback if feedback else "",
             ) if part
         )
-        user_content = redactor.scrub("\n".join(x for x in (hint_line, observed) if x))
+        user_content = _bounded_user_content(
+            redactor.scrub("\n".join(x for x in (hint_line, observed) if x))
+        )
 
         payload = json.dumps({
             "model": model_id,

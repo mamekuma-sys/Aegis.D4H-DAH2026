@@ -19,6 +19,8 @@ R17 이후에는 응답 본문 전체 hash가 아니라 status 계열·route·fo
 재결속하고, 실패 endpoint는 30초 cooldown 또는 새 playbook generation 전에는 반복 소모하지 않습니다.
 LLM은 대표 서비스 solver에 집중하도록 Round 48회·endpoint 4 turn으로 제한하며, 완전 target encoding,
 중첩 SSRF, SQL 주석·제어 공백·bracket identifier 등 R17 관측 우회는 최대 6개 bounded 후보로 실행합니다.
+팀 총 LLM budget은 운영진 공지의 `$1360`을 따릅니다. 공식 가격표가 없는 상태에서 USD 비용을
+추정하지 않으며, 호출당 비신뢰 관측 입력을 UTF-8 8KiB로 제한하고 호출·토큰 사용량을 기록합니다.
 관측 fast path 역시 `TARGETS`를 그대로 순회하므로 특정 팀 주소를 코드에 고정하지 않습니다.
 
 표준 라이브러리만 사용한다(런타임 외부 의존성 없음).
