@@ -76,7 +76,8 @@ foreach ($proxy in 1..3) {
 
 $env:SCRIMMAGE_ATTACKER_IMAGE = $attack.reference
 $env:SCRIMMAGE_DEFENDER_IMAGE = $defense.reference
-$composePrefix = @('--progress', 'quiet', '-f', $baseCompose, '-f', $overridePath, '--profile', 'combat')
+$baseComposePrefix = @('--progress', 'quiet', '-f', $baseCompose, '-f', $overridePath, '--profile', 'combat')
+$composePrefix = $baseComposePrefix
 
 function Invoke-Compose([string[]]$Arguments) {
     & docker compose @composePrefix @Arguments
@@ -210,10 +211,16 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 $runId = '{0}-seed{1}-{2}' -f $Matrix, $Seed, ([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))
 $outputDir = Join-Path $OutputRoot $runId
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+$runtimeDir = Join-Path ([IO.Path]::GetTempPath()) (
+    'Aegis.D4H-scrimmage-runtime-{0}' -f ([guid]::NewGuid().ToString('N'))
+)
+New-Item -ItemType Directory -Path $runtimeDir | Out-Null
+$controllerComposePath = Join-Path $runtimeDir 'combat-controller.json'
+$backendOverridePath = Join-Path $runtimeDir 'backend-controller.yml'
 $stackStarted = $false
 
 try {
-    $merged = & docker compose @composePrefix config --format json
+    $merged = & docker compose @baseComposePrefix config --format json
     if ($LASTEXITCODE -ne 0) { throw 'merged compose validation failed' }
     $config = $merged | ConvertFrom-Json
     if ($config.services.'team1-attacker'.image -ne $attack.reference -or
@@ -237,6 +244,60 @@ try {
     if (-not $agentNetworksInternal) { throw 'combatant network is not internal' }
     if (-not $llmKeysBlank) { throw 'LLM_API_KEY must be blank in proxy matches' }
 
+    # 공식 backend의 combat start/stop 동작은 유지하되, 그 내부 compose가 frozen
+    # 이미지로 한 번만 생성하도록 combatant-only controller를 임시 bind mount한다.
+    # 그렇지 않으면 backend가 base agent를 만든 직후 runner가 다시 생성해 fail-open
+    # startup window가 두 번 발생한다.
+    $combatants = @('team1-attacker', 'team1-defender', 'team2-attacker', 'team2-defender')
+    $controllerServices = [ordered]@{}
+    foreach ($service in $combatants) {
+        $serviceConfig = $config.services.$service | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $serviceConfig.PSObject.Properties.Remove('build')
+        $serviceConfig.PSObject.Properties.Remove('depends_on')
+        $controllerServices[$service] = $serviceConfig
+    }
+    $controllerConfig = [ordered]@{
+        name = 'lig-demo'
+        services = $controllerServices
+        networks = [ordered]@{
+            arena = [ordered]@{
+                external = $true
+                name = [string]$config.networks.arena.name
+            }
+        }
+        volumes = [ordered]@{
+            broker1 = [ordered]@{
+                external = $true
+                name = [string]$config.volumes.broker1.name
+            }
+            broker2 = [ordered]@{
+                external = $true
+                name = [string]$config.volumes.broker2.name
+            }
+        }
+    }
+    $controllerConfig | ConvertTo-Json -Depth 20 | Set-Content `
+        -LiteralPath $controllerComposePath -Encoding utf8NoBOM
+    & docker compose -f $controllerComposePath config --format json *> $null
+    if ($LASTEXITCODE -ne 0) { throw 'combat controller compose validation failed' }
+
+    $controllerMountPath = $controllerComposePath.Replace('\', '/')
+    @"
+services:
+  backend:
+    volumes:
+      - type: bind
+        source: "$controllerMountPath"
+        target: /proj/docker-compose.yml
+        read_only: true
+"@ | Set-Content -LiteralPath $backendOverridePath -Encoding utf8NoBOM
+    $composePrefix = @(
+        '--progress', 'quiet', '-f', $baseCompose, '-f', $overridePath,
+        '-f', $backendOverridePath, '--profile', 'combat'
+    )
+    & docker compose @composePrefix config --format json *> $null
+    if ($LASTEXITCODE -ne 0) { throw 'controller-mounted compose validation failed' }
+
     $infra = @(
         'backend', 'litellm-gw',
         't1-layer-1', 't1-layer-2', 't1-layer-3', 't1-helper-1',
@@ -257,8 +318,6 @@ try {
         -Body $startBody -Uri 'http://127.0.0.1:4100/control/start'
     if (-not $started.ok) { throw 'backend refused game start' }
 
-    $combatants = @('team1-attacker', 'team1-defender', 'team2-attacker', 'team2-defender')
-    Invoke-Compose (@('up', '-d', '--no-deps', '--no-build', '--force-recreate') + $combatants)
     foreach ($service in @('team1-attacker', 'team2-attacker')) {
         Assert-RunningImage $service $attack.reference
     }
@@ -337,5 +396,9 @@ try {
 } finally {
     if ($stackStarted -and -not $KeepStack) {
         try { Invoke-Compose @('down') } catch { Write-Warning $_ }
+    }
+    if ((-not $KeepStack -or -not $stackStarted) -and
+        (Test-Path -LiteralPath $runtimeDir -PathType Container)) {
+        Remove-Item -LiteralPath $runtimeDir -Recurse -Force
     }
 }

@@ -15,6 +15,10 @@ runner는 기존 `lig-demo` 컨테이너가 있으면 중단하고 사용자 상
 OS 임시 폴더의 `Aegis.D4H-scrimmage`이며 Git 작업트리 밖이다. 각 경기 후 컨테이너는 제거하지만
 공식 스켈레톤의 named volume과 raw archive는 삭제하지 않는다.
 
+경기 시작은 공식 backend의 control API에 맡긴다. runner는 임시 combatant-only Compose
+controller를 backend에 읽기 전용으로 연결하여 고정 이미지가 정확히 한 번 생성되게 한다. 이 임시
+controller는 공식 스켈레톤을 수정하지 않으며, 정상 종료 시 OS 임시 폴더에서 삭제된다.
+
 Judge는 사람 점수가 `PENDING`이면 필수 게이트가 모두 통과해도 `NOT_READY`를 반환한다. 개발은
 seed 3개, 최종 후보는 Arena/Judge만 접근하는 blind seed 5개 이상으로 다시 실행해야 한다.
 
