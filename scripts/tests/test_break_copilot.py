@@ -27,6 +27,25 @@ index 1111111..2222222 100644
 +SAFE_LIMIT = 2
 """
 
+NEW_TEST_PATCH = """diff --git a/agents/defender/tests/test_new_guard.py b/agents/defender/tests/test_new_guard.py
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/agents/defender/tests/test_new_guard.py
+@@ -0,0 +1,2 @@
++def test_new_guard():
++    assert True
+"""
+
+MODIFIED_TEST_PATCH = """diff --git a/agents/defender/tests/test_timing.py b/agents/defender/tests/test_timing.py
+index 1111111..2222222 100644
+--- a/agents/defender/tests/test_timing.py
++++ b/agents/defender/tests/test_timing.py
+@@ -1 +1 @@
+-BUDGET = 0.0005
++BUDGET = 5.0
+"""
+
 
 class FakeResponse:
     def __init__(self, payload: dict[str, object]) -> None:
@@ -210,6 +229,12 @@ class PatchTests(unittest.TestCase):
         with self.assertRaises(PatchError):
             validate_patch(malicious, side="defender")
 
+    def test_existing_tests_are_immutable_but_new_test_files_are_allowed(self) -> None:
+        report = validate_patch(NEW_TEST_PATCH, side="defender")
+        self.assertEqual(("agents/defender/tests/test_new_guard.py",), report.files)
+        with self.assertRaises(PatchError):
+            validate_patch(MODIFIED_TEST_PATCH, side="defender")
+
 
 class SandboxCommandTests(unittest.TestCase):
     def test_unit_tests_run_in_locked_offline_read_only_container(self) -> None:
@@ -252,6 +277,8 @@ class SandboxCommandTests(unittest.TestCase):
                     stdout = "b" * 40 + "\n"
                 elif args[:4] == ["git", "diff", "--no-ext-diff", "--binary"]:
                     stdout = VALID_PATCH
+                elif args[:3] == ["git", "ls-tree", "-r"]:
+                    stdout = "agents/defender/tests/test_timing.py\n"
                 elif args[:3] == ["docker", "image", "inspect"]:
                     stdout = "sha256:" + "c" * 64 + "\n"
                 return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
@@ -280,6 +307,30 @@ class CandidateWorktreeTests(unittest.TestCase):
             self.assertEqual(1, report.added_lines)
             self.assertEqual("VALUE = 1\n", source.read_text(encoding="utf-8"))
             self.assertIn("SAFE_LIMIT = 2", (candidate / source.relative_to(root)).read_text(encoding="utf-8"))
+
+    def test_candidate_rejects_an_arbitrary_non_main_base(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "repo"
+            candidate = Path(temp) / "candidate"
+            root.mkdir()
+            subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test Human"], cwd=root, check=True)
+            (root / "base.txt").write_text("trusted", encoding="utf-8")
+            subprocess.run(["git", "add", "base.txt"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-m", "trusted base"], cwd=root, check=True, capture_output=True)
+            subprocess.run(["git", "switch", "-c", "untrusted-base"], cwd=root, check=True, capture_output=True)
+            (root / "build-script.txt").write_text("unreviewed", encoding="utf-8")
+            subprocess.run(["git", "add", "build-script.txt"], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-m", "untrusted base"], cwd=root, check=True, capture_output=True)
+
+            with self.assertRaises(PatchError):
+                prepare_candidate(
+                    root,
+                    candidate,
+                    base_ref="HEAD",
+                    branch_name="break/reject-untrusted",
+                )
 
 
 def assessment(evaluator: str, *, score: int = 4, missing_evidence: bool = False) -> dict[str, object]:
@@ -327,15 +378,41 @@ class ApprovalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             candidate = Path(temp) / "candidate"
             candidate.mkdir()
-            subprocess.run(["git", "init", "-b", "break/test-candidate"], cwd=candidate, check=True, capture_output=True)
+            subprocess.run(["git", "init", "-b", "main"], cwd=candidate, check=True, capture_output=True)
             subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=candidate, check=True)
             subprocess.run(["git", "config", "user.name", "Test Human"], cwd=candidate, check=True)
             (candidate / "file.txt").write_text("safe", encoding="utf-8")
             subprocess.run(["git", "add", "file.txt"], cwd=candidate, check=True)
+            subprocess.run(["git", "commit", "-m", "trusted base"], cwd=candidate, check=True, capture_output=True)
+            base_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "switch", "-c", "break/test-candidate"],
+                cwd=candidate,
+                check=True,
+                capture_output=True,
+            )
+            (candidate / "candidate.txt").write_text("candidate", encoding="utf-8")
+            subprocess.run(["git", "add", "candidate.txt"], cwd=candidate, check=True)
             subprocess.run(["git", "commit", "-m", "test candidate"], cwd=candidate, check=True, capture_output=True)
             commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=candidate, check=True, capture_output=True, text=True).stdout.strip()
             evaluation_path = Path(temp) / "evaluation.json"
-            evaluation_path.write_text(json.dumps({"candidate_commit": commit, "side": "defender", "status": "PASS"}), encoding="utf-8")
+            evaluation_path.write_text(
+                json.dumps(
+                    {
+                        "candidate_commit": commit,
+                        "base_commit": base_commit,
+                        "side": "defender",
+                        "status": "PASS",
+                    }
+                ),
+                encoding="utf-8",
+            )
             rubric_path = Path(temp) / "rubric.json"
             rubric_path.write_text(
                 json.dumps(
@@ -356,9 +433,9 @@ class ApprovalTests(unittest.TestCase):
                 evaluation_path,
                 rubric_path,
                 side="defender",
-                agent_owner="Kim",
-                team_lead="Lee",
-                docker_owner="Park",
+                agent_owner="apple1231",
+                team_lead="mamekuma-sys",
+                docker_owner="bigparty31",
             )
             template["decision"] = "APPROVE"
             for review in template["reviews"]:
@@ -367,6 +444,12 @@ class ApprovalTests(unittest.TestCase):
             approval_path.write_text(json.dumps(template), encoding="utf-8")
             result = verify_approval(candidate, evaluation_path, rubric_path, approval_path, side="defender")
             self.assertTrue(result["approved"])
+            template["reviews"][0]["reviewer"] = "mamekuma-sys"
+            approval_path.write_text(json.dumps(template), encoding="utf-8")
+            with self.assertRaises(ApprovalError):
+                verify_approval(candidate, evaluation_path, rubric_path, approval_path, side="defender")
+            template["reviews"][0]["reviewer"] = "apple1231"
+            approval_path.write_text(json.dumps(template), encoding="utf-8")
             evaluation_path.write_text("{}", encoding="utf-8")
             with self.assertRaises(ApprovalError):
                 verify_approval(candidate, evaluation_path, rubric_path, approval_path, side="defender")

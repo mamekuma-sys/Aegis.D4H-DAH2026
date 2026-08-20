@@ -13,6 +13,7 @@ from .redaction import contains_forbidden_secret
 MAX_PATCH_BYTES = 200_000
 MAX_PATCH_FILES = 8
 MAX_ADDED_LINES = 4_000
+TRUSTED_BASE_REFS = ("refs/remotes/origin/main", "refs/heads/main")
 
 
 class PatchError(ValueError):
@@ -43,6 +44,44 @@ def _allowed_patch_path(side: str, relative: str) -> bool:
         return False
     roots = (PurePosixPath(f"agents/{side}/src"), PurePosixPath(f"agents/{side}/tests"))
     return any(root in path.parents for root in roots)
+
+
+def _validate_test_additions(patch: str, files: list[str], side: str) -> None:
+    """기존 검증 테스트는 불변으로 두고 새 ``test_*.py``만 허용한다.
+
+    후보가 런타임과 timing test를 한 patch에서 함께 완화하면 candidate suite가
+    통과해도 아무 안전 의미가 없다. 기존 테스트는 trusted base의 gate이므로 LLM이
+    수정할 수 없고, 새 회귀 테스트만 별도 파일로 추가할 수 있다.
+    """
+    test_root = PurePosixPath(f"agents/{side}/tests")
+    test_files = {
+        relative for relative in files if test_root in PurePosixPath(relative).parents
+    }
+    if not test_files:
+        return
+
+    chunks = re.split(r"(?=^diff --git )", patch, flags=re.MULTILINE)
+    seen: set[str] = set()
+    for chunk in chunks:
+        if not chunk.startswith("diff --git "):
+            continue
+        first_line = chunk.splitlines()[0]
+        match = re.fullmatch(r"diff --git a/([^\s]+) b/([^\s]+)", first_line)
+        if not match:
+            continue
+        relative = match.group(1).replace("\\", "/")
+        if relative not in test_files:
+            continue
+        path = PurePosixPath(relative)
+        if not path.name.startswith("test_"):
+            raise PatchError("추가 테스트 파일은 test_*.py 이름만 허용됩니다")
+        if not re.search(r"^new file mode 100644$", chunk, re.MULTILINE):
+            raise PatchError("기존 테스트는 수정할 수 없고 새 test_*.py만 추가할 수 있습니다")
+        if not re.search(r"^--- /dev/null$", chunk, re.MULTILINE):
+            raise PatchError("새 테스트는 /dev/null에서 생성된 diff여야 합니다")
+        seen.add(relative)
+    if seen != test_files:
+        raise PatchError("테스트 patch의 신규 파일 경계를 확인할 수 없습니다")
 
 
 def validate_patch(patch: str, *, side: str) -> PatchReport:
@@ -84,6 +123,7 @@ def validate_patch(patch: str, *, side: str) -> PatchReport:
         raise PatchError("patch 파일 경로가 없거나 중복되었습니다")
     if len(files) > MAX_PATCH_FILES:
         raise PatchError(f"patch는 최대 {MAX_PATCH_FILES}개 파일만 변경할 수 있습니다")
+    _validate_test_additions(patch, files, side)
 
     file_set = set(files)
     old_headers: list[str] = []
@@ -143,6 +183,31 @@ def _run_git(arguments: list[str], *, cwd: Path, input_text: str | None = None) 
         raise PatchError("git 실행에 실패했습니다") from exc
 
 
+def trusted_main_commit(repo_root: Path) -> str:
+    """원격 main을 우선하는 검증 기준 commit을 돌려준다."""
+    for reference in TRUSTED_BASE_REFS:
+        result = _run_git(["rev-parse", "--verify", f"{reference}^{{commit}}"], cwd=repo_root)
+        if result.returncode == 0:
+            commit = result.stdout.strip()
+            if re.fullmatch(r"[0-9a-f]{40}", commit):
+                return commit
+    raise PatchError("trusted main commit을 찾을 수 없습니다")
+
+
+def resolve_trusted_base(repo_root: Path, base_ref: str) -> str:
+    """사용자 ref가 현재 trusted main과 정확히 같은 commit인지 확인한다."""
+    requested = _run_git(["rev-parse", "--verify", f"{base_ref}^{{commit}}"], cwd=repo_root)
+    if requested.returncode != 0:
+        raise PatchError("base-ref commit을 찾을 수 없습니다")
+    requested_commit = requested.stdout.strip()
+    trusted_commit = trusted_main_commit(repo_root)
+    if requested_commit != trusted_commit:
+        raise PatchError(
+            "base-ref는 현재 origin/main(원격이 없으면 main) commit과 정확히 일치해야 합니다"
+        )
+    return requested_commit
+
+
 def prepare_candidate(repo_root: Path, candidate: Path, *, base_ref: str, branch_name: str) -> str:
     repo_root = repo_root.resolve()
     candidate = candidate.resolve()
@@ -156,16 +221,17 @@ def prepare_candidate(repo_root: Path, candidate: Path, *, base_ref: str, branch
         raise PatchError("저장소 내부 candidate는 ignored .worktrees/ 아래에만 만들 수 있습니다")
     if not re.fullmatch(r"break/[a-z0-9][a-z0-9._-]{2,63}", branch_name):
         raise PatchError("candidate branch는 break/<safe-id> 형식이어야 합니다")
-    head = _run_git(["rev-parse", "--verify", f"{base_ref}^{{commit}}"], cwd=repo_root)
-    if head.returncode != 0:
-        raise PatchError("base-ref commit을 찾을 수 없습니다")
+    base_commit = resolve_trusted_base(repo_root, base_ref)
     branch = _run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"], cwd=repo_root)
     if branch.returncode == 0:
         raise PatchError(f"candidate branch가 이미 존재합니다: {branch_name}")
-    created = _run_git(["worktree", "add", "-b", branch_name, str(candidate), base_ref], cwd=repo_root)
+    created = _run_git(
+        ["worktree", "add", "-b", branch_name, str(candidate), base_commit],
+        cwd=repo_root,
+    )
     if created.returncode != 0:
         raise PatchError(f"candidate worktree 생성 실패: {created.stderr.strip()[:300]}")
-    return head.stdout.strip()
+    return base_commit
 
 
 def _common_git_dir(path: Path) -> Path:

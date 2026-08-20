@@ -14,6 +14,20 @@ class ApprovalError(ValueError):
     pass
 
 
+EXPECTED_REVIEWERS = {
+    "attacker": {
+        "agent_owner": "kts6450",
+        "team_lead": "mamekuma-sys",
+        "docker_owner": "bigparty31",
+    },
+    "defender": {
+        "agent_owner": "apple1231",
+        "team_lead": "mamekuma-sys",
+        "docker_owner": "bigparty31",
+    },
+}
+
+
 def _assert_ready_rubric(rubric: dict[str, object], commit: str) -> None:
     if (
         rubric.get("schema_version") != 1
@@ -44,6 +58,31 @@ def _git(candidate: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
+def _trusted_main_commit(candidate: Path) -> str:
+    for reference in ("refs/remotes/origin/main", "refs/heads/main"):
+        try:
+            commit = _git(candidate, "rev-parse", "--verify", f"{reference}^{{commit}}")
+        except ApprovalError:
+            continue
+        if re.fullmatch(r"[0-9a-f]{40}", commit):
+            return commit
+    raise ApprovalError("trusted main commit을 찾을 수 없습니다")
+
+
+def _assert_expected_reviewers(
+    side: str,
+    reviewers: dict[str, str],
+) -> None:
+    expected = EXPECTED_REVIEWERS.get(side)
+    if expected is None or reviewers != expected:
+        raise ApprovalError(
+            "reviewer는 저장소 역할 계정과 일치해야 합니다: "
+            f"{EXPECTED_REVIEWERS.get(side, {})}"
+        )
+    if len(set(reviewers.values())) != len(reviewers):
+        raise ApprovalError("각 승인 역할은 서로 다른 GitHub 계정이어야 합니다")
+
+
 def make_template(
     candidate: Path,
     evaluation_path: Path,
@@ -64,7 +103,18 @@ def make_template(
         raise ApprovalError("evaluation candidate_commit이 현재 HEAD와 다릅니다. commit 후 재평가하십시오")
     if evaluation.get("side") != side or evaluation.get("status") != "PASS":
         raise ApprovalError("요청 side의 PASS evaluation만 승인 템플릿을 만들 수 있습니다")
+    trusted_base = _trusted_main_commit(candidate)
+    if evaluation.get("base_commit") != trusted_base:
+        raise ApprovalError("evaluation base_commit이 현재 trusted main과 다릅니다")
     _assert_ready_rubric(rubric, commit)
+    _assert_expected_reviewers(
+        side,
+        {
+            "agent_owner": agent_owner,
+            "team_lead": team_lead,
+            "docker_owner": docker_owner,
+        },
+    )
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     return {
         "schema_version": 1,
@@ -117,6 +167,9 @@ def verify_approval(
         raise ApprovalError("approval/evaluation side가 요청과 다릅니다")
     if evaluation.get("status") != "PASS":
         raise ApprovalError("PASS evaluation만 승격할 수 있습니다")
+    trusted_base = _trusted_main_commit(candidate)
+    if evaluation.get("base_commit") != trusted_base:
+        raise ApprovalError("evaluation base_commit이 현재 trusted main과 다릅니다")
     if approval.get("evaluation_sha256") != sha256_path(evaluation_path):
         raise ApprovalError("evaluation digest가 승인 시점과 다릅니다")
     if approval.get("rubric_sha256") != sha256_path(rubric_path):
@@ -135,6 +188,7 @@ def verify_approval(
         raise ApprovalError("agent_owner, team_lead, docker_owner 리뷰가 모두 필요합니다")
     roles: set[str] = set()
     reviewers: list[str] = []
+    reviewers_by_role: dict[str, str] = {}
     for review in reviews:
         if not isinstance(review, dict) or set(review) != {"role", "reviewer", "decision", "reviewed_at"}:
             raise ApprovalError("review 형식이 잘못되었습니다")
@@ -156,6 +210,8 @@ def verify_approval(
             raise ApprovalError(f"{role} reviewed_at이 미래 시각입니다")
         roles.add(role)
         reviewers.append(reviewer)
+        reviewers_by_role[role] = reviewer
+    _assert_expected_reviewers(side, reviewers_by_role)
     return {
         "approved": True,
         "candidate_commit": head,

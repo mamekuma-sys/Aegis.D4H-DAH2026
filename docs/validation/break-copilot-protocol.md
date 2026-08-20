@@ -116,8 +116,13 @@ LLM patch가 포함된 단위 테스트와 replay는 `python:3.12-slim` 컨테�
 read-only root/repository, no-new-privileges, cap-drop ALL, PID·memory·CPU·tmpfs 제한으로만 실행한다.
 평가 결과에는 실제 로컬 sandbox image ID를 기록한다. 당일에는 검증한 digest를
 `BREAK_COPILOT_TEST_IMAGE`로 고정할 수 있다.
-도구는 원격 branch를 자동 pull/rebase하지 않는다. Break 전 동기화한 검증 commit을 `--base-ref`로
-명시해 다른 세션의 작업이나 당일 hotfix를 덮어쓰지 않는다.
+도구는 원격 branch를 자동 pull/rebase하지 않는다. `--base-ref`는 현재 `origin/main` commit과
+정확히 같아야 하며, 원격이 없는 격리 테스트 저장소에서만 로컬 `main`을 기준으로 사용한다. 후보의
+기존 단위 테스트는 trusted gate라 수정할 수 없고 `test_*.py` 신규 파일만 추가할 수 있다.
+
+승인 역할은 GitHub 계정에 고정한다. 공격 owner는 `kts6450`, 방어 owner는 `apple1231`, Docker
+owner는 `bigparty31`, 팀장은 `mamekuma-sys`다. 세 역할은 서로 다른 계정이어야 하며 side와 다른
+owner 이름이나 자유 입력 이름으로는 승인 검증을 통과할 수 없다.
 
 ## 실패 시 행동
 

@@ -28,7 +28,13 @@ from .llm import (
     load_allowed_models,
     propose_patch,
 )
-from .patching import PatchError, apply_patch, prepare_candidate, validate_patch
+from .patching import (
+    PatchError,
+    apply_patch,
+    prepare_candidate,
+    resolve_trusted_base,
+    validate_patch,
+)
 from .rubric import RubricError, assessment_template, combine_assessments
 
 
@@ -367,6 +373,7 @@ def execute(args: argparse.Namespace) -> int:
 
     if args.command == "assess":
         candidate = args.candidate.resolve()
+        trusted_base_commit = resolve_trusted_base(candidate, args.base_ref)
         head_result = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=candidate, text=True, capture_output=True, timeout=30, check=False
         )
@@ -393,8 +400,12 @@ def execute(args: argparse.Namespace) -> int:
         candidate_id = head_result.stdout.strip()
         validate_patch(diff_result.stdout, side=args.side)
         evaluation = load_object(args.evaluation)
-        if evaluation.get("candidate_commit") != candidate_id or evaluation.get("side") != args.side:
-            raise ValueError("evaluation이 현재 candidate commit/side와 다릅니다")
+        if (
+            evaluation.get("candidate_commit") != candidate_id
+            or evaluation.get("side") != args.side
+            or evaluation.get("base_commit") != trusted_base_commit
+        ):
+            raise ValueError("evaluation이 현재 candidate commit/side/trusted base와 다릅니다")
         manifest = load_object(args.manifest) if args.manifest else None
         scrimmage = load_object(args.scrimmage) if args.scrimmage else None
         assessment, usage = assess_readiness(

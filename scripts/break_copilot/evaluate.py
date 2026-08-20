@@ -110,13 +110,58 @@ def _container_base(candidate: Path, *, workdir: str) -> list[str]:
     ]
 
 
-def _container_unit_command(candidate: Path, side: str) -> list[str]:
+def _container_unit_command(
+    candidate: Path,
+    side: str,
+    modules: Sequence[str] = (),
+) -> list[str]:
+    if modules:
+        invocation = "python -B -m unittest -v \"$@\""
+        label = "trusted-unit"
+    else:
+        invocation = "python -B -m unittest discover -s tests -t . -v"
+        label = "candidate-unit"
+    script = (
+        f"{invocation} >/tmp/unit.log 2>&1 || "
+        "{ code=$?; tail -c 1200 /tmp/unit.log; exit $code; }"
+    )
     return [
         *_container_base(candidate, workdir=f"/workspace/agents/{side}"),
         "sh",
         "-c",
-        "python -B -m unittest discover -s tests -t . -v >/tmp/unit.log 2>&1",
+        script,
+        label,
+        *modules,
     ]
+
+
+def _trusted_test_modules(
+    candidate: Path,
+    side: str,
+    base_ref: str,
+    runner: Runner,
+) -> list[str]:
+    root = f"agents/{side}/tests"
+    result = runner(
+        ["git", "ls-tree", "-r", "--name-only", base_ref, "--", root],
+        candidate,
+        60,
+    )
+    if result.returncode != 0:
+        raise EvaluationError("trusted base 테스트 목록을 읽을 수 없습니다")
+    modules = []
+    prefix = f"{root}/"
+    for raw in result.stdout.splitlines():
+        relative = raw.strip().replace("\\", "/")
+        if not relative.startswith(prefix) or not relative.endswith(".py"):
+            continue
+        module_path = relative[len(f"agents/{side}/") : -3]
+        if module_path.endswith("/__init__"):
+            continue
+        modules.append(module_path.replace("/", "."))
+    if not modules:
+        raise EvaluationError("trusted base에 실행할 agent 테스트가 없습니다")
+    return sorted(modules)
 
 
 def _container_replay_command(candidate: Path, pcaps: Sequence[Path]) -> list[str]:
@@ -163,6 +208,20 @@ def evaluate_candidate(
     if not branch or branch in {"main", "master"}:
         raise EvaluationError("candidate는 short-lived branch여야 합니다")
     base_commit = _git_output(candidate, ["rev-parse", "--verify", f"{base_ref}^{{commit}}"], runner)
+    trusted_base_commit = ""
+    for reference in ("refs/remotes/origin/main", "refs/heads/main"):
+        result = runner(
+            ["git", "rev-parse", "--verify", f"{reference}^{{commit}}"],
+            candidate,
+            60,
+        )
+        if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", result.stdout.strip()):
+            trusted_base_commit = result.stdout.strip()
+            break
+    if not trusted_base_commit or base_commit != trusted_base_commit:
+        raise EvaluationError(
+            "base-ref는 현재 origin/main(원격이 없으면 main) commit과 정확히 일치해야 합니다"
+        )
     candidate_commit = _git_output(candidate, ["rev-parse", "HEAD"], runner)
     diff_result = runner(["git", "diff", "--no-ext-diff", "--binary", base_ref, "--"], candidate, 60)
     if diff_result.returncode != 0:
@@ -192,10 +251,20 @@ def evaluate_candidate(
         "image_id": sandbox_image_id if image_ready else None,
     }
 
+    trusted_modules = _trusted_test_modules(candidate, side, base_ref, runner)
     checks: list[dict[str, object]] = [patch_scope, image_check]
     checks.append(
         _run_check(
-            f"{side}_unit_tests",
+            f"{side}_trusted_unit_tests",
+            _container_unit_command(candidate, side, trusted_modules),
+            candidate,
+            runner=runner,
+            timeout=180,
+        )
+    )
+    checks.append(
+        _run_check(
+            f"{side}_candidate_unit_tests",
             _container_unit_command(candidate, side),
             candidate,
             runner=runner,
