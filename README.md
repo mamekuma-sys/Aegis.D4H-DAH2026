@@ -12,14 +12,24 @@ DAH 2026 본선용 공격·방어 에이전트를 개발하는 팀 저장소입�
 ## 저장소 구조
 
 ```text
-agents/
-├─ attacker/          공격 담당자 작업 영역
-└─ defender/          방어 담당자 작업 영역
-contracts/            본선 인터페이스 계약과 고정 fixture
-integration/          외부 공식 스켈레톤 연동
-research/             예선 전략과 본선 구현의 연결 근거
-docs/                 아키텍처, 결정 기록, 회의 기록
-scripts/              공통 검증 및 실행 도구
+.
+├─ agents/
+│  ├─ attacker/              공격 런타임·테스트·독립 Dockerfile
+│  └─ defender/              방어 런타임·정책·테스트·독립 Dockerfile
+├─ contracts/
+│  ├─ attacker, defender/     본선 에이전트 인터페이스 계약
+│  ├─ fixtures, llm/          고정 프레임·LLM 예산 계약
+│  └─ break-copilot, scrimmage/  검증 산출물 JSON 스키마
+├─ integration/
+│  └─ scrimmage/             외부 공식 스켈레톤·리허설 연동
+├─ research/                      예선 전략과 본선 구현의 연결 근거
+├─ docs/
+│  ├─ decisions, references/  아키텍처 결정·원본 해시·구현 매핑
+│  └─ reviews, validation/    본선 준비 검토·승격 게이트·운영 런북
+├─ scripts/
+│  ├─ break_copilot/         라운드 간 오프라인 분석 코어
+│  └─ tests/                 레이아웃·스크립트 계약 테스트
+└─ .github/                       PR 템플릿과 CI 워크플로
 ```
 
 ## 현재 단계
@@ -41,10 +51,10 @@ bash scripts/build-images.sh
 빌드한 뒤 revision label, CMD, 방어 이미지 비루트 사용자와 비밀 환경변수 미포함을 검사합니다.
 Windows에서는 `pwsh -NoProfile -File scripts/check-layout.ps1`을 사용합니다.
 
-Git 제외 경로 `capture/`에 리허설 PCAP이 있을 때는 다음 회귀도 실행합니다.
+Git 제외 경로 `captures/`에 리허설 PCAP이 있을 때는 다음 회귀도 실행합니다.
 
 ```bash
-bash scripts/replay-defender-pcaps.sh capture \
+bash scripts/replay-defender-pcaps.sh captures \
   --as-of 2026-08-18T00:00:00Z \
   --require-files 104 \
   --require-drop-rules 9 \
