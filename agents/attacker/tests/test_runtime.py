@@ -9,7 +9,7 @@ from aegis_attacker.audit import AuditLogger
 from aegis_attacker.config import AttackerConfig
 from aegis_attacker.models import SubmitState
 from aegis_attacker.observation import HttpResponse
-from aegis_attacker.runtime import AttackerRuntime
+from aegis_attacker.runtime import BOOTSTRAP_RETRY_COOLDOWN, AttackerRuntime
 
 
 class FakeClock:
@@ -315,6 +315,43 @@ class TestRuntimeResilience(unittest.TestCase):
             after_first = rt._report.summary()["requests_made"]
             rt.run_cycle()
             self.assertEqual(rt._report.summary()["requests_made"], after_first)
+        finally:
+            rt.finish_round()
+
+    def test_startup_no_response_retries_before_a_short_scrimmage_ends(self):
+        class LateServiceArena:
+            def __init__(self):
+                self.target_requests = 0
+                self.passive_reads = 0
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                self.target_requests += 1
+                return HttpResponse(0, "", {})
+
+            def read_passive_banner(self, host, port, timeout, max_bytes):
+                self.passive_reads += 1
+                return HttpResponse(0, "", {})
+
+        clk = FakeClock()
+        arena = LateServiceArena()
+        rt = AttackerRuntime(
+            make_cfg(),
+            http=arena,
+            clock=clk,
+            sleep=lambda dt: clk.advance(dt),
+        )
+        rt.start_round()
+        try:
+            rt.run_cycle()
+            first_requests = rt._report.summary()["requests_made"]
+            self.assertEqual(first_requests, 3)  # HTTP, HTTPS, passive TCP
+
+            rt.run_cycle()
+            self.assertEqual(rt._report.summary()["requests_made"], first_requests)
+
+            clk.advance(BOOTSTRAP_RETRY_COOLDOWN)
+            rt.run_cycle()
+            self.assertGreater(rt._report.summary()["requests_made"], first_requests)
         finally:
             rt.finish_round()
 
