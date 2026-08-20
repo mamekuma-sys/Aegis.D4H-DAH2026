@@ -15,18 +15,21 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $here)
 $manifestPath = Join-Path $here 'frozen-images.json'
 $overridePath = Join-Path $here 'compose.proxy.yml'
 $normalTrafficPath = Join-Path $here 'normal_traffic.py'
+$logSummaryModulePath = Join-Path $here 'ScrimmageLogSummary.psm1'
 $manifestSchemaPath = Join-Path $repoRoot 'contracts/scrimmage/image-manifest.schema.json'
 $resultSchemaPath = Join-Path $repoRoot 'contracts/scrimmage/match-result.schema.json'
 $baseCompose = Join-Path $SkeletonPath 'deploy/docker-compose.yml'
 
 foreach ($path in @(
-    $manifestPath, $overridePath, $normalTrafficPath, $manifestSchemaPath,
+    $manifestPath, $overridePath, $normalTrafficPath, $logSummaryModulePath, $manifestSchemaPath,
     $resultSchemaPath, $baseCompose
 )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "required file missing: $path"
     }
 }
+
+Import-Module $logSummaryModulePath -Force
 
 $existing = @(& docker ps -aq --filter 'label=com.docker.compose.project=lig-demo')
 $existing = @($existing | Where-Object { ([string]$_).Trim().Length -gt 0 })
@@ -154,24 +157,25 @@ function Get-AgentSummary([string]$service) {
     if ([string]::IsNullOrWhiteSpace($id)) {
         return [ordered]@{ missing = $true; secret_leak_detected = $false }
     }
-    $lines = @(& docker logs $id 2>&1 | ForEach-Object { [string]$_ })
+    $state = (& docker inspect --format '{{json .State}}' $id) | ConvertFrom-Json
+    $lines = @(& docker logs --timestamps $id 2>&1 | ForEach-Object { [string]$_ })
     $joined = $lines -join "`n"
     $leak = ($joined -match 'FLAG\{[^}\r\n]+\}') -or
             ($joined -match 'tok-team[12]') -or
             ($joined -match 'sk-local')
-    $events = @{}
+    $parsed = ConvertFrom-ScrimmageTimestampedLogs `
+        -Lines $lines -ContainerStartedAt ([string]$state.StartedAt)
+    $events = $parsed.events
     $lastRound = $null
     $lastShutdown = $null
-    foreach ($line in $lines) {
-        try { $entry = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+    foreach ($parsedEntry in $parsed.entries) {
+        $entry = $parsedEntry.value
         if ($entry.event) {
             $name = [string]$entry.event
-            $events[$name] = 1 + [int]($events[$name] -as [int])
             if ($name -eq 'round-summary') { $lastRound = $entry }
             if ($name -eq 'shutdown') { $lastShutdown = $entry }
         }
     }
-    $state = (& docker inspect --format '{{json .State}}' $id) | ConvertFrom-Json
     $roundMetrics = $null
     if ($null -ne $lastRound) {
         $roundMetrics = [ordered]@{
@@ -197,6 +201,8 @@ function Get-AgentSummary([string]$service) {
     return [ordered]@{
         missing = $false
         events = $events
+        container_started_unix_ms = $parsed.container_started_unix_ms
+        event_first_offset_ms = $parsed.event_first_offset_ms
         round_metrics = $roundMetrics
         shutdown_metrics = $shutdownMetrics
         exit_code = [int]$state.ExitCode

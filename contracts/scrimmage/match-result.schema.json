@@ -183,6 +183,8 @@
       "properties": {
         "missing": {"const": false},
         "events": {"$ref": "#/$defs/numericMap"},
+        "container_started_unix_ms": {"type": "number", "minimum": 0},
+        "event_first_offset_ms": {"$ref": "#/$defs/numericMap"},
         "round_metrics": {"$ref": "#/$defs/roundMetrics"},
         "shutdown_metrics": {"$ref": "#/$defs/shutdownMetrics"},
         "exit_code": {"type": "integer"},

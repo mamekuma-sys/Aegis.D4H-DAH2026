@@ -19,6 +19,11 @@ OS 임시 폴더의 `Aegis.D4H-scrimmage`이며 Git 작업트리 밖이다. 각 
 controller를 backend에 읽기 전용으로 연결하여 고정 이미지가 정확히 한 번 생성되게 한다. 이 임시
 controller는 공식 스켈레톤을 수정하지 않으며, 정상 종료 시 OS 임시 폴더에서 삭제된다.
 
+agent summary에는 Docker가 기록한 container 시작 Unix 시각과 event별 최초 상대시각(ms)만
+저장한다. raw 로그는 저장하지 않는다. 공격자의 `hit`는 새 accepted flag가 나온 뒤 기록되므로,
+피해 defender의 `session-connected`보다 이르면 초기 fail-open 성공의 보수적 직접 증거로 사용한다.
+해당 optional 필드는 기존 schema version 1 result와 하위 호환된다.
+
 Judge는 사람 점수가 `PENDING`이면 필수 게이트가 모두 통과해도 `NOT_READY`를 반환한다. 개발은
 seed 3개, 최종 후보는 Arena/Judge만 접근하는 blind seed 5개 이상으로 다시 실행해야 한다.
 

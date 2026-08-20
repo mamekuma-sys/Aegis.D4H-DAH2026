@@ -40,6 +40,15 @@ function Get-Median($values) {
     return ($ordered[$middle - 1] + $ordered[$middle]) / 2.0
 }
 
+function Get-EventUnixMs($summary, [string]$eventName) {
+    if ($null -eq $summary) { return $null }
+    $startedProperty = $summary.PSObject.Properties['container_started_unix_ms']
+    if ($null -eq $startedProperty -or $null -eq $startedProperty.Value) { return $null }
+    $offset = Get-NumericProperty $summary.event_first_offset_ms $eventName
+    if ($null -eq $offset) { return $null }
+    return [double]$startedProperty.Value + [double]$offset
+}
+
 $records = @()
 $integrityOk = $true
 foreach ($file in $files) {
@@ -118,24 +127,43 @@ foreach ($record in $records) {
     $result = $record.result
     $e2eValues = @()
     $defenderCalls = @()
+    $defenderSessionOffsets = @()
     foreach ($service in @('team1-defender', 'team2-defender')) {
-        $shutdown = $result.agent_summaries.$service.shutdown_metrics
+        $agentSummary = $result.agent_summaries.$service
+        $shutdown = $agentSummary.shutdown_metrics
         $e2e = Get-NumericProperty $shutdown.verdict_send_e2e 'max_us'
         if ($null -ne $e2e) { $e2eValues += $e2e }
         $calls = Get-NumericProperty $shutdown.advisory 'calls'
         if ($null -ne $calls) { $defenderCalls += $calls }
+        $sessionOffset = Get-NumericProperty `
+            $agentSummary.event_first_offset_ms 'session-connected'
+        if ($null -ne $sessionOffset) { $defenderSessionOffsets += $sessionOffset }
     }
     $requestValues = @()
     $attackerCalls = @()
     $attackerTokens = @()
+    $attackerFirstHitOffsets = @()
     foreach ($service in @('team1-attacker', 'team2-attacker')) {
-        $round = $result.agent_summaries.$service.round_metrics
+        $agentSummary = $result.agent_summaries.$service
+        $round = $agentSummary.round_metrics
         $requests = Get-NumericProperty $round 'requests_made'
         $calls = Get-NumericProperty $round 'llm_calls'
         $tokens = Get-NumericProperty $round 'llm_tokens'
         if ($null -ne $requests) { $requestValues += $requests }
         if ($null -ne $calls) { $attackerCalls += $calls }
         if ($null -ne $tokens) { $attackerTokens += $tokens }
+        $hitOffset = Get-NumericProperty $agentSummary.event_first_offset_ms 'hit'
+        if ($null -ne $hitOffset) { $attackerFirstHitOffsets += $hitOffset }
+    }
+    $hitVsSession = @()
+    foreach ($capture in @($result.captures)) {
+        $attackerSummary = $result.agent_summaries.("team$($capture.by)-attacker")
+        $defenderSummary = $result.agent_summaries.("team$($capture.victim)-defender")
+        $hitUnixMs = Get-EventUnixMs $attackerSummary 'hit'
+        $sessionUnixMs = Get-EventUnixMs $defenderSummary 'session-connected'
+        if ($null -ne $hitUnixMs -and $null -ne $sessionUnixMs) {
+            $hitVsSession += [double]($hitUnixMs - $sessionUnixMs)
+        }
     }
     $containerFailures = @(
         $result.agent_summaries.PSObject.Properties.Value | Where-Object {
@@ -150,6 +178,17 @@ foreach ($record in $records) {
         normal_requests = [int]$result.normal_traffic.requests
         normal_failures = [int]$result.normal_traffic.failures
         normal_latency_max_ms = [double]$result.normal_traffic.latency_ms.max
+        attacker_first_hit_offset_ms = $(if ($attackerFirstHitOffsets.Count) {
+            ($attackerFirstHitOffsets | Measure-Object -Minimum).Minimum
+        } else { $null })
+        defender_session_connected_max_offset_ms = $(if ($defenderSessionOffsets.Count) {
+            ($defenderSessionOffsets | Measure-Object -Maximum).Maximum
+        } else { $null })
+        first_hit_vs_victim_session_ms = $(if ($hitVsSession.Count) {
+            ($hitVsSession | Measure-Object -Minimum).Minimum
+        } else { $null })
+        capture_before_session_observed =
+            @($hitVsSession | Where-Object { $_ -lt 0 }).Count -gt 0
         attack_requests = $(if ($requestValues.Count -eq 2) {
             [double](($requestValues | Measure-Object -Sum).Sum)
         } else { $null })
@@ -177,6 +216,7 @@ foreach ($matrix in $matrices) {
     $captures = @($rows.captures)
     $normalFailures = @($rows.normal_failures)
     $e2e = @($rows.defender_e2e_max_us | Where-Object { $null -ne $_ })
+    $hitVsSession = @($rows.first_hit_vs_victim_session_ms | Where-Object { $null -ne $_ })
     $matrixAggregates[$matrix] = [ordered]@{
         seeds = @($rows.seed | Sort-Object)
         capture_count = [ordered]@{
@@ -192,6 +232,12 @@ foreach ($matrix in $matrices) {
         }
         defender_e2e_max_us = $(if ($e2e.Count) {
             ($e2e | Measure-Object -Maximum).Maximum
+        } else { $null })
+        pre_session_capture_seeds = @(
+            $rows | Where-Object { $_.capture_before_session_observed }
+        ).Count
+        first_hit_vs_victim_session_min_ms = $(if ($hitVsSession.Count) {
+            ($hitVsSession | Measure-Object -Minimum).Minimum
         } else { $null })
         gc_dropped_max = $(if ($rows.Count) {
             ($rows.gc_dropped | Measure-Object -Maximum).Maximum
@@ -218,6 +264,12 @@ foreach ($seed in $ExpectedSeeds) {
     $seedComparisons += [pscustomobject][ordered]@{
         seed = $seed
         attacker_capture_delta = $a1d0.captures - $a0d0.captures
+        attacker_first_hit_delta_ms = $(if (
+            $null -ne $a0d0.attacker_first_hit_offset_ms -and
+            $null -ne $a1d0.attacker_first_hit_offset_ms
+        ) {
+            $a1d0.attacker_first_hit_offset_ms - $a0d0.attacker_first_hit_offset_ms
+        } else { $null })
         defender_stolen_delta_with_a0 = $a0d1.captures - $a0d0.captures
         defender_stolen_delta_with_a1 = $a1d1.captures - $a1d0.captures
         defender_normal_failure_delta_with_a0 =
@@ -235,6 +287,14 @@ $defenseNormalDeltas = @(
     $seedComparisons.defender_normal_failure_delta_with_a0
     $seedComparisons.defender_normal_failure_delta_with_a1
 )
+$firstHitDeltas = @(
+    $seedComparisons.attacker_first_hit_delta_ms | Where-Object { $null -ne $_ }
+)
+$candidatePreSessionCaptures = @(
+    $seedResults | Where-Object {
+        $_.matrix -in @('A0D1', 'A1D1') -and $_.capture_before_session_observed
+    }
+).Count
 $attackNoRegression = $seedComparisons.Count -eq $ExpectedSeeds.Count -and
     @($attackDeltas | Where-Object { $_ -lt 0 }).Count -eq 0
 $attackAnyGain = @($attackDeltas | Where-Object { $_ -gt 0 }).Count -gt 0
@@ -258,7 +318,10 @@ $comparison = [ordered]@{
         } else { $null })
         no_regression = $defenseNoRegression
     }
-    first_flag_time_delta = $null
+    first_flag_time_delta = [ordered]@{
+        median_ms = Get-Median $firstHitDeltas
+        samples = $firstHitDeltas.Count
+    }
     request_and_token_delta = $null
 }
 
@@ -314,6 +377,9 @@ $promotionBlockers = @(
     if (-not $attackAnyGain) { 'candidate attacker has no measured capture gain over A0 against D0' }
     if (-not $attackNoRegression) { 'candidate attacker regressed against D0 in at least one seed' }
     if (-not $defenseNoRegression) { 'candidate defender increased stolen flags or normal failures' }
+    if ($candidatePreSessionCaptures -gt 0) {
+        'accepted capture observed before the victim defender session connected'
+    }
     if ($humanPending) { 'human score is pending' }
     'blind holdout, L4, and official SLA generator remain unavailable'
 )
