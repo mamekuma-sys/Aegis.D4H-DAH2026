@@ -21,7 +21,6 @@ def install_signal_handlers(runtime: AttackerRuntime) -> None:
     def _handle_signal(signum: int, _frame: object) -> None:
         runtime.audit.log("signal", signum=signum)
         runtime.request_stop()
-        raise KeyboardInterrupt
 
     for received_signal in (signal.SIGTERM, signal.SIGINT):
         try:
