@@ -1,6 +1,10 @@
 import subprocess
 import sys
 import unittest
+from pathlib import Path
+
+
+SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 
 
 class TestStartupImports(unittest.TestCase):
@@ -13,6 +17,7 @@ class TestStartupImports(unittest.TestCase):
             [sys.executable, "-c", code],
             check=False,
             capture_output=True,
+            cwd=SRC_ROOT,
             text=True,
         )
 
