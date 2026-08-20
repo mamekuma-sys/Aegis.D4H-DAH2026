@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "environment": "SCRIMMAGE_PROXY",
+  "images": {
+    "A0": {
+      "commit": "4931ce955c3f6401b74f5857e0bfee1b3e182369",
+      "reference": "aegis/scrimmage-attacker@sha256:261e014897b547bc218ef21d40257b4508eab413a35befa4e25cc904f6f7e4b2",
+      "platform": "linux/amd64"
+    },
+    "A1": {
+      "commit": "9317b9fa8294cb8dfbb9eaaea37daf16c4b8f5f7",
+      "reference": "aegis/scrimmage-attacker@sha256:bc22e46859b6e1a5cf10e1872c5acc2ba3dcb874b87e72a5a792b32bbbb73876",
+      "platform": "linux/amd64"
+    },
+    "D0": {
+      "commit": "4931ce955c3f6401b74f5857e0bfee1b3e182369",
+      "reference": "aegis/scrimmage-defender@sha256:d9c6361aba12b79c9a449e6b9b4dd7620ee6dafae5018ed4594f8b483098ac48",
+      "platform": "linux/amd64"
+    },
+    "D1": {
+      "commit": "e2e820025364038da00eabc92f2fa35ef36e686d",
+      "reference": "aegis/scrimmage-defender@sha256:e609471881a3c66be32cd4826c8aa6847a2360e9f0559ba2e2926a5e9967e99c",
+      "platform": "linux/amd64"
+    }
+  }
+}
