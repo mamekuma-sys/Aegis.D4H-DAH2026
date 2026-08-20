@@ -27,6 +27,10 @@ archives/
 DAH2026_본선_당일_진행_안내.md
 DAH2026_스켈레톤코드_상세_설명.md
 
+# 운영진 배포 스켈레톤. 저장소 밖 재료이며 router/broker(9.8MB ELF)를 포함한다.
+# validate-skeleton과 macos-preflight는 경로 인자로 받으므로 vendoring이 필요 없다.
+docs/superpowers/specs/deploy/
+
 .idea/
 .vscode/
 .DS_Store

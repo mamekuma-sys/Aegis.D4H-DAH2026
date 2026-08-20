@@ -8,6 +8,15 @@ L2 관리자 session 위조·loopback secret/registry SSRF, L3 `app_meta` SQLi�
 endpoint당 최대 20회의 zero-token fast path로 일반 정찰보다 먼저 실행합니다. Phase 4
 UGV는 구체 인터페이스가 아직 관측되지 않았으므로 경로를 하드코딩하지 않습니다. root와 읽기 전용
 probe 응답이 실제로 노출한 route·parameter만 bounded discovery text로 다음 결정론 공격에 전달합니다.
+미확인 포트의 discovery는 상태·문서용 6개 GET으로 제한하고, parameter를 광고된 정확한 route에
+결속합니다. traversal·파괴적 action route는 실행하지 않으며, 포트별 인터페이스와 flag 상태를 섞지
+않습니다.
+
+공식 `PORTS`에 여러 protocol이 올 수 있으므로 bootstrap은 평문 HTTP `GET /`을 먼저 실행하고,
+무응답일 때만 같은 endpoint의 HTTPS `GET /`, 다시 무응답일 때만 passive TCP banner read로
+이어집니다. TCP 단계는 최대 4KiB·750ms이며 client application byte를 보내지 않습니다. 경기 대상의
+self-signed TLS는 `ATTACK_TARGET`에서만 허용하고 제출·LLM 인증서 검증에는 영향을 주지 않습니다.
+UDP·protocol별 command는 관측 근거 없이 생성하지 않습니다.
 
 공식 `PORTS`에 L1~L4가 함께 들어오면 알려진 데모 포트는 `L4→L1→L2→L3` wave로 섞습니다.
 새 UGV 레이어를 초반에 시작하면서도 이전 세 레이어를 모두 같은 wave에 유지합니다. 데모 포트가
@@ -19,6 +28,8 @@ R17 이후에는 응답 본문 전체 hash가 아니라 status 계열·route·fo
 재결속하고, 실패 endpoint는 30초 cooldown 또는 새 playbook generation 전에는 반복 소모하지 않습니다.
 LLM은 대표 서비스 solver에 집중하도록 Round 48회·endpoint 4 turn으로 제한하며, 완전 target encoding,
 중첩 SSRF, SQL 주석·제어 공백·bracket identifier 등 R17 관측 우회는 최대 6개 bounded 후보로 실행합니다.
+팀 총 LLM budget은 운영진 공지의 `$1360`을 따릅니다. 공식 가격표가 없는 상태에서 USD 비용을
+추정하지 않으며, 호출당 비신뢰 관측 입력을 UTF-8 8KiB로 제한하고 호출·토큰 사용량을 기록합니다.
 관측 fast path 역시 `TARGETS`를 그대로 순회하므로 특정 팀 주소를 코드에 고정하지 않습니다.
 
 표준 라이브러리만 사용한다(런타임 외부 의존성 없음).

@@ -1,0 +1,32 @@
+# 공식 docker-compose.yml 뒤에 병합하는 SCRIMMAGE_PROXY override.
+# base 파일은 수정하지 않으며 모든 image 값은 runner가 digest reference로 주입한다.
+services:
+  team1-attacker:
+    image: "${SCRIMMAGE_ATTACKER_IMAGE:?SCRIMMAGE_ATTACKER_IMAGE is required}"
+    environment:
+      LLM_API_KEY: ""
+  team2-attacker:
+    image: "${SCRIMMAGE_ATTACKER_IMAGE:?SCRIMMAGE_ATTACKER_IMAGE is required}"
+    environment:
+      LLM_API_KEY: ""
+  team1-defender:
+    image: "${SCRIMMAGE_DEFENDER_IMAGE:?SCRIMMAGE_DEFENDER_IMAGE is required}"
+    environment:
+      LLM_API_KEY: ""
+  team2-defender:
+    image: "${SCRIMMAGE_DEFENDER_IMAGE:?SCRIMMAGE_DEFENDER_IMAGE is required}"
+    environment:
+      LLM_API_KEY: ""
+
+  t1-layer-1:
+    image: "aegis/scrimmage-layer-1:proxy"
+  t2-layer-1:
+    image: "aegis/scrimmage-layer-1:proxy"
+  t1-layer-2:
+    image: "aegis/scrimmage-layer-2:proxy"
+  t2-layer-2:
+    image: "aegis/scrimmage-layer-2:proxy"
+  t1-layer-3:
+    image: "aegis/scrimmage-layer-3:proxy"
+  t2-layer-3:
+    image: "aegis/scrimmage-layer-3:proxy"

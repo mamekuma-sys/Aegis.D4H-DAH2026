@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.local/contracts/scrimmage/match-result.schema.json",
+  "title": "Aegis sanitized scrimmage result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "score_name", "matrix", "seed", "round_seconds",
+    "images", "arena_images", "environment_checks", "captures", "normal_traffic", "router_metrics",
+    "agent_summaries", "secret_leak_detected", "limitations"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "score_name": {"const": "SCRIMMAGE_PROXY"},
+    "matrix": {"enum": ["A0D0", "A1D0", "A0D1", "A1D1"]},
+    "seed": {"type": "integer"},
+    "round_seconds": {"type": "integer", "minimum": 10},
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attacker", "defender"],
+      "properties": {
+        "attacker": {"$ref": "#/$defs/image"},
+        "defender": {"$ref": "#/$defs/image"}
+      }
+    },
+    "arena_images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["L1", "L2", "L3"],
+      "properties": {
+        "L1": {"$ref": "#/$defs/arenaImage"},
+        "L2": {"$ref": "#/$defs/arenaImage"},
+        "L3": {"$ref": "#/$defs/arenaImage"}
+      }
+    },
+    "environment_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frozen_images_verified", "agent_networks_internal", "llm_keys_blank",
+        "fresh_containers", "raw_artifacts_exported"
+      ],
+      "properties": {
+        "frozen_images_verified": {"const": true},
+        "agent_networks_internal": {"type": "boolean"},
+        "llm_keys_blank": {"type": "boolean"},
+        "fresh_containers": {"const": true},
+        "raw_artifacts_exported": {"const": false}
+      }
+    },
+    "captures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["by", "victim", "layer"],
+        "properties": {
+          "by": {"type": "string", "pattern": "^[0-9]+$"},
+          "victim": {"type": "string", "pattern": "^[0-9]+$"},
+          "layer": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "normal_traffic": {"$ref": "#/$defs/normalTraffic"},
+    "router_metrics": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/routerMetrics"},
+      "minProperties": 2
+    },
+    "agent_summaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["team1-attacker", "team1-defender", "team2-attacker", "team2-defender"],
+      "properties": {
+        "team1-attacker": {"$ref": "#/$defs/agentSummary"},
+        "team1-defender": {"$ref": "#/$defs/agentSummary"},
+        "team2-attacker": {"$ref": "#/$defs/agentSummary"},
+        "team2-defender": {"$ref": "#/$defs/agentSummary"}
+      }
+    },
+    "secret_leak_detected": {"type": "boolean"},
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "reference", "platform"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "reference": {"type": "string", "pattern": "^.+@sha256:[0-9a-f]{64}$"},
+        "platform": {"const": "linux/amd64"}
+      }
+    },
+    "numericMap": {
+      "type": "object",
+      "additionalProperties": {"type": "number"}
+    },
+    "arenaImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "image_id", "platform"],
+      "properties": {
+        "reference": {"type": "string", "pattern": "^aegis/scrimmage-layer-[1-3]:proxy$"},
+        "image_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "platform": {"const": "linux/amd64"}
+      }
+    },
+    "latency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p50", "p95", "p99", "max"],
+      "properties": {
+        "p50": {"type": "number", "minimum": 0},
+        "p95": {"type": "number", "minimum": 0},
+        "p99": {"type": "number", "minimum": 0},
+        "max": {"type": "number", "minimum": 0}
+      }
+    },
+    "normalTraffic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed", "requests", "successes", "failures", "status_counts", "latency_ms"],
+      "properties": {
+        "seed": {"type": "integer"},
+        "requests": {"type": "integer", "minimum": 1},
+        "successes": {"type": "integer", "minimum": 0},
+        "failures": {"type": "integer", "minimum": 0},
+        "status_counts": {"$ref": "#/$defs/numericMap"},
+        "latency_ms": {"$ref": "#/$defs/latency"}
+      }
+    },
+    "routerMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accept", "drop", "gc_dropped"],
+      "properties": {
+        "accept": {"type": "integer", "minimum": 0},
+        "drop": {"type": "integer", "minimum": 0},
+        "gc_dropped": {"type": "integer", "minimum": 0}
+      }
+    },
+    "roundMetrics": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "endpoints_observed", "requests_made", "submit_states",
+        "accepted_count", "llm_calls", "llm_tokens"
+      ],
+      "properties": {
+        "endpoints_observed": {"type": "integer", "minimum": 0},
+        "requests_made": {"type": "integer", "minimum": 0},
+        "submit_states": {"$ref": "#/$defs/numericMap"},
+        "accepted_count": {"type": "integer", "minimum": 0},
+        "llm_calls": {"type": "integer", "minimum": 0},
+        "llm_tokens": {"type": "integer", "minimum": 0}
+      }
+    },
+    "shutdownMetrics": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "sessions", "heartbeats", "advisory", "counters",
+        "hot_path", "verdict_send_e2e"
+      ],
+      "properties": {
+        "sessions": {"type": "integer", "minimum": 0},
+        "heartbeats": {"type": "integer", "minimum": 0},
+        "advisory": {"$ref": "#/$defs/numericMap"},
+        "counters": {"$ref": "#/$defs/numericMap"},
+        "hot_path": {"$ref": "#/$defs/numericMap"},
+        "verdict_send_e2e": {"$ref": "#/$defs/numericMap"}
+      }
+    },
+    "agentSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "missing", "events", "round_metrics", "shutdown_metrics",
+        "exit_code", "oom_killed", "secret_leak_detected"
+      ],
+      "properties": {
+        "missing": {"const": false},
+        "events": {"$ref": "#/$defs/numericMap"},
+        "container_started_unix_ms": {"type": "number", "minimum": 0},
+        "event_first_offset_ms": {"$ref": "#/$defs/numericMap"},
+        "round_metrics": {"$ref": "#/$defs/roundMetrics"},
+        "shutdown_metrics": {"$ref": "#/$defs/shutdownMetrics"},
+        "exit_code": {"type": "integer"},
+        "oom_killed": {"type": "boolean"},
+        "secret_leak_detected": {"type": "boolean"}
+      }
+    }
+  }
+}

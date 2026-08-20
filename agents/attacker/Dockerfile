@@ -6,5 +6,8 @@ LABEL org.opencontainers.image.revision=$VCS_REF
 
 WORKDIR /app
 COPY src/aegis_attacker /app/aegis_attacker
+# Round 시작 직후의 known-service fast path를 늦추는 import 비용만 줄인다.
+# request 순서·rate limit·공격 전략은 변경하지 않는다.
+RUN python -m compileall -q -f /app/aegis_attacker
 # 주소·토큰·키는 이미지에 넣지 않고 운영진이 주입하는 환경변수로만 참조한다(운영세칙 제7·16조).
 CMD ["python", "-u", "-m", "aegis_attacker"]

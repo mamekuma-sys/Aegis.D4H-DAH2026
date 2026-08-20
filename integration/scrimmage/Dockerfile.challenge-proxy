@@ -1,0 +1,8 @@
+ARG BASE_IMAGE=lig-demo/layer-1:latest
+FROM ${BASE_IMAGE}
+
+# 수령한 demo challenge에는 gunicorn/gevent가 import하는 top-level packaging이 없다.
+# 외부 다운로드 없이 이미 포함된 pip vendored copy를 노출한다. 공식 이미지는 수정하지 않는다.
+RUN cp -a /usr/local/lib/python3.12/site-packages/pip/_vendor/packaging \
+          /usr/local/lib/python3.12/site-packages/packaging \
+    && python -c "import packaging"

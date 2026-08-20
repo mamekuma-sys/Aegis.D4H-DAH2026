@@ -16,10 +16,14 @@ class RecordingAudit:
 class RuntimeStub:
     def __init__(self):
         self.audit = RecordingAudit()
+        self.stop_requested = False
+
+    def request_stop(self):
+        self.stop_requested = True
 
 
 class TestSignalHandling(unittest.TestCase):
-    def test_sigterm_logs_and_interrupts_the_round(self):
+    def test_sigterm_requests_graceful_round_stop(self):
         runtime = RuntimeStub()
         handlers = {}
 
@@ -30,9 +34,9 @@ class TestSignalHandling(unittest.TestCase):
             install_signal_handlers(runtime)
 
         self.assertIn(signal.SIGTERM, handlers)
-        with self.assertRaises(KeyboardInterrupt):
-            handlers[signal.SIGTERM](signal.SIGTERM, None)
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
         self.assertEqual(runtime.audit.events, [("signal", {"signum": signal.SIGTERM})])
+        self.assertTrue(runtime.stop_requested)
 
 
 if __name__ == "__main__":

@@ -728,6 +728,95 @@ class TestBrokerSessionLifecycle(unittest.TestCase):
         self.assertEqual(queue.in_flight(), 0)
         self.assertTrue(all(transport.closed for transport in made))
 
+class _ClockDrivenStop:
+    """`stop_event` 대체. `wait()`마다 FakeClock을 전진시킨다.
+
+    backoff는 `self._stop.wait(delay)`로 잠들기 때문에 실제 시간을 쓰면 테스트가
+    느려지고 비결정적이 된다. wait를 clock 전진으로 바꾸면 재시도 일정을 그대로
+    관찰할 수 있다.
+    """
+
+    def __init__(self, clock: FakeClock) -> None:
+        self._clock = clock
+        self.waits: list[float] = []
+        self._set = False
+
+    def is_set(self) -> bool:
+        return self._set
+
+    def set(self) -> None:
+        self._set = True
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.waits.append(timeout or 0.0)
+        self._clock.advance(timeout or 0.0)
+        return self._set
+
+
+class TestStartupConnectRace(unittest.TestCase):
+    """최초 연결은 Broker의 fail-open 창과 경주한다.
+
+    공식 router는 `iptables ... -j NFQUEUE --queue-num 0 --queue-bypass`로 큐를
+    걸어두므로 agent session이 붙기 전 트래픽은 판정 없이 통과한다. Broker는
+    운영진이 제공하는 바이너리라 이 동작을 우리가 끌 수 없다. 따라서 창을 줄이는
+    유일한 수단은 socket이 열리자마자 붙는 것이다.
+
+    `MATCH-A1D1-S404`·`S405`에서 연결보다 각각 17ms·12ms 앞선 탈취가 관측됐다.
+    """
+
+    def _session(self, connect_fn, clock, stop):
+        queue = OutboundQueue()
+        writer = SocketWriter(queue, clock=clock)
+        return BrokerSession(
+            config=CONFIG, queue=queue, writer=writer, heartbeat=None,
+            metrics=Metrics(), clock=clock, connect_fn=connect_fn, stop_event=stop,
+        )
+
+    def _connect_offset(self, socket_ready_at: float) -> float:
+        """socket이 `socket_ready_at`에 열릴 때 실제로 붙는 시각을 돌려준다."""
+        clock = FakeClock()
+        stop = _ClockDrivenStop(clock)
+        attempts: list[float] = []
+
+        def connect(path):
+            attempts.append(clock.now)
+            if clock.now < socket_ready_at:
+                raise ConnectionRefusedError("broker socket not ready")
+            return FakeTransport()
+
+        session = self._session(connect, clock, stop)
+        transport = session._connect_with_backoff()
+        self.assertIsNotNone(transport, "포기는 곧 fail-open이다")
+        return attempts[-1]
+
+    def test_startup_connect_does_not_overshoot_the_fail_open_window(self):
+        """socket이 열린 뒤에도 backoff가 자고 있으면 그만큼이 fail-open이다."""
+        for ready_at in (0.05, 0.12, 0.30, 0.36, 0.5):
+            with self.subTest(socket_ready_at=ready_at):
+                connected_at = self._connect_offset(ready_at)
+                overshoot = connected_at - ready_at
+                self.assertLessEqual(
+                    overshoot, 0.010,
+                    f"socket이 {ready_at * 1000:.0f}ms에 열렸는데 "
+                    f"{connected_at * 1000:.0f}ms에 연결됐다 "
+                    f"(fail-open {overshoot * 1000:.0f}ms)",
+                )
+
+    def test_reconnect_keeps_exponential_backoff(self):
+        """재연결까지 빠르게 폴링하면 장애 중 broker를 두드린다. §4.2 유지."""
+        clock = FakeClock()
+        stop = _ClockDrivenStop(clock)
+
+        def connect(path):
+            if len(stop.waits) < 5:
+                raise ConnectionRefusedError("broker down")
+            return FakeTransport()
+
+        session = self._session(connect, clock, stop)
+        session.sessions_opened = 1  # 이미 한 번 붙었던 session
+        self.assertIsNotNone(session._connect_with_backoff())
+        self.assertEqual(stop.waits, [0.05, 0.1, 0.2, 0.4, 0.8])
+
 
 if __name__ == "__main__":
     unittest.main()

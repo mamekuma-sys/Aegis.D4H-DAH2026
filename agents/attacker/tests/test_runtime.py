@@ -9,7 +9,7 @@ from aegis_attacker.audit import AuditLogger
 from aegis_attacker.config import AttackerConfig
 from aegis_attacker.models import SubmitState
 from aegis_attacker.observation import HttpResponse
-from aegis_attacker.runtime import AttackerRuntime
+from aegis_attacker.runtime import BOOTSTRAP_RETRY_COOLDOWN, AttackerRuntime
 
 
 class FakeClock:
@@ -238,6 +238,16 @@ class TestRuntimeEndToEnd(unittest.TestCase):
 
 
 class TestRuntimeResilience(unittest.TestCase):
+    def test_stop_request_prevents_new_target_requests(self):
+        arena = FakeArena("service", "/unused", "irrelevant")
+        rt = make_runtime(arena)
+
+        rt.request_stop()
+        report = rt.run_once()
+
+        self.assertEqual(arena.target_requests, [])
+        self.assertEqual(report.summary()["requests_made"], 0)
+
     def test_run_forever_stops_at_round_deadline_and_wipes_secrets(self):
         class CycleOnlyRuntime(AttackerRuntime):
             def __init__(self, *args, **kwargs):
@@ -267,6 +277,24 @@ class TestRuntimeResilience(unittest.TestCase):
         self.assertEqual(clk.t, 5.0)
         self.assertEqual(rt._secret_store.secrets_snapshot(), set())
 
+    def test_run_forever_does_not_sleep_after_cycle_requests_stop(self):
+        class StopAfterCycleRuntime(AttackerRuntime):
+            def run_cycle(self):
+                self.request_stop()
+                return self._report
+
+        clk = FakeClock()
+        sleeps = []
+        with patch("aegis_attacker.runtime.ROUND_DURATION", 5.0):
+            rt = StopAfterCycleRuntime(
+                make_cfg(), http=FakeArena("b", "/x", "FLAG{x}"),
+                clock=clk, sleep=lambda dt: sleeps.append(dt),
+            )
+            rt.run_forever()
+
+        self.assertEqual(sleeps, [])
+        self.assertEqual(rt._secret_store.secrets_snapshot(), set())
+
     def test_run_forever_reuses_flag_store_across_scan_cycles(self):
         arena = FakeArena("FLAG{same_round}", "/x", "irrelevant")
         rt = make_runtime(arena)
@@ -287,6 +315,43 @@ class TestRuntimeResilience(unittest.TestCase):
             after_first = rt._report.summary()["requests_made"]
             rt.run_cycle()
             self.assertEqual(rt._report.summary()["requests_made"], after_first)
+        finally:
+            rt.finish_round()
+
+    def test_startup_no_response_retries_before_a_short_scrimmage_ends(self):
+        class LateServiceArena:
+            def __init__(self):
+                self.target_requests = 0
+                self.passive_reads = 0
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                self.target_requests += 1
+                return HttpResponse(0, "", {})
+
+            def read_passive_banner(self, host, port, timeout, max_bytes):
+                self.passive_reads += 1
+                return HttpResponse(0, "", {})
+
+        clk = FakeClock()
+        arena = LateServiceArena()
+        rt = AttackerRuntime(
+            make_cfg(),
+            http=arena,
+            clock=clk,
+            sleep=lambda dt: clk.advance(dt),
+        )
+        rt.start_round()
+        try:
+            rt.run_cycle()
+            first_requests = rt._report.summary()["requests_made"]
+            self.assertEqual(first_requests, 3)  # HTTP, HTTPS, passive TCP
+
+            rt.run_cycle()
+            self.assertEqual(rt._report.summary()["requests_made"], first_requests)
+
+            clk.advance(BOOTSTRAP_RETRY_COOLDOWN)
+            rt.run_cycle()
+            self.assertGreater(rt._report.summary()["requests_made"], first_requests)
         finally:
             rt.finish_round()
 
@@ -850,6 +915,172 @@ class TestUgvObservedDiscovery(unittest.TestCase):
         exploit_queries = [path for path in arena.target_requests if "?" in path]
         self.assertTrue(exploit_queries)
         self.assertTrue(all(path.startswith("/telemetry?source=") for path in exploit_queries))
+        self.assertNotIn("/flag", arena.target_requests)
+        self.assertNotIn("/admin", arena.target_requests)
+        self.assertNotIn("/.git/config", arena.target_requests)
+
+    def test_multiple_l4_ports_keep_routes_scoped_and_collect_multiple_flags(self):
+        class MultiServiceUgvArena:
+            def __init__(self):
+                self.submits = []
+                self.llm_calls = 0
+                self.target_requests = {9001: [], 9002: []}
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                from urllib.parse import parse_qs, unquote, urlsplit
+
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
+                    return HttpResponse(500, "unused")
+
+                parts = urlsplit(url)
+                port = parts.port
+                full = parts.path + (("?" + parts.query) if parts.query else "")
+                self.target_requests[port].append(full)
+                if parts.path == "/" and not parts.query:
+                    return HttpResponse(200, "Phase 4 service online", {})
+                if parts.path == "/status":
+                    if port == 9001:
+                        return HttpResponse(200, "GET /telemetry?source=<url>", {})
+                    return HttpResponse(200, "GET /inspect?uri=<url>", {})
+
+                params = parse_qs(parts.query)
+                if port == 9001 and parts.path == "/telemetry":
+                    target = unquote((params.get("source") or [""])[0])
+                    if target == "http://127.0.0.1:9001/registry":
+                        return HttpResponse(200, "FLAG{synthetic_l4_service_a}", {})
+                if port == 9002 and parts.path == "/inspect":
+                    target = unquote((params.get("uri") or [""])[0])
+                    if target == "http://127.0.0.1:9002/registry":
+                        return HttpResponse(200, "FLAG{synthetic_l4_service_b}", {})
+                return HttpResponse(200, "online", {})
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(9001, 9002),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=2,
+        )
+        from aegis_attacker.rate_limit import RateLimiter
+        arena = MultiServiceUgvArena()
+        rt = AttackerRuntime(
+            cfg,
+            http=arena,
+            rate=RateLimiter(request_burst=10000, submit_max=10000),
+        )
+
+        report = rt.run_once()
+
+        self.assertEqual(report.accepted_count(), 2)
+        self.assertEqual(len(arena.submits), 2)
+        self.assertEqual(arena.llm_calls, 0)
+        self.assertTrue(any(path.startswith("/telemetry?source=")
+                            for path in arena.target_requests[9001]))
+        self.assertFalse(any(path.startswith("/inspect?")
+                             for path in arena.target_requests[9001]))
+        self.assertTrue(any(path.startswith("/inspect?uri=")
+                            for path in arena.target_requests[9002]))
+        self.assertFalse(any(path.startswith("/telemetry?")
+                             for path in arena.target_requests[9002]))
+        for requests in arena.target_requests.values():
+            self.assertNotIn("/flag", requests)
+            self.assertNotIn("/admin", requests)
+            self.assertNotIn("/.git/config", requests)
+
+    def test_https_only_l4_uses_observed_route_and_collects_multiple_flags(self):
+        class HttpsUgvArena:
+            def __init__(self):
+                self.submits = []
+                self.target_urls = []
+                self.llm_calls = 0
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                from urllib.parse import parse_qs, unquote, urlsplit
+
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
+                    return HttpResponse(500, "unused")
+                self.target_urls.append(url)
+                parts = urlsplit(url)
+                if parts.scheme == "http":
+                    return HttpResponse(0, "", {})
+                if parts.path == "/":
+                    return HttpResponse(200, "secure Phase 4 service", {})
+                if parts.path == "/status":
+                    return HttpResponse(200, "GET /inspect?uri=<url>", {})
+                if parts.path == "/inspect":
+                    target = unquote((parse_qs(parts.query).get("uri") or [""])[0])
+                    if target == "http://127.0.0.1:9443/registry":
+                        return HttpResponse(
+                            200,
+                            "FLAG{synthetic_https_l4_a} FLAG{synthetic_https_l4_b}",
+                            {},
+                        )
+                return HttpResponse(200, "online", {})
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(9443,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        arena = HttpsUgvArena()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 2)
+        self.assertEqual(len(arena.submits), 2)
+        self.assertEqual(arena.llm_calls, 0)
+        self.assertTrue(arena.target_urls[0].startswith("http://"))
+        self.assertTrue(all(url.startswith("https://") for url in arena.target_urls[1:]))
+
+    def test_non_http_l4_passive_banner_collects_flag_without_client_payload(self):
+        class PassiveBannerArena:
+            def __init__(self):
+                self.submits = []
+                self.http_calls = []
+                self.banner_calls = []
+                self.llm_calls = 0
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
+                    return HttpResponse(500, "unused")
+                self.http_calls.append((method, url, body))
+                return HttpResponse(0, "", {})
+
+            def read_passive_banner(self, host, port, timeout, max_bytes):
+                self.banner_calls.append((host, port, timeout, max_bytes))
+                return HttpResponse(200, "FLAG{synthetic_passive_tcp_l4}", {})
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(9100,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        arena = PassiveBannerArena()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(len(arena.submits), 1)
+        self.assertEqual(len(arena.http_calls), 2)
+        self.assertTrue(all(body is None for _, _, body in arena.http_calls))
+        self.assertEqual(len(arena.banner_calls), 1)
+        self.assertLessEqual(arena.banner_calls[0][2], 0.75)
+        self.assertLessEqual(arena.banner_calls[0][3], 4096)
+        self.assertEqual(arena.llm_calls, 0)
 
 
 class TestRuntimeInert(unittest.TestCase):

@@ -29,8 +29,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
@@ -107,6 +105,10 @@ def assert_no_secrets(text: str) -> None:
 
 
 def _post_json(url: str, api_key: str, body: dict, timeout: float) -> dict:
+    # 원격 I/O 모듈은 비동기 advisory가 실제 호출될 때만 로드한다. Broker 연결과
+    # verdict 경로는 http/ssl/email import 비용을 지불하지 않는다.
+    import urllib.request
+
     payload = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -236,6 +238,10 @@ class AdvisoryWorker:
         if not features:
             self._last_call_at = moment
             return None
+
+        # custom transport가 URLError를 반환하는 테스트와 기본 transport를 같은
+        # 경로로 처리하되, 이 import도 첫 비동기 호출 전에는 실행하지 않는다.
+        import urllib.error
 
         try:
             messages = self.build_messages(features)

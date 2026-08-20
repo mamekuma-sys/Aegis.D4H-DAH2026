@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.local/contracts/scrimmage/image-manifest.schema.json",
+  "title": "Aegis scrimmage frozen image manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "environment", "images"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "environment": {"const": "SCRIMMAGE_PROXY"},
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["A0", "A1", "D0", "D1"],
+      "properties": {
+        "A0": {"$ref": "#/$defs/image"},
+        "A1": {"$ref": "#/$defs/image"},
+        "D0": {"$ref": "#/$defs/image"},
+        "D1": {"$ref": "#/$defs/image"}
+      }
+    }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "reference", "platform"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "reference": {"type": "string", "pattern": "^.+@sha256:[0-9a-f]{64}$"},
+        "platform": {"const": "linux/amd64"}
+      }
+    }
+  }
+}

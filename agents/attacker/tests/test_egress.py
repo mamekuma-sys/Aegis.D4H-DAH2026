@@ -79,6 +79,54 @@ class TestEgressGateway(unittest.TestCase):
                           "http://team2.lig.internal:8082/")
         self.assertEqual(resp.status, 302)
 
+    def test_attack_target_https_uses_target_specific_transport(self):
+        class TargetTlsTransport:
+            def __init__(self):
+                self.normal_calls = 0
+                self.target_calls = 0
+
+            def request(self, *args, **kwargs):
+                self.normal_calls += 1
+                return HttpResponse(200, "normal")
+
+            def request_target(self, *args, **kwargs):
+                self.target_calls += 1
+                return HttpResponse(200, "target")
+
+        transport = TargetTlsTransport()
+        gateway = EgressGateway(transport, build_allowlists(CFG))
+
+        response = gateway.request(
+            Capability.ATTACK_TARGET,
+            "GET",
+            "https://team2.lig.internal:8082/",
+        )
+        gateway.request(Capability.LLM, "POST", "http://litellm.lig.internal:4000/v1/chat/completions")
+
+        self.assertEqual(response.body, "target")
+        self.assertEqual(transport.target_calls, 1)
+        self.assertEqual(transport.normal_calls, 1)
+
+    def test_passive_tcp_banner_is_scoped_before_transport(self):
+        class BannerTransport:
+            def __init__(self):
+                self.calls = []
+
+            def read_passive_banner(self, host, port, timeout, max_bytes):
+                self.calls.append((host, port, timeout, max_bytes))
+                return HttpResponse(200, "banner")
+
+        transport = BannerTransport()
+        gateway = EgressGateway(transport, build_allowlists(CFG))
+
+        response = gateway.read_passive_banner(
+            Capability.ATTACK_TARGET, "team2.lig.internal", 8082
+        )
+        self.assertEqual(response.body, "banner")
+        with self.assertRaises(EgressError):
+            gateway.read_passive_banner(Capability.ATTACK_TARGET, "evil.invalid", 8082)
+        self.assertEqual(len(transport.calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

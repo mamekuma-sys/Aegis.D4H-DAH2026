@@ -110,15 +110,23 @@ class Endpoint:
 
     host: str
     port: int
+    # Scheme is an endpoint-local transport observation, not a new target.
+    # Equality/hash intentionally remain TARGETS × PORTS based.
+    scheme: str = field(default="http", compare=False, hash=False)
 
     def __post_init__(self) -> None:
         if not self.host or not self.host.strip():
             raise ValueError("Endpoint.host 비어있음")
         if not (MIN_PORT <= self.port <= MAX_PORT):
             raise ValueError(f"Endpoint.port 범위 밖: {self.port}")
+        if self.scheme not in ("http", "https"):
+            raise ValueError(f"Endpoint.scheme 지원 밖: {self.scheme}")
 
     def base_url(self) -> str:
-        return f"http://{self.host}:{self.port}"
+        return f"{self.scheme}://{self.host}:{self.port}"
+
+    def with_scheme(self, scheme: str) -> "Endpoint":
+        return Endpoint(self.host, self.port, scheme=scheme)
 
     def key(self) -> str:
         return f"{self.host}:{self.port}"

@@ -3,7 +3,11 @@ import unittest
 
 from aegis_attacker.config import AttackerConfig
 from aegis_attacker.egress import EgressGateway
-from aegis_attacker.llm_advisor import LLMAdvisor, SUPPORTED_LLM_MODELS
+from aegis_attacker.llm_advisor import (
+    LLMAdvisor,
+    MAX_LLM_USER_CONTENT_BYTES,
+    SUPPORTED_LLM_MODELS,
+)
 from aegis_attacker.models import Capability, RoundBudget, VulnClass
 from aegis_attacker.observation import HttpResponse
 from aegis_attacker.secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
@@ -68,6 +72,21 @@ class TestLLMAdvisor(unittest.TestCase):
         self.assertNotIn("FLAG{leak}", transport.last_body)
         self.assertNotIn("sk-team1-secret", transport.last_body)
         self.assertNotIn("tok-team1-secret", transport.last_body)
+
+    def test_prompt_bounds_untrusted_observation_while_preserving_edges(self):
+        adv, transport = make_advisor(chat_response('{"path":"/x"}'))
+        banner = "BANNER_START\n" + ("a" * MAX_LLM_USER_CONTENT_BYTES)
+        feedback = ("z" * MAX_LLM_USER_CONTENT_BYTES) + "\nFEEDBACK_END"
+
+        adv.advise_exploit(banner, feedback, [])
+
+        payload = json.loads(transport.last_body)
+        user_content = payload["messages"][1]["content"]
+        self.assertLessEqual(
+            len(user_content.encode("utf-8")), MAX_LLM_USER_CONTENT_BYTES
+        )
+        self.assertIn("BANNER_START", user_content)
+        self.assertIn("FEEDBACK_END", user_content)
 
     def test_key_sent_via_egress_auth(self):
         adv, transport = make_advisor(chat_response('{"path":"/x"}'))

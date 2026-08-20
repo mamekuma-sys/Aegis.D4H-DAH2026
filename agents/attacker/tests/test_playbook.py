@@ -1,4 +1,6 @@
 import unittest
+import threading
+import time
 
 from aegis_attacker.llm_advisor import ESCALATION_MODELS, escalated_model
 from aegis_attacker.playbook import Playbook
@@ -57,6 +59,25 @@ class TestPlaybook(unittest.TestCase):
 
 
 class TestSingleFlight(unittest.TestCase):
+    def test_stop_event_wakes_waiter_without_mutating_playbook_from_signal_path(self):
+        pb = Playbook()
+        self.assertEqual(pb.claim_or_wait("fp"), "solve")
+        results = []
+        stop = threading.Event()
+
+        waiter = threading.Thread(
+            target=lambda: results.append(
+                pb.claim_or_wait("fp", wait_timeout=5.0, stop_event=stop)
+            )
+        )
+        waiter.start()
+        time.sleep(0.02)
+        stop.set()
+        waiter.join(0.5)
+
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(results, ["skip"])
+
     def test_first_caller_solves_others_wait_then_reuse(self):
         pb = Playbook()
         # 첫 표적: solve 권한 획득
@@ -82,7 +103,6 @@ class TestSingleFlight(unittest.TestCase):
         pb.finish_llm("")  # 안전(무동작)
 
     def test_concurrent_claims_single_solver(self):
-        import threading
         pb = Playbook()
         results = []
         lock = threading.Lock()

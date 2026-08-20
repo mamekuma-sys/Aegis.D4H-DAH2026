@@ -41,6 +41,18 @@ class TestEndpoint(unittest.TestCase):
     def test_endpoint_id_stable(self):
         self.assertEqual(Endpoint("t2", 8082).endpoint_id, "t2:8082")
 
+    def test_scheme_changes_transport_but_not_endpoint_identity(self):
+        plain = Endpoint("t2", 443)
+        secure = Endpoint("t2", 443, scheme="https")
+        self.assertEqual(secure.base_url(), "https://t2:443")
+        self.assertEqual(plain, secure)
+        self.assertEqual(hash(plain), hash(secure))
+        self.assertEqual(secure.endpoint_id, "t2:443")
+
+    def test_unknown_scheme_rejected(self):
+        with self.assertRaises(ValueError):
+            Endpoint("t2", 443, scheme="tcp")
+
 
 class TestEvidenceRef(unittest.TestCase):
     def _ref(self, expires=100.0):

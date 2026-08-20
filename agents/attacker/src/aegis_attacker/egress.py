@@ -56,5 +56,25 @@ class EgressGateway:
             host, port = _host_port(url)
             raise EgressError(
                 f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖")
+        # 대상 TLS는 target 전용 opener를 사용한다. 제출·LLM 인증서 정책과 분리한다.
+        if (capability == Capability.ATTACK_TARGET
+                and hasattr(self._transport, "request_target")):
+            return self._transport.request_target(method, url, headers, body, timeout)
         # 전송은 프록시 비활성·리다이렉트 미추적. 3xx는 그대로 반환된다.
         return self._transport.request(method, url, headers, body, timeout)
+
+    def read_passive_banner(self, capability: Capability, host: str, port: int,
+                            timeout: float = 0.75, max_bytes: int = 4096):
+        """Allowlisted ATTACK_TARGET에서 서버 주도 TCP banner만 bounded read한다."""
+        if capability != Capability.ATTACK_TARGET:
+            raise EgressError("passive TCP banner는 ATTACK_TARGET 전용")
+        if (host, port) not in self._allow.get(capability, set()):
+            raise EgressError(
+                f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖"
+            )
+        reader = getattr(self._transport, "read_passive_banner", None)
+        if reader is None:
+            # 주입형 테스트 transport나 제한된 embedder는 안전하게 무응답으로 수렴한다.
+            from .observation import HttpResponse
+            return HttpResponse(0, "", {})
+        return reader(host, port, timeout, max_bytes)

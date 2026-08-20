@@ -29,3 +29,16 @@ COMMON_PROBE_PATHS = (
     "/openapi.json",
     "/swagger.json",
 )
+
+# 실제 인터페이스가 확인되지 않은 서비스는 flag/admin 경로를 넓게 추측하지 않는다.
+# root 관측 뒤 아래의 일반적인 읽기 전용 문서·상태 endpoint만 확인하고, 응답이 명시한
+# GET route와 query parameter에 실행을 결속한다. 다중 L4 port에서도 요청 예산을 일정하게
+# 유지하기 위해 별도 상한 목록으로 둔다.
+DISCOVERY_PROBE_PATHS = (
+    "/status",
+    "/health",
+    "/robots.txt",
+    "/api",
+    "/openapi.json",
+    "/swagger.json",
+)
