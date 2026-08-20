@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 import threading
+import time
 
 # 같은 배너를 먼저 푸는 표적을 기다리는 최대 시간(초). 초과 시 이번 사이클 LLM은 생략한다.
 SOLVE_WAIT = 10.0
+STOP_POLL_INTERVAL = 0.05
 
 
 class Playbook:
@@ -62,7 +64,8 @@ class Playbook:
             return self._by_fp.get(banner_fp)
 
     def claim_or_wait(self, banner_fp: str, wait_timeout: float = SOLVE_WAIT,
-                      tried_reuse: bool = False) -> str:
+                      tried_reuse: bool = False,
+                      stop_event: threading.Event | None = None) -> str:
         """LLM 해결 권한을 배너당 하나로 조정한다(single-flight).
 
         `tried_reuse=True`면 호출자가 이미 playbook 재사용을 시도했으나 이 표적에 안 맞았다는
@@ -82,7 +85,13 @@ class Playbook:
                 self._inflight[banner_fp] = threading.Event()
                 return "solve"
             event = self._inflight[banner_fp]
-        event.wait(wait_timeout)
+        deadline = time.monotonic() + max(0.0, wait_timeout)
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                return "skip"
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or event.wait(min(STOP_POLL_INTERVAL, remaining)):
+                break
         with self._lock:
             if not tried_reuse and banner_fp in self._by_fp:
                 return "reuse"
@@ -99,14 +108,6 @@ class Playbook:
         with self._lock:
             event = self._inflight.pop(banner_fp, None)
         if event is not None:
-            event.set()
-
-    def cancel_inflight(self) -> None:
-        """종료 시 single-flight 대기자를 즉시 깨운다."""
-        with self._lock:
-            events = tuple(self._inflight.values())
-            self._inflight.clear()
-        for event in events:
             event.set()
 
     def clear(self) -> None:

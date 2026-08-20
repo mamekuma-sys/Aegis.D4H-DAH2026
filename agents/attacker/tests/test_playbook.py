@@ -59,21 +59,24 @@ class TestPlaybook(unittest.TestCase):
 
 
 class TestSingleFlight(unittest.TestCase):
-    def test_cancel_inflight_wakes_waiter(self):
+    def test_stop_event_wakes_waiter_without_mutating_playbook_from_signal_path(self):
         pb = Playbook()
         self.assertEqual(pb.claim_or_wait("fp"), "solve")
         results = []
+        stop = threading.Event()
 
         waiter = threading.Thread(
-            target=lambda: results.append(pb.claim_or_wait("fp", wait_timeout=5.0))
+            target=lambda: results.append(
+                pb.claim_or_wait("fp", wait_timeout=5.0, stop_event=stop)
+            )
         )
         waiter.start()
         time.sleep(0.02)
-        pb.cancel_inflight()
+        stop.set()
         waiter.join(0.5)
 
         self.assertFalse(waiter.is_alive())
-        self.assertEqual(results, ["solve"])
+        self.assertEqual(results, ["skip"])
 
     def test_first_caller_solves_others_wait_then_reuse(self):
         pb = Playbook()

@@ -51,6 +51,7 @@ LOOP_SLEEP = 4.0
 PER_TARGET_BUDGET = 1
 MAX_EVASION_VARIANTS = 6
 ENDPOINT_RETRY_COOLDOWN = 30.0
+BOOTSTRAP_RETRY_COOLDOWN = 1.0
 PLAN_TTL = 30.0
 EVIDENCE_TTL = 90.0
 ROUND_DURATION = 20 * 60.0  # Round 20분 → 제출 재시도 경계
@@ -86,14 +87,13 @@ class AttackerRuntime:
         self._state_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._completed_endpoints = set()
+        self._responsive_endpoints = set()
         self._endpoint_retry_state = {}
         self._latest_evidence_refs = {}
 
     def request_stop(self) -> None:
-        """새 요청을 중단하고 single-flight 대기 worker를 깨운다."""
+        """새 요청을 중단한다. signal handler에서는 lock을 획득하지 않는다."""
         self._stop_event.set()
-        if self._playbook is not None:
-            self._playbook.cancel_inflight()
 
     # ---- Round 컨텍스트 구성 ----
 
@@ -125,6 +125,7 @@ class AttackerRuntime:
         self._playbook = Playbook()  # Round 한정 교차 재사용(비밀 없음)
         with self._state_lock:
             self._completed_endpoints.clear()
+            self._responsive_endpoints.clear()
             self._endpoint_retry_state.clear()
             self._latest_evidence_refs.clear()
 
@@ -477,6 +478,9 @@ class AttackerRuntime:
             self._report.record_observation()
             self._report.record_request()
             self._remember_evidence(endpoint, tcp_obs.evidence_ref)
+            if tcp_resp.status != 0:
+                with self._state_lock:
+                    self._responsive_endpoints.add(endpoint.endpoint_id)
             captured = self._process_flags(tcp_resp.body, tcp_resp.headers)
             if captured:
                 self.audit.log(
@@ -489,6 +493,9 @@ class AttackerRuntime:
                 reason="no-http-https-or-passive-banner",
             )
             return False
+
+        with self._state_lock:
+            self._responsive_endpoints.add(endpoint.endpoint_id)
 
         if endpoint.scheme == "https":
             self.audit.log("protocol-observed", target=endpoint.key(), scheme="https")
@@ -579,7 +586,11 @@ class AttackerRuntime:
                     return True
                 if result is not None:
                     current_evidence = result.observation.evidence_ref
-            slot = self._playbook.claim_or_wait(banner_fp, tried_reuse=tried_reuse)
+            slot = self._playbook.claim_or_wait(
+                banner_fp,
+                tried_reuse=tried_reuse,
+                stop_event=self._stop_event,
+            )
             if self._stop_event.is_set():
                 return captured_any
             if slot == "reuse":
@@ -718,17 +729,25 @@ class AttackerRuntime:
                     self._endpoint_retry_state.pop(key, None)
                 else:
                     generation = self._playbook.generation
+                    responsive = key in self._responsive_endpoints
+                    cooldown = (
+                        ENDPOINT_RETRY_COOLDOWN
+                        if responsive
+                        else BOOTSTRAP_RETRY_COOLDOWN
+                    )
                     self._endpoint_retry_state[key] = (
-                        self.clock() + ENDPOINT_RETRY_COOLDOWN,
+                        self.clock() + cooldown,
                         generation,
                     )
                     scheduled = generation
+                    scheduled_cooldown = cooldown
             if scheduled is not None:
                 self.audit.log(
                     "endpoint-retry-scheduled",
                     target=endpoint.key(),
-                    reason=stop_reason,
-                    cooldown_seconds=ENDPOINT_RETRY_COOLDOWN,
+                    reason=(stop_reason if scheduled_cooldown == ENDPOINT_RETRY_COOLDOWN
+                            else "bootstrap-no-response"),
+                    cooldown_seconds=scheduled_cooldown,
                     playbook_generation=scheduled,
                 )
 
