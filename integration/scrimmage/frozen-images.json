@@ -18,8 +18,8 @@
       "platform": "linux/amd64"
     },
     "D1": {
-      "commit": "a888fe45bf1907ed607b99714537439d626138e0",
-      "reference": "aegis/scrimmage-candidate-defender@sha256:05214f87bd4bb721ecc4f01c28cc11e5b4492ad3c4a68e555ee37e07bdca5b16",
+      "commit": "503332f92843316fb7d9c85ad604eea0c09ce3b9",
+      "reference": "aegis/scrimmage-candidate-defender@sha256:08fb5675ea3ce7ef39c4cf0d6055b2f1352a5c8d5a6681a5aa947208fc189aba",
       "platform": "linux/amd64"
     }
   }
