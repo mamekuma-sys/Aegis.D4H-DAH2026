@@ -11,7 +11,10 @@ htmlcov/
 tmp/
 .worktrees/
 output/
+capture/
 captures/
+log/
+logs/
 archives/
 *.pcap
 *.pcapng

@@ -1,0 +1,9 @@
+services:
+  team1-attacker:
+    image: ${AEGIS_SCRIMMAGE_ATTACKER_IMAGE:?set AEGIS_SCRIMMAGE_ATTACKER_IMAGE}
+    pull_policy: never
+    platform: linux/amd64
+  team1-defender:
+    image: ${AEGIS_SCRIMMAGE_DEFENDER_IMAGE:?set AEGIS_SCRIMMAGE_DEFENDER_IMAGE}
+    pull_policy: never
+    platform: linux/amd64

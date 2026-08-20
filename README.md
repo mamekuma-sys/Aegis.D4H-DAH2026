@@ -54,9 +54,37 @@ bash scripts/replay-defender-pcaps.sh capture \
 
 외부 스켈레톤 검증 방법은 [`integration/README.md`](integration/README.md)를 따릅니다.
 
+## 라운드 사이 Break Copilot
+
+본선 capture/log가 들어오면 원본을 Git이나 LLM에 직접 넣지 않고 비식별 manifest로 변환한 뒤,
+Sol 분석 → Codex 단일-side diff → 격리 worktree → 고정 테스트·replay → 사람/AI 루브릭 순서로
+검증할 수 있습니다.
+
+```powershell
+pwsh -NoProfile -File scripts/break-copilot.ps1 preflight --require-llm --require-docker
+pwsh -NoProfile -File scripts/break-copilot.ps1 run --input <capture-or-log> `
+  --side defender --candidate <new-candidate-path> --base-ref HEAD
+```
+
+macOS zsh에서는 같은 Python 코어를 다음 진입점으로 실행합니다.
+
+```zsh
+zsh scripts/macos-preflight.zsh --require-llm --skeleton <스켈레톤-루트>
+zsh scripts/break-copilot.zsh run --input <capture-or-log> \
+  --side defender --candidate <new-candidate-path> --base-ref HEAD
+```
+
+도구는 자동으로 Registry를 변경하지 않습니다. 최종 commit에 결속된 `PASS` 평가, `READY` 루브릭,
+agent owner·team lead·Docker owner의 승인이 모두 일치해야 build가 가능하고, 명시적 `-Push`가 있어야
+`latest`를 push합니다. 상세 절차는
+[`Break Copilot 운영 프로토콜`](docs/validation/break-copilot-protocol.md)을 따릅니다.
+맥 본선 노트북 준비와 zsh·PowerShell 병행 명령은
+[`macOS 본선 Break 운영 런북`](docs/validation/macos-finals-runbook.md)에 있습니다.
+
 ## CI
 
-모든 push와 pull request에서 저장소 경계·스켈레톤 검증기, 공격·방어 단위 테스트와
+모든 push와 pull request에서 저장소 경계·스켈레톤 검증기, Break Copilot 안전 게이트,
+공격·방어 단위 테스트와
 두 독립 `linux/amd64` 이미지의 clean build·inspect 검증을 실행합니다.
 
 ## 다음 검증 게이트

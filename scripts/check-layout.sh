@@ -29,6 +29,12 @@ required_files=(
     'contracts/defender/README.md'
     'contracts/llm/README.md'
     'contracts/llm/model-quotas.json'
+    'contracts/break-copilot/readiness.schema.json'
+    'contracts/break-copilot/approval.schema.json'
+    'contracts/break-copilot/combined-rubric.schema.json'
+    'contracts/break-copilot/manifest.schema.json'
+    'contracts/break-copilot/evaluation.schema.json'
+    'contracts/break-copilot/scrimmage.schema.json'
     'contracts/fixtures/README.md'
     'docs/architecture.md'
     'docs/development-setup.md'
@@ -45,16 +51,33 @@ required_files=(
     'research/defense-mapping.md'
     'scripts/check-layout.sh'
     'scripts/replay-defender-pcaps.sh'
+    'scripts/break-copilot.ps1'
+    'scripts/break-copilot.zsh'
+    'scripts/macos-preflight.zsh'
+    'scripts/break_copilot/__main__.py'
+    'scripts/break_copilot/cli.py'
     'scripts/validate-skeleton.sh'
     'scripts/validate-skeleton.ps1'
     'scripts/tests/test-shell-entrypoints.sh'
     'scripts/tests/test-validate-skeleton.ps1'
     'scripts/tests/test-compose-agents-override.ps1'
+    'scripts/tests/test-break-copilot-powershell.ps1'
+    'scripts/tests/test-macos-entrypoints.zsh'
     'integration/compose.agents.yml'
     'integration/run-with-skeleton.sh'
     'integration/run-with-skeleton.ps1'
     'integration/attacker-deploy.md'
     'integration/defender-deploy.md'
+    'integration/promote-candidate.ps1'
+    'integration/promote-candidate.zsh'
+    'integration/scrimmage/compose.images.yml'
+    'integration/scrimmage/run-scrimmage.ps1'
+    'integration/scrimmage/run-scrimmage.zsh'
+    'integration/scrimmage/compare_results.py'
+    'docs/validation/break-copilot-protocol.md'
+    'docs/validation/readiness-rubric.md'
+    'docs/validation/scrimmage-protocol.md'
+    'docs/validation/macos-finals-runbook.md'
 )
 
 missing=()
@@ -84,7 +107,7 @@ windows_home_pattern='[A-Z]:\\Users\\[^\\[:space:]]+\\'
 while IFS= read -r -d '' relative_path; do
     basename="${relative_path##*/}"
     case "$relative_path" in
-        *.pdf|*.zip|*.tar|*.gz|*.pcap|*.pcapng)
+        *.pdf|*.zip|*.tar|*.gz|*.pcap|*.pcapng|*.log|capture/*|captures/*|log/*|logs/*|output/*|tmp/*)
             tracked_artifacts+=("$relative_path")
             ;;
     esac
