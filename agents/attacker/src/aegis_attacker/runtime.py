@@ -615,22 +615,51 @@ class AttackerRuntime:
             next_attempt, seen_generation = self._endpoint_retry_state.get(key, (0.0, -1))
         generation = self._playbook.generation
         if now < next_attempt and generation <= seen_generation:
+            self.audit.log(
+                "endpoint-deferred",
+                target=endpoint.key(),
+                reason="cooldown",
+                remaining_seconds=round(next_attempt - now, 3),
+                playbook_generation=generation,
+                seen_generation=seen_generation,
+            )
             return
+        if now < next_attempt and generation > seen_generation:
+            self.audit.log(
+                "endpoint-retry-released",
+                target=endpoint.key(),
+                reason="new-playbook-generation",
+                playbook_generation=generation,
+                seen_generation=seen_generation,
+            )
         captured = False
+        stop_reason = "no-accepted-flag"
         try:
             captured = self.attack_endpoint(endpoint)
         except Exception as exc:  # 표적 단위 격리
+            stop_reason = type(exc).__name__
             self.audit.log("error", target=endpoint.key(), error=type(exc).__name__)
         finally:
+            scheduled = None
             with self._state_lock:
                 if captured:
                     self._completed_endpoints.add(key)
                     self._endpoint_retry_state.pop(key, None)
                 else:
+                    generation = self._playbook.generation
                     self._endpoint_retry_state[key] = (
                         self.clock() + ENDPOINT_RETRY_COOLDOWN,
-                        self._playbook.generation,
+                        generation,
                     )
+                    scheduled = generation
+            if scheduled is not None:
+                self.audit.log(
+                    "endpoint-retry-scheduled",
+                    target=endpoint.key(),
+                    reason=stop_reason,
+                    cooldown_seconds=ENDPOINT_RETRY_COOLDOWN,
+                    playbook_generation=scheduled,
+                )
 
     def run_cycle(self) -> RoundReport:
         """열린 Round에서 엔드포인트 전체를 한 번 공격한다(병렬, 전역 rate limit 공유).

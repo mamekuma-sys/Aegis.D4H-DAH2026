@@ -41,6 +41,7 @@ class WorkerWatchdog:
         audit: AuditLogger | None = None,
         runtime_stop: threading.Event | None = None,
         on_critical_restart: Callable[[str], None] | None = None,
+        on_tick: Callable[[], None] | None = None,
         interval: float = WATCHDOG_INTERVAL_SECONDS,
     ) -> None:
         self._probes = probes
@@ -48,6 +49,7 @@ class WorkerWatchdog:
         self._audit = audit
         self._runtime_stop = runtime_stop or threading.Event()
         self._on_critical_restart = on_critical_restart
+        self._on_tick = on_tick
         self._interval = max(0.05, float(interval))
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -137,6 +139,11 @@ class WorkerWatchdog:
                         worker=probe.name,
                         reason=type(exc).__name__,
                     )
+        if self._on_tick is not None:
+            try:
+                self._on_tick()
+            except Exception as exc:  # noqa: BLE001 - 관측 실패가 watchdog을 죽이지 않는다
+                self._log("watchdog-tick-failed", reason=type(exc).__name__)
         return tuple(restarted)
 
     def _count(self, name: str) -> None:

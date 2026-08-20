@@ -42,7 +42,7 @@ class TestLinuxSeqpacketTransport(unittest.TestCase):
     def _require_seqpacket(self):
         try:
             first, second = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-        except OSError as exc:
+        except (AttributeError, OSError) as exc:
             self.skipTest(f"AF_UNIX/SOCK_SEQPACKET unavailable: {type(exc).__name__}")
         first.close()
         second.close()
@@ -52,7 +52,7 @@ class TestLinuxSeqpacketTransport(unittest.TestCase):
             writer_socket, broker_socket = socket.socketpair(
                 socket.AF_UNIX, socket.SOCK_SEQPACKET
             )
-        except OSError as exc:
+        except (AttributeError, OSError) as exc:
             self.skipTest(f"AF_UNIX/SOCK_SEQPACKET unavailable: {type(exc).__name__}")
 
         try:

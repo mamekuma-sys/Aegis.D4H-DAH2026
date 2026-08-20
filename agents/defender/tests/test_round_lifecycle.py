@@ -28,7 +28,12 @@ from aegis_defender.config import (
     load_config,
 )
 from aegis_defender.logging import AuditLogger
-from aegis_defender.main import DefenderRuntime, MAX_OBSERVED_SERVICES
+from aegis_defender.main import (
+    DefenderRuntime,
+    HEALTH_SUMMARY_INTERVAL_SECONDS,
+    MAX_OBSERVED_SERVICES,
+)
+from aegis_defender.metrics import L_HOT_PATH, M_VERDICT_ACCEPT
 from aegis_defender.packet import ObservedTrafficProfile
 from aegis_defender.protocol import (
     MSG_VERDICT,
@@ -95,6 +100,17 @@ class RuntimeHarness:
 
     def heartbeats(self):
         return [frame for frame in self.transport.sent if frame == HEARTBEAT_FRAME]
+
+
+class FakeMonotonic:
+    def __init__(self):
+        self.value = 0.0
+
+    def __call__(self):
+        return self.value
+
+    def advance(self, seconds):
+        self.value += seconds
 
 
 class TestRuntimeConfig(unittest.TestCase):
@@ -365,6 +381,31 @@ class TestShutdown(unittest.TestCase):
         self.assertIn("verdict_send_e2e", shutdown[0])
         self.assertGreaterEqual(shutdown[0]["verdict_send_e2e"]["count"], 1.0)
         self.assertEqual(shutdown[0]["advisory"]["calls"], 0)
+
+
+class TestPeriodicHealthSummary(unittest.TestCase):
+    def test_health_summary_reports_operational_evidence_outside_hot_path(self):
+        clock = FakeMonotonic()
+        stream = io.StringIO()
+        runtime = DefenderRuntime(
+            config(), clock=clock, audit=AuditLogger(stream=stream)
+        )
+        runtime.metrics.incr(M_VERDICT_ACCEPT, 2)
+        runtime.metrics.observe(L_HOT_PATH, 0.0001)
+
+        runtime._emit_health_summary_if_due()
+        clock.advance(HEALTH_SUMMARY_INTERVAL_SECONDS)
+        runtime._emit_health_summary_if_due()
+        runtime._emit_health_summary_if_due()
+
+        events = [json.loads(line) for line in stream.getvalue().splitlines() if line]
+        health = [line for line in events if line["event"] == "health-summary"]
+        self.assertEqual(len(health), 1)
+        self.assertEqual(health[0]["bundle_id"], runtime.policy_report.bundle_id)
+        self.assertEqual(health[0]["counters"][M_VERDICT_ACCEPT], 2)
+        self.assertEqual(health[0]["hot_path"]["count"], 1.0)
+        self.assertIn("verdict_send_e2e", health[0])
+        self.assertEqual(health[0]["audit_dropped"], 0)
 
 
 class TestRoundStateBoundary(unittest.TestCase):

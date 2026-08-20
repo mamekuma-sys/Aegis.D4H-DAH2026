@@ -7,11 +7,27 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 
 from .audit import AuditLogger
 from .config import ConfigError, load_config
 from .runtime import AttackerRuntime
+
+
+def install_signal_handlers(runtime: AttackerRuntime) -> None:
+    """컨테이너 종료 신호를 정상적인 라운드 종료 경로로 전환한다."""
+
+    def _handle_signal(signum: int, _frame: object) -> None:
+        runtime.audit.log("signal", signum=signum)
+        raise KeyboardInterrupt
+
+    for received_signal in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(received_signal, _handle_signal)
+        except (OSError, ValueError):
+            # 메인 스레드가 아니거나 플랫폼이 신호를 지원하지 않는 테스트 환경.
+            continue
 
 
 def main() -> int:
@@ -20,7 +36,9 @@ def main() -> int:
     except ConfigError as exc:
         AuditLogger().log("config-error", error=str(exc))
         return 1
-    AttackerRuntime(config).run_forever()
+    runtime = AttackerRuntime(config)
+    install_signal_handlers(runtime)
+    runtime.run_forever()
     return 0
 
 

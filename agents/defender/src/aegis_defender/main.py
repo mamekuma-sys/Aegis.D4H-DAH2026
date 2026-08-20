@@ -63,6 +63,7 @@ from .watchdog import WorkerProbe, WorkerWatchdog
 
 SHUTDOWN_JOIN_TIMEOUT = 2.0
 ANOMALY_EVALUATION_INTERVAL = 10.0
+HEALTH_SUMMARY_INTERVAL_SECONDS = 60.0
 MAX_OBSERVED_SERVICES = 64
 
 
@@ -82,6 +83,7 @@ class DefenderRuntime:
         self.metrics = metrics or Metrics()
         self.audit = audit or AuditLogger()
         self.stop_event = threading.Event()
+        self._last_health_summary = self.clock()
 
         compiled, report = load_policy(config.policy_dir)
         self.policy_report = report
@@ -153,6 +155,7 @@ class DefenderRuntime:
             audit=self.audit,
             runtime_stop=self.stop_event,
             on_critical_restart=self._on_critical_worker_restart,
+            on_tick=self._emit_health_summary_if_due,
         )
         self._last_anomaly_check = 0.0
         # producer 한 곳에서만 갱신하는 Round 한정 관측 목록. 본선 L4의 포트/프로토콜을
@@ -282,6 +285,29 @@ class DefenderRuntime:
         # writer/heartbeat가 죽었던 session의 queue와 epoch를 그대로 재사용하지
         # 않는다. 새 generation으로 넘겨 stale verdict replay를 구조적으로 막는다.
         self.session.request_reconnect(f"watchdog-restarted:{worker}")
+
+    def _emit_health_summary_if_due(self) -> None:
+        """저빈도 운영 요약을 watchdog 스레드에서 기록한다.
+
+        packet producer나 SocketWriter에서 snapshot 정렬·JSON 직렬화를 하지 않는다.
+        따라서 로그 I/O와 percentile 계산은 300ms verdict hot path 밖에 있다.
+        """
+        now = self.clock()
+        if now - self._last_health_summary < HEALTH_SUMMARY_INTERVAL_SECONDS:
+            return
+        self._last_health_summary = now
+        self.audit.log(
+            "health-summary",
+            policy_source=self.policy_report.source,
+            bundle_id=self.policy_report.bundle_id,
+            drop_capable_rules=self.policy_report.drop_capable_rules,
+            sessions=self.session.sessions_opened,
+            heartbeats=self.heartbeat.sent_count,
+            audit_dropped=self.audit.dropped,
+            counters=self.metrics.counters(),
+            hot_path=self.metrics.latency_summary(L_HOT_PATH),
+            verdict_send_e2e=self.metrics.latency_summary(L_VERDICT_SEND_E2E),
+        )
 
     def start_workers(self) -> None:
         self.audit.start()

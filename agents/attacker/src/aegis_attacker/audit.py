@@ -10,6 +10,7 @@ import json
 import re
 import sys
 import threading
+import time
 
 FLAG_PATTERN = re.compile(r"FLAG\{[^{}\r\n]{1,1024}\}")
 FLAG_PLACEHOLDER = "[FLAG]"
@@ -48,14 +49,18 @@ class Redactor:
 class AuditLogger:
     """한 줄 JSON 구조화 로그. sink 주입 가능(테스트)."""
 
-    def __init__(self, redactor: Redactor = None, sink=None):
+    def __init__(self, redactor: Redactor = None, sink=None, clock=time.time):
         self._redactor = redactor or Redactor()
         self._sink = sink or (lambda line: print(line, file=sys.stderr, flush=True))
+        self._clock = clock
         self._lock = threading.Lock()
 
     def log(self, event: str, **fields) -> None:
-        record = {"event": event}
-        record.update(self._redactor.scrub_obj(fields))
+        record = self._redactor.scrub_obj(fields)
+        # 상관분석 기준 필드는 호출자가 덮어쓸 수 없다. 임의 ``ts``가 실제
+        # capture 시간축을 오염시키면 감사 로그 전체가 증거로서 무효가 된다.
+        record["ts"] = round(self._clock(), 3)
+        record["event"] = event
         line = json.dumps(record, ensure_ascii=False, sort_keys=True)
         with self._lock:  # 병렬 로그 라인 섞임 방지
             self._sink(line)

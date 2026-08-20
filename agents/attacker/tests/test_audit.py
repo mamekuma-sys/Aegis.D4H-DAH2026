@@ -37,6 +37,25 @@ class TestRedactor(unittest.TestCase):
 
 
 class TestAuditLogger(unittest.TestCase):
+    def test_log_line_has_injectable_epoch_timestamp(self):
+        lines = []
+        logger = AuditLogger(sink=lines.append, clock=lambda: 1786796407.247)
+
+        logger.log("attack", status=200)
+
+        rec = json.loads(lines[0])
+        self.assertEqual(rec["ts"], 1786796407.247)
+        self.assertEqual(rec["event"], "attack")
+
+    def test_caller_cannot_override_audit_timestamp(self):
+        lines = []
+        logger = AuditLogger(sink=lines.append, clock=lambda: 1786796407.247)
+
+        logger.log("attack", ts=0.0)
+
+        rec = json.loads(lines[0])
+        self.assertEqual(rec["ts"], 1786796407.247)
+
     def test_log_line_has_no_secrets(self):
         lines = []
         logger = AuditLogger(Redactor(secrets={"tok-team1"}), sink=lines.append)

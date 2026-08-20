@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
+from aegis_attacker.audit import AuditLogger
 from aegis_attacker.config import AttackerConfig
 from aegis_attacker.models import SubmitState
 from aegis_attacker.observation import HttpResponse
@@ -288,6 +289,35 @@ class TestRuntimeResilience(unittest.TestCase):
             self.assertEqual(rt._report.summary()["requests_made"], after_first)
         finally:
             rt.finish_round()
+
+    def test_unsolved_endpoint_retry_and_cooldown_are_auditable(self):
+        arena = FakeArena(
+            "plain service", "/never", "FLAG{never}",
+            flag_when=lambda full: False, llm_status=500,
+        )
+        clk = FakeClock()
+        lines = []
+        rt = AttackerRuntime(
+            make_cfg(), http=arena, clock=clk,
+            sleep=lambda dt: clk.advance(dt),
+            audit=AuditLogger(sink=lines.append, clock=clk),
+        )
+        rt.start_round()
+        try:
+            rt.run_cycle()
+            rt.run_cycle()
+        finally:
+            rt.finish_round()
+
+        events = [json.loads(line) for line in lines]
+        scheduled = [line for line in events if line["event"] == "endpoint-retry-scheduled"]
+        deferred = [line for line in events if line["event"] == "endpoint-deferred"]
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0]["reason"], "no-accepted-flag")
+        self.assertEqual(scheduled[0]["cooldown_seconds"], 30.0)
+        self.assertEqual(len(deferred), 1)
+        self.assertEqual(deferred[0]["reason"], "cooldown")
+        self.assertGreater(deferred[0]["remaining_seconds"], 0.0)
 
     def test_expired_evidence_is_refreshed_before_llm_plan_execution(self):
         clk = FakeClock()

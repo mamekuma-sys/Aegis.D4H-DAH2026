@@ -101,6 +101,14 @@ class TestWorkerWatchdog(unittest.TestCase):
         self.assertEqual(watchdog.check_once(), ())
         self.assertEqual(worker.starts, 0)
 
+    def test_check_tick_invokes_noncritical_observer(self):
+        ticks = []
+        watchdog = WorkerWatchdog((), on_tick=lambda: ticks.append("tick"))
+
+        self.assertEqual(watchdog.check_once(), ())
+
+        self.assertEqual(ticks, ["tick"])
+
 
 if __name__ == "__main__":
     unittest.main()
