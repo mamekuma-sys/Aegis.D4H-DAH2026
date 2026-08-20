@@ -20,7 +20,8 @@ if (-not (Test-Path -LiteralPath $resultSchemaPath -PathType Leaf)) {
 }
 $matrices = @('A0D0', 'A1D0', 'A0D1', 'A1D1')
 $forbidden = @('FLAG{', 'tok-team', 'sk-local', 'SUBMIT_TOKEN', 'LLM_API_KEY')
-$files = @(Get-ChildItem -LiteralPath $ResultRoot -Recurse -Filter result.json -File)
+$files = @(Get-ChildItem -LiteralPath $ResultRoot -Recurse -Filter result.json -File |
+    Sort-Object FullName)
 if ($files.Count -eq 0) { throw 'no result.json files found' }
 
 function Get-NumericProperty($value, [string]$name) {
@@ -334,13 +335,13 @@ $gates = [ordered]@{
 }
 
 $areas = [ordered]@{
-    evidence_traceability = @{ weight = 15; ai = $(if ($coverageOk -and $integrityOk) { 2 } else { 1 }) }
-    attack_effectiveness = @{ weight = 20; ai = $(if ($attackAnyGain -and $attackNoRegression) { 2 } else { 1 }) }
-    defense_effect_availability = @{ weight = 25; ai = $(if ($defenseOk -and $defenseNoRegression) { 2 } else { 1 }) }
-    generalization_adaptability = @{ weight = 15; ai = $(if ($coverageOk -and $ExpectedSeeds.Count -ge 3) { 2 } else { 1 }) }
-    performance_resilience = @{ weight = 15; ai = $(if ($defenseOk) { 2 } else { 1 }) }
-    operational_reproducibility = @{ weight = 5; ai = $(if ($isolationOk -and $coverageOk) { 2 } else { 1 }) }
-    llm_cost_observability = @{ weight = 5; ai = $(if ($isolationOk -and $integrityOk) { 2 } else { 1 }) }
+    evidence_traceability = [ordered]@{ weight = 15; ai = $(if ($coverageOk -and $integrityOk) { 2 } else { 1 }) }
+    attack_effectiveness = [ordered]@{ weight = 20; ai = $(if ($attackAnyGain -and $attackNoRegression) { 2 } else { 1 }) }
+    defense_effect_availability = [ordered]@{ weight = 25; ai = $(if ($defenseOk -and $defenseNoRegression) { 2 } else { 1 }) }
+    generalization_adaptability = [ordered]@{ weight = 15; ai = $(if ($coverageOk -and $ExpectedSeeds.Count -ge 3) { 2 } else { 1 }) }
+    performance_resilience = [ordered]@{ weight = 15; ai = $(if ($defenseOk) { 2 } else { 1 }) }
+    operational_reproducibility = [ordered]@{ weight = 5; ai = $(if ($isolationOk -and $coverageOk) { 2 } else { 1 }) }
+    llm_cost_observability = [ordered]@{ weight = 5; ai = $(if ($isolationOk -and $integrityOk) { 2 } else { 1 }) }
 }
 
 $humanPending = $HumanScoreFile -eq 'PENDING' -or -not (Test-Path -LiteralPath $HumanScoreFile -PathType Leaf)
