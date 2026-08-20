@@ -84,9 +84,16 @@ class AttackerRuntime:
         self._playbook = None
         self._round_active = False
         self._state_lock = threading.Lock()
+        self._stop_event = threading.Event()
         self._completed_endpoints = set()
         self._endpoint_retry_state = {}
         self._latest_evidence_refs = {}
+
+    def request_stop(self) -> None:
+        """새 요청을 중단하고 single-flight 대기 worker를 깨운다."""
+        self._stop_event.set()
+        if self._playbook is not None:
+            self._playbook.cancel_inflight()
 
     # ---- Round 컨텍스트 구성 ----
 
@@ -218,6 +225,8 @@ class AttackerRuntime:
         first_success = None
         for variant in evasion_variants(
                 plan.args["path"], endpoint_port=plan.target.port)[:MAX_EVASION_VARIANTS]:
+            if self._stop_event.is_set():
+                break
             now = self.clock()
             vplan = ExecutionPlan(
                 tool=plan.tool, target=plan.target,
@@ -235,6 +244,8 @@ class AttackerRuntime:
                 return None, False
             self._report.record_request()
             self._remember_evidence(plan.target, vresult.observation.evidence_ref)
+            if self._stop_event.is_set():
+                break
             if self._process_flags(vresult.body, vresult.observation.redacted_header_hints):
                 return vresult, True
             if vresult.outcome == Outcome.SUCCESS and first_success is None:
@@ -252,6 +263,8 @@ class AttackerRuntime:
         discovery = []
         captured_any = False
         for path in COMMON_PROBE_PATHS:
+            if self._stop_event.is_set():
+                break
             now = self.clock()
             plan = ExecutionPlan(
                 tool="http", target=endpoint, args={"method": "GET", "path": path},
@@ -268,6 +281,8 @@ class AttackerRuntime:
             self._report.record_request()
             evidence_ref = result.observation.evidence_ref  # 다음 프로브용 신선한 증거
             self._remember_evidence(endpoint, evidence_ref)
+            if self._stop_event.is_set():
+                break
             if self._process_flags(result.body, result.observation.redacted_header_hints):
                 self.audit.log("hit", target=endpoint.key(), path=path, reason="recon")
                 captured_any = True
@@ -280,6 +295,8 @@ class AttackerRuntime:
 
     def _run_bound_exploit(self, endpoint, args, evidence_ref, reason):
         """비밀 없는 exploit 형태(method·path)를 READ_ONLY 계획으로 실행한다(playbook 재사용용)."""
+        if self._stop_event.is_set():
+            return None, False
         now = self.clock()
         plan = ExecutionPlan(
             tool="http", target=endpoint,
@@ -297,6 +314,8 @@ class AttackerRuntime:
             return None, False
         self._report.record_request()
         self._remember_evidence(endpoint, result.observation.evidence_ref)
+        if self._stop_event.is_set():
+            return result, False
         captured = self._process_flags(result.body, result.observation.redacted_header_hints)
         if not captured and result.outcome == Outcome.TIMEOUT:
             evaded, captured = self._try_evasion(plan, result.observation.evidence_ref)
@@ -311,6 +330,8 @@ class AttackerRuntime:
 
         무응답(필터 DROP)이면 경로 재인코딩 evasion 변형으로 재시도한다.
         """
+        if self._stop_event.is_set():
+            return None, False
         now = self.clock()
         plan = ExecutionPlan(
             tool="http", target=endpoint,
@@ -329,6 +350,8 @@ class AttackerRuntime:
             return None, False
         self._report.record_request()
         self._remember_evidence(endpoint, result.observation.evidence_ref)
+        if self._stop_event.is_set():
+            return result, False
         if self._process_flags(result.body, result.observation.redacted_header_hints):
             return result, True
         if result.outcome == Outcome.TIMEOUT:
@@ -372,6 +395,8 @@ class AttackerRuntime:
 
         def run(attempt) -> bool:
             nonlocal evidence_ref, cookie_name, cookie_val, captured_any
+            if self._stop_event.is_set():
+                return False
             attempt_key = (
                 attempt.method,
                 attempt.path,
@@ -415,26 +440,36 @@ class AttackerRuntime:
                 fresh = [u for u in extract_internal_urls(result.body) if u not in pivoted]
                 pivoted.update(fresh)
                 for pivot in ssrf_pivot_attempts(base, param, fresh):
+                    if self._stop_event.is_set():
+                        break
                     run(pivot)
             return captured
 
         for attempt in attempts:
+            if self._stop_event.is_set():
+                break
             run(attempt)
 
         # AUTH 세션 변조 — 노출된 토큰을 관리자 권한으로 올려 재전송한다
         if include_cookie_tamper and not observed_only and cookie_name and cookie_val:
             tokens = tamper_token(cookie_val)
             for attempt in auth_tamper_attempts(cookie_name, tokens):
+                if self._stop_event.is_set():
+                    break
                 run(attempt)
         return captured_any
 
     # ---- 단일 표적 공격 ----
 
     def attack_endpoint(self, endpoint) -> bool:
+        if self._stop_event.is_set():
+            return False
         obs, resp = self._observer.observe_banner(endpoint)
         self._report.record_observation()
         self._report.record_request()
         self._remember_evidence(endpoint, obs.evidence_ref)
+        if self._stop_event.is_set():
+            return False
         if obs.no_response:
             self.audit.log("skip", target=endpoint.key(), reason="no-response")
             return False
@@ -460,6 +495,8 @@ class AttackerRuntime:
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
                 attempts=confirmed, attempted_keys=attempted_keys,
                 include_cookie_tamper=False) or captured_any
+        if self._stop_event.is_set():
+            return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # root 배너가 취약 부류를 직접 노출하면 정찰 sweep보다 먼저 zero-token 공격한다.
@@ -469,11 +506,15 @@ class AttackerRuntime:
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
                 attempted_keys=attempted_keys,
                 observed_only=observed_only) or captured_any
+        if self._stop_event.is_set():
+            return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # L4/UGV를 포함한 미지 인터페이스는 실제 probe 응답에서 route를 발견한 뒤에만 공격한다.
         captured, discovery, current_evidence = self._recon(endpoint, current_evidence)
         captured_any = captured or captured_any
+        if self._stop_event.is_set():
+            return captured_any
         observed_banner = "\n".join(part for part in (banner, discovery) if part)
 
         # 결정론적 exploit 엔진 — 관측된 route·parameter를 우선해 LLM 전에 실행한다.
@@ -481,6 +522,8 @@ class AttackerRuntime:
             endpoint, observed_banner, banner_fp, resp.headers, current_evidence,
             attempted_keys=attempted_keys,
             observed_only=observed_only) or captured_any
+        if self._stop_event.is_set():
+            return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # 플래그를 찾은 endpoint도 위 bounded 관측·결정론 세트는 끝까지 수행해 같은
@@ -494,7 +537,7 @@ class AttackerRuntime:
         # 11개 표적이 동시에 LLM을 두드리는 낭비를 막는다. 재사용이 이 표적에 안 맞으면
         # (표적 특정 exploit) 직접 LLM으로 이어서 푼다.
         tried_reuse = False
-        while True:
+        while not self._stop_event.is_set():
             known = self._playbook.lookup(banner_fp)
             if (known and observed_only
                     and not uses_observed_read_only_interface(known, observed_banner)):
@@ -516,6 +559,8 @@ class AttackerRuntime:
                 if result is not None:
                     current_evidence = result.observation.evidence_ref
             slot = self._playbook.claim_or_wait(banner_fp, tried_reuse=tried_reuse)
+            if self._stop_event.is_set():
+                return captured_any
             if slot == "reuse":
                 continue          # 대기 중 다른 표적이 새로 풀었다 — 새 항목으로 재시도
             if slot == "skip":
@@ -525,7 +570,8 @@ class AttackerRuntime:
         state = EndpointState(endpoint)
         feedback = ""
         try:
-            while not self._planner.should_stop(state):
+            while (not self._stop_event.is_set()
+                   and not self._planner.should_stop(state)):
                 state.turn += 1
                 # 승급 없이 저비용 기본 모델 고정 — 토큰 비용을 낮춰 동점 우위(제22조).
                 plan = self._planner.plan_next(endpoint, observed_banner, feedback, state,
@@ -607,6 +653,8 @@ class AttackerRuntime:
     # ---- 라운드 루프 ----
 
     def _attack_isolated(self, endpoint) -> None:
+        if self._stop_event.is_set():
+            return
         key = endpoint.endpoint_id
         now = self.clock()
         with self._state_lock:
@@ -645,6 +693,8 @@ class AttackerRuntime:
                 if captured:
                     self._completed_endpoints.add(key)
                     self._endpoint_retry_state.pop(key, None)
+                elif self._stop_event.is_set():
+                    self._endpoint_retry_state.pop(key, None)
                 else:
                     generation = self._playbook.generation
                     self._endpoint_retry_state[key] = (
@@ -673,7 +723,7 @@ class AttackerRuntime:
         if workers <= 1:
             # 순차(결정론) — 공정 스케줄러로 순회
             sched = FairScheduler(endpoints, per_target_budget=PER_TARGET_BUDGET)
-            while True:
+            while not self._stop_event.is_set():
                 endpoint = sched.next()
                 if endpoint is None:
                     break
@@ -682,7 +732,8 @@ class AttackerRuntime:
         else:
             # 병렬 — 표적별 스레드가 전역 rate limit·공유 상태(락)를 공유
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                for fut in [pool.submit(self._attack_isolated, e) for e in endpoints]:
+                for fut in [pool.submit(self._attack_isolated, e) for e in endpoints
+                            if not self._stop_event.is_set()]:
                     fut.result()
         return self._report
 
@@ -709,7 +760,8 @@ class AttackerRuntime:
         try:
             cycles = 0
             while ((max_cycles is None or cycles < max_cycles)
-                   and self.clock() < self._round_deadline):
+                   and self.clock() < self._round_deadline
+                   and not self._stop_event.is_set()):
                 report = self.run_cycle()
                 self.audit.log("round-summary", **report.summary())
                 cycles += 1

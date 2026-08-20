@@ -238,6 +238,16 @@ class TestRuntimeEndToEnd(unittest.TestCase):
 
 
 class TestRuntimeResilience(unittest.TestCase):
+    def test_stop_request_prevents_new_target_requests(self):
+        arena = FakeArena("service", "/unused", "irrelevant")
+        rt = make_runtime(arena)
+
+        rt.request_stop()
+        report = rt.run_once()
+
+        self.assertEqual(arena.target_requests, [])
+        self.assertEqual(report.summary()["requests_made"], 0)
+
     def test_run_forever_stops_at_round_deadline_and_wipes_secrets(self):
         class CycleOnlyRuntime(AttackerRuntime):
             def __init__(self, *args, **kwargs):

@@ -101,6 +101,14 @@ class Playbook:
         if event is not None:
             event.set()
 
+    def cancel_inflight(self) -> None:
+        """종료 시 single-flight 대기자를 즉시 깨운다."""
+        with self._lock:
+            events = tuple(self._inflight.values())
+            self._inflight.clear()
+        for event in events:
+            event.set()
+
     def clear(self) -> None:
         with self._lock:
             self._by_fp.clear()
