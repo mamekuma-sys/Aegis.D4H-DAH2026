@@ -42,7 +42,7 @@ from .planner import EndpointState, Planner
 from .playbook import Playbook
 from .profiles import service_fingerprint, suggest_vuln_classes
 from .rate_limit import RateLimiter
-from .recon import COMMON_PROBE_PATHS
+from .recon import COMMON_PROBE_PATHS, DISCOVERY_PROBE_PATHS
 from .round_report import RoundReport
 from .secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
 from .tools import ExecutionAdapter, PlanBindingError, evasion_variants
@@ -254,7 +254,7 @@ class AttackerRuntime:
 
     # ---- 결정론적 사전 정찰 (LLM 전, 토큰 0) ----
 
-    def _recon(self, endpoint, evidence_ref) -> tuple:
+    def _recon(self, endpoint, evidence_ref, discovery_only=False) -> tuple:
         """읽기 전용 probe 응답을 bounded discovery text로 돌려준다.
 
         L4/UGV의 구체 route는 사전 가정하지 않는다. `/status`·`robots.txt` 등 실제 응답이
@@ -262,7 +262,8 @@ class AttackerRuntime:
         """
         discovery = []
         captured_any = False
-        for path in COMMON_PROBE_PATHS:
+        probe_paths = DISCOVERY_PROBE_PATHS if discovery_only else COMMON_PROBE_PATHS
+        for path in probe_paths:
             if self._stop_event.is_set():
                 break
             now = self.clock()
@@ -511,7 +512,9 @@ class AttackerRuntime:
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # L4/UGV를 포함한 미지 인터페이스는 실제 probe 응답에서 route를 발견한 뒤에만 공격한다.
-        captured, discovery, current_evidence = self._recon(endpoint, current_evidence)
+        captured, discovery, current_evidence = self._recon(
+            endpoint, current_evidence, discovery_only=observed_only
+        )
         captured_any = captured or captured_any
         if self._stop_event.is_set():
             return captured_any

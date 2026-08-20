@@ -8,6 +8,9 @@ L2 관리자 session 위조·loopback secret/registry SSRF, L3 `app_meta` SQLi�
 endpoint당 최대 20회의 zero-token fast path로 일반 정찰보다 먼저 실행합니다. Phase 4
 UGV는 구체 인터페이스가 아직 관측되지 않았으므로 경로를 하드코딩하지 않습니다. root와 읽기 전용
 probe 응답이 실제로 노출한 route·parameter만 bounded discovery text로 다음 결정론 공격에 전달합니다.
+미확인 포트의 discovery는 상태·문서용 6개 GET으로 제한하고, parameter를 광고된 정확한 route에
+결속합니다. traversal·파괴적 action route는 실행하지 않으며, 포트별 인터페이스와 flag 상태를 섞지
+않습니다.
 
 공식 `PORTS`에 L1~L4가 함께 들어오면 알려진 데모 포트는 `L4→L1→L2→L3` wave로 섞습니다.
 새 UGV 레이어를 초반에 시작하면서도 이전 세 레이어를 모두 같은 wave에 유지합니다. 데모 포트가

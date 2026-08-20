@@ -878,6 +878,79 @@ class TestUgvObservedDiscovery(unittest.TestCase):
         exploit_queries = [path for path in arena.target_requests if "?" in path]
         self.assertTrue(exploit_queries)
         self.assertTrue(all(path.startswith("/telemetry?source=") for path in exploit_queries))
+        self.assertNotIn("/flag", arena.target_requests)
+        self.assertNotIn("/admin", arena.target_requests)
+        self.assertNotIn("/.git/config", arena.target_requests)
+
+    def test_multiple_l4_ports_keep_routes_scoped_and_collect_multiple_flags(self):
+        class MultiServiceUgvArena:
+            def __init__(self):
+                self.submits = []
+                self.llm_calls = 0
+                self.target_requests = {9001: [], 9002: []}
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                from urllib.parse import parse_qs, unquote, urlsplit
+
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
+                    return HttpResponse(500, "unused")
+
+                parts = urlsplit(url)
+                port = parts.port
+                full = parts.path + (("?" + parts.query) if parts.query else "")
+                self.target_requests[port].append(full)
+                if parts.path == "/" and not parts.query:
+                    return HttpResponse(200, "Phase 4 service online", {})
+                if parts.path == "/status":
+                    if port == 9001:
+                        return HttpResponse(200, "GET /telemetry?source=<url>", {})
+                    return HttpResponse(200, "GET /inspect?uri=<url>", {})
+
+                params = parse_qs(parts.query)
+                if port == 9001 and parts.path == "/telemetry":
+                    target = unquote((params.get("source") or [""])[0])
+                    if target == "http://127.0.0.1:9001/registry":
+                        return HttpResponse(200, "FLAG{synthetic_l4_service_a}", {})
+                if port == 9002 and parts.path == "/inspect":
+                    target = unquote((params.get("uri") or [""])[0])
+                    if target == "http://127.0.0.1:9002/registry":
+                        return HttpResponse(200, "FLAG{synthetic_l4_service_b}", {})
+                return HttpResponse(200, "online", {})
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(9001, 9002),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=2,
+        )
+        from aegis_attacker.rate_limit import RateLimiter
+        arena = MultiServiceUgvArena()
+        rt = AttackerRuntime(
+            cfg,
+            http=arena,
+            rate=RateLimiter(request_burst=10000, submit_max=10000),
+        )
+
+        report = rt.run_once()
+
+        self.assertEqual(report.accepted_count(), 2)
+        self.assertEqual(len(arena.submits), 2)
+        self.assertEqual(arena.llm_calls, 0)
+        self.assertTrue(any(path.startswith("/telemetry?source=")
+                            for path in arena.target_requests[9001]))
+        self.assertFalse(any(path.startswith("/inspect?")
+                             for path in arena.target_requests[9001]))
+        self.assertTrue(any(path.startswith("/inspect?uri=")
+                            for path in arena.target_requests[9002]))
+        self.assertFalse(any(path.startswith("/telemetry?")
+                             for path in arena.target_requests[9002]))
+        for requests in arena.target_requests.values():
+            self.assertNotIn("/flag", requests)
+            self.assertNotIn("/admin", requests)
+            self.assertNotIn("/.git/config", requests)
 
 
 class TestRuntimeInert(unittest.TestCase):

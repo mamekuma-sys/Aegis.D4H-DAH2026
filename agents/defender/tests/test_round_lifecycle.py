@@ -281,7 +281,7 @@ class TestEndToEnd(unittest.TestCase):
             packet_frame(
                 3,
                 ipv4_tcp(
-                    http_request(),
+                    http_request("/robot/shutdown?confirm=yes"),
                     dst_ip=bytes((10, 1, 4, 4)),
                     dst_port=9090,
                 ),
@@ -289,7 +289,7 @@ class TestEndToEnd(unittest.TestCase):
             packet_frame(
                 4,
                 ipv4_udp(
-                    b"ugv-observation",
+                    b"command=move",
                     dst_ip=bytes((10, 1, 4, 4)),
                     dst_port=9091,
                 ),

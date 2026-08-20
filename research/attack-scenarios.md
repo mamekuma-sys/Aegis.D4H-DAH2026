@@ -58,8 +58,14 @@ Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한�
 
 - PCAP 또는 실제 HTTP 응답이 없는 포트에는 `observed_attempts`를 만들지 않는다.
 - 미확인 포트의 배너가 단순히 UGV·URL·telemetry 같은 단어만 포함하면 공격 요청을 만들지 않는다.
-- root, bounded probe, `robots.txt`, OpenAPI 문서가 명시한 읽기 전용 `GET` route와 query parameter만
-  해당 endpoint의 신선한 evidence로 사용한다. 쓰기 method만 있는 route는 무시한다.
+- root 뒤에는 `/status`, `/health`, `/robots.txt`, `/api`, `/openapi.json`, `/swagger.json`의 여섯
+  discovery probe만 사용하며, 미확인 포트에 `/flag`, `/admin`, `/.git/config` 같은 범용 경로를
+  추측하지 않는다.
+- discovery 응답과 OpenAPI 문서가 명시한 읽기 전용 `GET` route와 query parameter만 해당
+  endpoint의 신선한 evidence로 사용한다. parameter는 광고된 정확한 route에 결속하고 URL encoding과
+  순서 차이는 정규화하되, traversal·파괴적 action route와 쓰기 method는 무시한다.
+- 같은 레이어의 여러 서비스·포트는 독립 endpoint로 관측한다. 구조 fingerprint가 같아도 한 포트의
+  route·parameter를 다른 포트로 옮기지 않으며, 응답마다 여러 flag 후보를 모두 제출 파이프라인으로 보낸다.
 - 다른 endpoint의 성공 playbook은 구조 fingerprint가 같더라도 현 endpoint의 정찰과 evidence 갱신 뒤에만
   실행한다.
 - 새 L4 PCAP이 들어오면 protocol·port·route·method·parameter를 먼저 inventory하고, positive와 정상
