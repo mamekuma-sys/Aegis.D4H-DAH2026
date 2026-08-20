@@ -8,8 +8,8 @@
       "platform": "linux/amd64"
     },
     "A1": {
-      "commit": "da1c922c9fb947526fb9dc7503be6f4ea1dc0e9a",
-      "reference": "aegis/scrimmage-candidate-attacker@sha256:4566c766bf6ae6d3edff43052e5a214e752170f37c31e800d081d76e6f89f6f6",
+      "commit": "cd503cebfdba61f21783cb854713e0e99c3aa0da",
+      "reference": "aegis/scrimmage-candidate-attacker@sha256:ed71faa78357e254d516f8dcd05612d9ca49e89e6ee02fd117011b4dc4d14f05",
       "platform": "linux/amd64"
     },
     "D0": {
