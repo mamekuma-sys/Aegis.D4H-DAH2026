@@ -767,7 +767,8 @@ class AttackerRuntime:
                 cycles += 1
                 cycles_remaining = max_cycles is None or cycles < max_cycles
                 remaining = self._round_deadline - self.clock()
-                if cycles_remaining and remaining > 0:
+                if (cycles_remaining and remaining > 0
+                        and not self._stop_event.is_set()):
                     self.sleep(min(LOOP_SLEEP, remaining))
         finally:
             self.finish_round()

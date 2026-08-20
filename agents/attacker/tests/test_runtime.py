@@ -277,6 +277,24 @@ class TestRuntimeResilience(unittest.TestCase):
         self.assertEqual(clk.t, 5.0)
         self.assertEqual(rt._secret_store.secrets_snapshot(), set())
 
+    def test_run_forever_does_not_sleep_after_cycle_requests_stop(self):
+        class StopAfterCycleRuntime(AttackerRuntime):
+            def run_cycle(self):
+                self.request_stop()
+                return self._report
+
+        clk = FakeClock()
+        sleeps = []
+        with patch("aegis_attacker.runtime.ROUND_DURATION", 5.0):
+            rt = StopAfterCycleRuntime(
+                make_cfg(), http=FakeArena("b", "/x", "FLAG{x}"),
+                clock=clk, sleep=lambda dt: sleeps.append(dt),
+            )
+            rt.run_forever()
+
+        self.assertEqual(sleeps, [])
+        self.assertEqual(rt._secret_store.secrets_snapshot(), set())
+
     def test_run_forever_reuses_flag_store_across_scan_cycles(self):
         arena = FakeArena("FLAG{same_round}", "/x", "irrelevant")
         rt = make_runtime(arena)
