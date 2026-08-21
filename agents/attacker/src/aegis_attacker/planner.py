@@ -15,7 +15,7 @@ from typing import Optional
 from .models import Endpoint, ExecutionPlan, Scenario, VulnClass
 from .profiles import suggest_vuln_classes
 
-MAX_TURNS = 48  # endpoint당 LLM 왕복. $1360 한도 소진을 위해 깊게 돌린다.
+MAX_TURNS = 96  # 최대 공격 심도. gpt-5.4 chat rpm 5833 여유.
 
 # 취약 부류 → 예선 시나리오(보고용 느슨한 대응, 실행 판단 아님).
 _VULN_TO_SCENARIO = {

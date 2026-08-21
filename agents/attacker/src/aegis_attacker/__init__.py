@@ -7,5 +7,5 @@
 AI 진위 증빙(운영세칙 제23조)을 단순하게 만들기 위한 선택이다.
 """
 
-__version__ = "0.4.7-r10-l3-aggressive-llm"
-ATTACK_PROFILE = "gpt-5.4+det-first+l1-svcflag-chain+l3-hpp-nosql+llm180-medium"
+__version__ = "0.5.0-max-aggression"
+ATTACK_PROFILE = "gpt-5.4+MAX-llm800-high+conc64+turns96"
