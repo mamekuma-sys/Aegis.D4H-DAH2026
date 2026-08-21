@@ -32,7 +32,7 @@ class TestHttpStreamStitcher(unittest.TestCase):
             json.dumps({"user": "guest", "role": role}, separators=(",", ":")).encode()
         ).decode("ascii")
         return (
-            f"GET {path} HTTP/1.1\r\nHost: team1.lig.internal:8083\r\n"
+            f"GET {path} HTTP/1.1\r\nHost: team1.lig.internal:8082\r\n"
             f"Cookie: session={value}\r\n\r\n"
         ).encode("ascii")
 
@@ -42,8 +42,8 @@ class TestHttpStreamStitcher(unittest.TestCase):
         # Base64 hides the word role; force a split inside the Cookie value.
         split = request.index(b"Cookie:") + 24
         first, second = request[:split], request[split:]
-        parsed_first = parse_ip(ipv4_tcp(first, dst_port=8083, sequence=1000))
-        parsed_second = parse_ip(ipv4_tcp(second, dst_port=8083, sequence=1000 + len(first)))
+        parsed_first = parse_ip(ipv4_tcp(first, dst_port=8082, sequence=1000))
+        parsed_second = parse_ip(ipv4_tcp(second, dst_port=8082, sequence=1000 + len(first)))
         self.assertEqual(self.policy.decide(1, parsed_first, 0.0).verdict, VERDICT_ACCEPT)
         decision = self.policy.decide(2, parsed_second, 0.0)
         self.assertEqual(decision.verdict, VERDICT_DROP)
@@ -54,13 +54,13 @@ class TestHttpStreamStitcher(unittest.TestCase):
         split = request.index(b"Cookie:") + 20
         first, second = request[:split], request[split:]
         self.assertEqual(
-            self.policy.decide(3, parse_ip(ipv4_tcp(first, dst_port=8083, sequence=2000)), 0.0).verdict,
+            self.policy.decide(3, parse_ip(ipv4_tcp(first, dst_port=8082, sequence=2000)), 0.0).verdict,
             VERDICT_ACCEPT,
         )
         self.assertEqual(
             self.policy.decide(
                 4,
-                parse_ip(ipv4_tcp(second, dst_port=8083, sequence=2000 + len(first))),
+                parse_ip(ipv4_tcp(second, dst_port=8082, sequence=2000 + len(first))),
                 0.0,
             ).verdict,
             VERDICT_ACCEPT,
@@ -68,8 +68,8 @@ class TestHttpStreamStitcher(unittest.TestCase):
 
     def test_gap_fails_open_and_discards_state(self):
         stitcher = HttpStreamStitcher()
-        first = parse_ip(ipv4_tcp(b"GET /admin HTTP/1.1\r\n", dst_port=8083, sequence=10))
-        gap = parse_ip(ipv4_tcp(b"Cookie: x=y\r\n\r\n", dst_port=8083, sequence=100))
+        first = parse_ip(ipv4_tcp(b"GET /admin HTTP/1.1\r\n", dst_port=8082, sequence=10))
+        gap = parse_ip(ipv4_tcp(b"Cookie: x=y\r\n\r\n", dst_port=8082, sequence=100))
         self.assertIsNone(stitcher.feed(first, 0.0))
         self.assertIsNone(stitcher.feed(gap, 0.1))
         self.assertEqual(stitcher.flow_count, 0)
@@ -77,22 +77,43 @@ class TestHttpStreamStitcher(unittest.TestCase):
     def test_ttl_and_capacity_evict_without_cross_flow_stitching(self):
         stitcher = HttpStreamStitcher(max_flows=1, ttl_seconds=1.0)
         first = parse_ip(ipv4_tcp(
-            b"GET /admin HTTP/1.1\r\n", dst_port=8083, src_port=51001, sequence=10,
+            b"GET /admin HTTP/1.1\r\n", dst_port=8082, src_port=51001, sequence=10,
         ))
         second_flow = parse_ip(ipv4_tcp(
-            b"GET /health HTTP/1.1\r\n", dst_port=8083, src_port=51002, sequence=20,
+            b"GET /health HTTP/1.1\r\n", dst_port=8082, src_port=51002, sequence=20,
         ))
         self.assertIsNone(stitcher.feed(first, 0.0))
         self.assertIsNone(stitcher.feed(second_flow, 0.1))
         self.assertEqual(stitcher.flow_count, 1)
         expired_tail = parse_ip(ipv4_tcp(
             b"Cookie: session=x\r\n\r\n",
-            dst_port=8083,
+            dst_port=8082,
             src_port=51002,
             sequence=20 + len(b"GET /health HTTP/1.1\r\n"),
         ))
         self.assertIsNone(stitcher.feed(expired_tail, 2.0))
         self.assertEqual(stitcher.flow_count, 0)
+
+    def test_segmented_graphql_body_drops_on_the_completing_packet(self):
+        body = b'{"query":"{ missionAudit { lastDeployment { notes } } }"}'
+        header = (
+            b"POST /graphql HTTP/1.1\r\n"
+            b"Host: team1.lig.internal:8082\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+        )
+        first = header + body[:12]
+        second = body[12:]
+        first_packet = parse_ip(ipv4_tcp(first, dst_port=8082, sequence=3000))
+        second_packet = parse_ip(
+            ipv4_tcp(second, dst_port=8082, sequence=3000 + len(first))
+        )
+        self.assertEqual(
+            self.policy.decide(10, first_packet, 0.0).verdict, VERDICT_ACCEPT
+        )
+        decision = self.policy.decide(11, second_packet, 0.0)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, "sig-l2-graphql-mission-audit-001")
 
 
 if __name__ == "__main__":

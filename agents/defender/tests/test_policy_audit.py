@@ -309,7 +309,7 @@ class TestLoadOrder(unittest.TestCase):
     def test_shipped_bundle_activates_only_reviewed_observed_rules(self):
         compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-finals-portmap")
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p2r3-stream-hardening")
         self.assertEqual(report.drop_capable_rules, 12)
         self.assertEqual(report.demotions, ())
         self.assertEqual(
@@ -336,7 +336,7 @@ class TestLoadOrder(unittest.TestCase):
 
     def test_shipped_bundle_keeps_reviewed_rules_active_during_finals_week(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1787356800.0)
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-finals-portmap")
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p2r3-stream-hardening")
         self.assertEqual(report.drop_capable_rules, 12)
         self.assertEqual(report.demotions, ())
 

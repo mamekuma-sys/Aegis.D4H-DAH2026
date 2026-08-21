@@ -218,7 +218,7 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(report.accepted_count(), 1)
         self.assertEqual(arena.submits[0]["flag"], "FLAG{finals_export_fixture}")
 
-    def test_finals_8080_skips_legacy_fast_path_but_always_calls_sol_llm(self):
+    def test_finals_8080_runs_observed_fast_path_and_always_calls_sol_llm(self):
         class FinalsHttpArena:
             def __init__(self):
                 self.target_paths = []
@@ -258,8 +258,8 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(report.accepted_count(), 0)
         self.assertGreater(arena.llm_calls, 0)
         self.assertTrue(all(m == "gpt-5.6-sol" for m in arena.llm_models))
-        self.assertNotIn("/fetch", arena.target_paths)
-        self.assertNotIn("/config", arena.target_paths)
+        self.assertIn("/fetch", arena.target_paths)
+        self.assertIn("/config", arena.target_paths)
         self.assertIn("/portal", arena.target_paths)
 
     def test_unknown_l4_executes_llm_invented_route_under_pro_profile(self):
@@ -982,7 +982,7 @@ class ObservedPhaseArena:
             return HttpResponse(200, "service online", {})
         params = parse_qs(parts.query)
 
-        if parts.port == 8082 and parts.path in ("/fetch", "/proxy"):
+        if parts.port == 8080 and parts.path in ("/fetch", "/proxy"):
             target = unquote(next(iter(params.values()), [""])[0])
             if target in (
                 "http://helper-box:8080/secret",
@@ -990,7 +990,11 @@ class ObservedPhaseArena:
             ):
                 return HttpResponse(200, "FLAG{fixture_l1}", {})
 
-        if parts.port == 8083 and parts.path == "/admin":
+        if parts.port == 8082 and parts.path == "/graphql" and body:
+            if "missionAudit" in body:
+                return HttpResponse(200, "FLAG{fixture_l2}", {})
+
+        if parts.port == 8082 and parts.path == "/admin":
             cookie = (headers or {}).get("Cookie", "")
             _, _, token = cookie.partition("session=")
             try:
@@ -1001,7 +1005,7 @@ class ObservedPhaseArena:
             if claims.get("role") == "admin":
                 return HttpResponse(200, "FLAG{fixture_l2}", {})
 
-        if parts.port == 8084 and parts.path == "/product":
+        if parts.port == 9090 and parts.path == "/product":
             product_id = unquote((params.get("id") or [""])[0]).lower()
             if "union select" in product_id and "from app_meta" in product_id:
                 return HttpResponse(200, "FLAG{fixture_l3}", {})
@@ -1012,7 +1016,7 @@ class ObservedPhaseArena:
 class TestObservedPhaseFastPath(unittest.TestCase):
     def test_l1_to_l3_confirmed_vectors_run_before_llm(self):
         cfg = AttackerConfig(
-            targets=("t2.lig.internal",), ports=(8082, 8083, 8084),
+            targets=("t2.lig.internal",), ports=(8080, 8082, 9090),
             submit_url="http://backend:4100/submit", submit_token="tok-team1",
             llm_api_key="", concurrency=3,
         )

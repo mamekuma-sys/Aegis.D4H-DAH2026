@@ -30,10 +30,16 @@ from aegis_defender.http_semantics import HttpRequestView, parse_http_request  #
 from aegis_defender.packet import IPPROTO_TCP, ParsedPacket, parse_ip  # noqa: E402
 from aegis_defender.policy import HotPolicy  # noqa: E402
 from aegis_defender.rules import CompiledPolicy, load_policy  # noqa: E402
+from aegis_defender.stream import HttpStreamStitcher  # noqa: E402
 
 
 SERVICE_PORTS = frozenset({8080, 8082, 9000, 9090})
-PORT_LAYERS = {8080: "L1", 9000: "L1", 8082: "L2", 9090: "L3"}
+PORT_LAYERS = {
+    8080: "L1-HTTP-8080",
+    9000: "L1-GRPC-9000",
+    8082: "L2-HTTP-8082",
+    9090: "L3-HTTP-9090",
+}
 QUERY_NAMES = (
     "url", "uri", "target", "u", "dest", "path", "host",
     "callback", "next", "fetch", "proxy", "resource",
@@ -160,8 +166,8 @@ class ReplayReport:
                     "플래그 값은 저장하거나 출력하지 않는다."
                 ),
                 "parsed_requests": (
-                    "현재 패킷에 완전한 HTTP 헤더가 있는 요청만 세며, 실제 HotPolicy의 "
-                    "bounded TCP stitcher 판정은 별도로 그대로 실행한다."
+                    "packet-local 또는 bounded in-order stitching으로 완성된 HTTP 요청 "
+                    "prefix를 세며, 실제 HotPolicy와 같은 상한·TTL을 적용한다."
                 ),
             },
         }
@@ -249,23 +255,32 @@ def extract_http_requests(payload: bytes) -> tuple[HttpRequestView, ...]:
     return tuple(requests)
 
 
-def classify_observed_shape(port: int, request: HttpRequestView) -> str | None:
+def classify_observed_shape(
+    port: int, request: HttpRequestView, payload: bytes = b""
+) -> str | None:
     """Independent labels derived from documented TEAM1 observed exploit shapes."""
-    if port == 8082:
+    if port in (8080, 8082):
+        layer = "l1" if port == 8080 else "l2"
         if request.ssrf_target_matches(
             QUERY_NAMES,
             ("helper-box", "172.18.0.2", "0xac120002", "2886860802", "::ffff:ac12:2"),
             (8080,),
             "/secret",
         ):
-            return "l1-helper-secret-ssrf"
+            return f"{layer}-helper-secret-ssrf"
         if request.path == "/config":
             for name, value in request.query_pairs:
                 normalized = value.lower().replace("\\", "/")
                 if name == "file" and re.fullmatch(r"(?:\.\./){1,8}flag", normalized):
-                    return "l1-config-flag-traversal"
+                    return f"{layer}-config-flag-traversal"
 
     if port == 8082:
+        if (
+            request.method == "POST"
+            and request.path == "/graphql"
+            and re.search(rb"missionAudit", payload, re.IGNORECASE)
+        ):
+            return "l2-graphql-mission-audit"
         if request.path == "/admin" and request.cookie_claim_matches(
             "session", "role", ("admin",)
         ):
@@ -300,6 +315,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
     statuses: Counter[str] = Counter()
     clock = ReplayClock()
     hot_policy = HotPolicy(policy=policy, clock=clock)
+    request_stitcher = HttpStreamStitcher()
     pending: dict[tuple[bytes, int, bytes, int], list[RequestRecord]] = {}
     current_response: dict[tuple[bytes, int, bytes, int], RequestRecord] = {}
     records: list[tuple[str, RequestRecord]] = []
@@ -325,17 +341,18 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
                 layer.dropped_packets += 1
                 layer.rules[decision.rule_id] += 1
 
-            requests = list(extract_http_requests(parsed.payload))
+            request_prefix = request_stitcher.feed(parsed, clock.now)
+            requests = list(extract_http_requests(request_prefix or b""))
 
             if decision.is_drop and not requests:
                 layer.drops_without_complete_request += 1
             packet_has_exploit = any(
-                classify_observed_shape(parsed.dst_port, request) is not None
+                classify_observed_shape(parsed.dst_port, request, request_prefix or b"") is not None
                 for request in requests
             )
             flow_pending = pending.setdefault(_flow_key(parsed), [])
             for request in requests:
-                label = classify_observed_shape(parsed.dst_port, request)
+                label = classify_observed_shape(parsed.dst_port, request, request_prefix or b"")
                 record = RequestRecord(dropped=decision.is_drop, label=label)
                 flow_pending.append(record)
                 records.append((layer_name, record))
@@ -449,7 +466,7 @@ def format_text(document: dict[str, object]) -> str:
         ),
         (
             f"- packet verdicts: {total['dropped_packets']} dropped, "
-            f"{total['drops_without_complete_request']} without a packet-local complete header"
+            f"{total['drops_without_complete_request']} without a bounded complete HTTP request"
         ),
         (
             f"- other requests: {total['passed_other_requests']} passed, "

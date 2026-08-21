@@ -1,9 +1,10 @@
-"""Bounded in-order TCP request-header stitching for semantic HTTP policy.
+"""Bounded in-order TCP request-prefix stitching for semantic HTTP policy.
 
 The Broker verdict is packet-scoped, while the protected application consumes a TCP
 stream.  This module keeps only the small request prefix needed to finish one HTTP
-header.  Gaps, oversized input, unsupported traffic, and capacity pressure all fail
-open and discard state; no packet waits for a future segment.
+header and, when a bounded ``Content-Length`` is present, its request body.  Gaps,
+oversized input, unsupported traffic, and capacity pressure all fail open and discard
+state; no packet waits for a future segment.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ MAX_STREAM_BYTES = 4096
 MAX_STREAM_FLOWS = 2048
 STREAM_TTL_SECONDS = 5.0
 _HEADER_END = b"\r\n\r\n"
+_CONTENT_LENGTH = b"content-length"
 _METHOD_PREFIXES = (
     b"GET ", b"POST ", b"PUT ", b"PATCH ", b"DELETE ",
     b"HEAD ", b"OPTIONS ",
@@ -60,6 +62,48 @@ class HttpStreamStitcher:
     def clear(self) -> None:
         self._flows.clear()
 
+    def _required_bytes(self, data: bytes | bytearray) -> int | None:
+        """완전한 header가 있으면 필요한 request prefix 길이를 돌려준다.
+
+        본선 GraphQL 요청은 header와 JSON body가 서로 다른 TCP segment로 전달됐다.
+        body 전체를 무조건 기다리면 hot path와 가용성을 해치므로, 숫자 하나로 명확한
+        bounded ``Content-Length``만 따른다. 누락·중복 불일치·비정상 값은 header까지만
+        완성된 것으로 취급해 기존 fail-open 동작을 보존한다.
+        """
+        header_end = data.find(_HEADER_END)
+        if header_end < 0:
+            return None
+        header_bytes = header_end + len(_HEADER_END)
+        lengths: list[int] = []
+        for line in bytes(data[:header_end]).split(b"\r\n")[1:]:
+            name, separator, value = line.partition(b":")
+            if not separator or name.strip().lower() != _CONTENT_LENGTH:
+                continue
+            stripped = value.strip()
+            if not stripped.isdigit():
+                return header_bytes
+            lengths.append(int(stripped))
+        if not lengths or any(value != lengths[0] for value in lengths[1:]):
+            return header_bytes
+        return header_bytes + lengths[0]
+
+    def _start(self, parsed: ParsedPacket, now: float) -> bytes | None:
+        payload = parsed.payload
+        required = self._required_bytes(payload)
+        if required is not None:
+            if required <= len(payload) or required > self._max_bytes:
+                return payload
+        if parsed.payload_truncated or len(payload) >= self._max_bytes:
+            return None
+        self._ensure_capacity(now)
+        sequence = parsed.tcp_sequence + (1 if parsed.tcp_flags & TCP_SYN else 0)
+        self._flows[parsed.flow_key] = _StreamState(
+            next_sequence=(sequence + len(payload)) & 0xFFFFFFFF,
+            data=bytearray(payload),
+            expires_at=now + self._ttl,
+        )
+        return None
+
     def feed(self, parsed: ParsedPacket, now: float) -> bytes | None:
         if (
             not parsed.ok
@@ -81,18 +125,7 @@ class HttpStreamStitcher:
         if state is None:
             if not starts_request:
                 return None
-            if _HEADER_END in payload:
-                return payload
-            if parsed.payload_truncated or len(payload) >= self._max_bytes:
-                return None
-            self._ensure_capacity(now)
-            sequence = parsed.tcp_sequence + (1 if parsed.tcp_flags & TCP_SYN else 0)
-            self._flows[key] = _StreamState(
-                next_sequence=(sequence + len(payload)) & 0xFFFFFFFF,
-                data=bytearray(payload),
-                expires_at=now + self._ttl,
-            )
-            return None
+            return self._start(parsed, now)
 
         if parsed.tcp_flags & (TCP_FIN | TCP_RST):
             self._flows.pop(key, None)
@@ -124,7 +157,8 @@ class HttpStreamStitcher:
         state.expires_at = now + self._ttl
         self._flows.move_to_end(key)
 
-        if _HEADER_END not in state.data:
+        required = self._required_bytes(state.data)
+        if required is None or len(state.data) < required:
             return None
         complete = bytes(state.data)
         self._flows.pop(key, None)

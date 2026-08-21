@@ -78,9 +78,9 @@ class TestPcapReplay(unittest.TestCase):
         )
         normal = b"GET /health HTTP/1.1\r\nHost: service\r\n\r\n"
         frames = [
-            _tcp_packet(client, server, 40000, 8082, 100, exploit),
-            _tcp_packet(server, client, 8082, 40000, 500, response),
-            _tcp_packet(client, server, 40001, 8082, 1000, normal),
+            _tcp_packet(client, server, 40000, 8080, 100, exploit),
+            _tcp_packet(server, client, 8080, 40000, 500, response),
+            _tcp_packet(client, server, 40001, 8080, 1000, normal),
         ]
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -101,6 +101,8 @@ class TestPcapReplay(unittest.TestCase):
         self.assertEqual(total["unexpected_other_drops"], 0)
         self.assertEqual(total["flag_linked_requests"], 1)
         self.assertEqual(total["blocked_flag_linked_requests"], 1)
+        self.assertEqual(report["layers"]["L1-HTTP-8080"]["exploit_shape_requests"], 1)
+        self.assertEqual(report["layers"]["L2-HTTP-8082"]["parsed_requests"], 0)
 
     def test_reports_packet_coalescing_separately_from_unexpected_drops(self):
         client = b"\x0a\x01\x00\x04"
@@ -143,9 +145,47 @@ class TestPcapReplay(unittest.TestCase):
             ).to_dict()
 
         total = report["total"]
-        self.assertEqual(total["parsed_requests"], 0)
+        self.assertEqual(total["parsed_requests"], 1)
+        self.assertEqual(total["blocked_exploit_shape_requests"], 1)
         self.assertEqual(total["dropped_packets"], 1)
-        self.assertEqual(total["drops_without_complete_request"], 1)
+        self.assertEqual(total["drops_without_complete_request"], 0)
+
+    def test_links_a_split_graphql_body_drop_to_its_flag_response(self):
+        client = b"\x0a\x01\x00\x04"
+        server = b"\x0a\x01\x01\x02"
+        body = b'{"query":"{ missionAudit { lastDeployment { notes } } }"}'
+        header = (
+            b"POST /graphql HTTP/1.1\r\n"
+            b"Host: service\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+        )
+        first = header + body[:12]
+        second = body[12:]
+        response = (
+            b"HTTP/1.1 200 OK\r\nContent-Length: 24\r\n\r\n"
+            + b"FLAG" + b"{synthetic-marker}"
+        )
+        frames = [
+            _tcp_packet(client, server, 40000, 8082, 100, first),
+            _tcp_packet(client, server, 40000, 8082, 100 + len(first), second),
+            _tcp_packet(server, client, 8082, 40000, 500, response),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pcap = Path(temp_dir) / "split-graphql.pcap"
+            _write_pcap(pcap, frames)
+            report = replay_pcaps.replay_paths(
+                [pcap],
+                REPO_ROOT / "agents" / "defender" / "policy",
+                replay_pcaps.parse_as_of("2026-08-18T00:00:00Z"),
+            ).to_dict()
+
+        total = report["total"]
+        self.assertEqual(total["exploit_shape_requests"], 1)
+        self.assertEqual(total["blocked_exploit_shape_requests"], 1)
+        self.assertEqual(total["flag_linked_requests"], 1)
+        self.assertEqual(total["blocked_flag_linked_requests"], 1)
 
     def test_rejects_pcapng_and_unsafe_lengths(self):
         with tempfile.TemporaryDirectory() as temp_dir:

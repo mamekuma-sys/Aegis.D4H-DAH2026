@@ -15,9 +15,9 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ## 현재 상태
 
-현재 bundle은 `defender-2026-08-15-full-corpus-hardening`입니다. `baseline_profiles`에는 실측 profile `6/8082`, `6/8083`, `6/8084`가 등록되어 있습니다. TEAM1 전체 104개 PCAP에서 flag 응답과 연결된 공격에 한정한 rule 아홉 개가 `ACTIVE`이고 기존 및 병합된 휴리스틱 13개는 `SHADOW`입니다. request-line rule 네 개와 bounded canonical HTTP 의미 rule 다섯 개로 구성되며, ACTIVE 아홉 규칙은 다음 주 본선 전체를 포함하도록 `2026-09-01T00:00:00Z`에 만료합니다.
+현재 bundle은 `defender-2026-08-21-p2r3-stream-hardening`입니다. 본선에서 확인한 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록했습니다. 증거·정상 negative·SLA fixture와 두 review가 있는 rule 12개가 `ACTIVE`이고 일반 휴리스틱 13개는 `SHADOW`입니다. ACTIVE 규칙은 `2026-09-01T00:00:00Z`에 만료합니다.
 
-활성 범위는 L1 helper/Docker-host secret SSRF와 config-to-flag traversal, L2 Base64-JSON `session` 관리자 claim 위조와 loopback secret/registry SSRF, L3 `app_meta` 대상 UNION SQLi입니다. payload 정규식은 HTTP request line에만 적용하며 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. SHADOW 일치가 뒤의 ACTIVE 의미 규칙을 가리지 않도록 ACTIVE→CANARY→SHADOW 순서로 평가합니다.
+활성 범위는 L1 helper secret SSRF와 config-to-flag traversal, SatDiag Tail/Export 플래그 접근, L2 GraphQL `missionAudit`, Base64-JSON `session` 관리자 claim 위조와 loopback secret/registry SSRF, L3 `app_meta` 대상 UNION SQLi입니다. GraphQL은 실제 플래그 응답과 연결된 `missionAudit`만 차단하며 `systemConfig`는 포함하지 않습니다. HTTP 의미 규칙은 완성된 bounded request prefix에만 적용하고 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. SHADOW 일치가 뒤의 ACTIVE 의미 규칙을 가리지 않도록 ACTIVE→CANARY→SHADOW 순서로 평가합니다.
 
 로더는 안전 조건을 구조적으로 강제합니다. `baseline_profiles`가 비거나 rule이 만료되거나 두 review 중 하나라도 미승인이면 차단 권한을 가진 rule을 기동 시 `SHADOW`로 강등합니다(§15.6 마지막 항목).
 
@@ -73,7 +73,7 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ### HTTP JSON cookie 제약
 
-HTTP 의미 rule은 TCP와 명시적 port를 요구합니다. packet-local payload 또는 bounded in-order header
+HTTP 의미 rule은 TCP와 명시적 port를 요구합니다. packet-local payload 또는 bounded in-order request-prefix
 stitching으로 완성된 요청만 파싱합니다. stitcher는 4KB·2,048 flows·5초 TTL이고 gap·과대·불완전
 요청은 버리고 `ACCEPT`합니다. cookie 값은 512 bytes, JSON text는 512 bytes, key는 16개로 제한합니다.
 잘못된 Base64·JSON, 중첩 claim, 상한 초과는 매치하지 않습니다. percent decoding과 nested URL 순회는

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-finals-portmap",
-  "generated_at": "2026-08-21T02:30:00Z",
+  "bundle_id": "defender-2026-08-21-p2r3-stream-hardening",
+  "generated_at": "2026-08-21T02:31:39Z",
   "baseline_profiles": [
     "6/8080",
     "6/9000",
@@ -525,13 +525,13 @@
       "ports": [
         9000
       ],
-      "pattern": "satdiag\\.v1\\.SatDiag/TailDiagnosticLog[\\s\\S]{0,400}(?:/flag|/proc/(?:self|1)/environ)",
+      "pattern": "(?:satdiag\\.v1\\.SatDiag/TailDiagnosticLog[\\s\\S]{0,400}(?:/flag|/proc/(?:self|1)/environ)|\\x0a\\x05/flag)",
       "ignore_case": false,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p1r2-l1-satdiag-tail",
-      "promoted_in_bundle": "defender-2026-08-21-finals-portmap",
+      "promoted_in_bundle": "defender-2026-08-21-p2r3-stream-hardening",
       "parser_version": 1,
       "profile_scope": [
         "6/9000"
@@ -560,7 +560,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p1r2-l1-satdiag-export",
-      "promoted_in_bundle": "defender-2026-08-21-finals-portmap",
+      "promoted_in_bundle": "defender-2026-08-21-p2r3-stream-hardening",
       "parser_version": 1,
       "profile_scope": [
         "6/9000"
@@ -583,13 +583,13 @@
       "ports": [
         8082
       ],
-      "pattern": "POST /graphql[\\s\\S]{0,800}(?:missionAudit|systemConfig)",
+      "pattern": "POST /graphql[\\s\\S]{0,800}missionAudit",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r3-l2-graphql-mission-audit",
-      "promoted_in_bundle": "defender-2026-08-21-finals-portmap",
+      "promoted_in_bundle": "defender-2026-08-21-p2r3-stream-hardening",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"

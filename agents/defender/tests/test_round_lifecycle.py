@@ -272,7 +272,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(startup[0]["policy_source"], "active")
         self.assertEqual(
             startup[0]["bundle_id"],
-            "defender-2026-08-21-finals-portmap",
+            "defender-2026-08-21-p2r3-stream-hardening",
         )
         self.assertEqual(startup[0]["drop_capable_rules"], 12)
         self.assertEqual(startup[0]["demotions"], [])

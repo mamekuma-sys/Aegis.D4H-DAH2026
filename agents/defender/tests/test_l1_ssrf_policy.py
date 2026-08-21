@@ -117,7 +117,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         for index, path in enumerate(_POSITIVE_PATHS, start=1):
             with self.subTest(path=path):
                 self.assertEqual(
-                    self._decide(path, dst_port=8082, pkt_id=index).verdict,
+                    self._decide(path, dst_port=9090, pkt_id=index).verdict,
                     VERDICT_ACCEPT,
                 )
 
@@ -280,6 +280,11 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 "sig-l1-satdiag-tail-flag",
             ),
             (
+                b"\x00\x00\x00\x07\x00\x00\x00\x00\x01\x00\x00\x00\x00\x02\x0a\x05/flag",
+                _L1_SATDIAG_TAIL_RULE_ID,
+                "sig-l1-satdiag-tail-flag",
+            ),
+            (
                 b":path*/satdiag.v1.SatDiag/ExportDiagnosticBundle\x00"
                 b"telemetry.log;echo AegisD4H${FLAG}AegisD4H\x12\x07capture",
                 _L1_SATDIAG_EXPORT_RULE_ID,
@@ -305,8 +310,6 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
             b"POST /graphql HTTP/1.1\r\nHost: team1.lig.internal:8082\r\n"
             b"Content-Type: application/json\r\n\r\n"
             b'{"query":"{ missionAudit { lastDeployment { notes } } }"}',
-            b"POST /graphql HTTP/1.1\r\nHost: team1.lig.internal:8082\r\n\r\n"
-            b'{"query":"{ systemConfig { mqtt broker password } }"}',
         )
         for index, payload in enumerate(cases, start=1):
             with self.subTest(index=index):
@@ -317,12 +320,20 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 self.assertEqual(decision.reason_code, "sig-l2-graphql-mission-audit")
 
     def test_finals_p2_8082_benign_graphql_accepts(self):
-        payload = (
-            b"POST /graphql HTTP/1.1\r\nHost: team1.lig.internal:8082\r\n\r\n"
-            b'{"query":"{ __typename }"}'
+        bodies = (
+            b'{"query":"{ __typename }"}',
+            b'{"query":"{ systemConfig { mqtt broker password } }"}',
         )
-        parsed = parse_ip(ipv4_tcp(payload, dst_port=8082))
-        self.assertEqual(self.policy.decide(860, parsed, 0.0).verdict, VERDICT_ACCEPT)
+        for index, body in enumerate(bodies):
+            payload = (
+                b"POST /graphql HTTP/1.1\r\nHost: team1.lig.internal:8082\r\n\r\n"
+                + body
+            )
+            parsed = parse_ip(ipv4_tcp(payload, dst_port=8082))
+            self.assertEqual(
+                self.policy.decide(860 + index, parsed, 0.0).verdict,
+                VERDICT_ACCEPT,
+            )
 
     def test_finals_p1_9000_benign_satdiag_accepts(self):
         payloads = (
@@ -341,7 +352,10 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
 
     def test_shipped_bundle_activates_only_observed_exact_rules(self):
         self.assertEqual(self.report.source, "active")
-        self.assertEqual(self.report.bundle_id, "defender-2026-08-21-finals-portmap")
+        self.assertEqual(
+            self.report.bundle_id,
+            "defender-2026-08-21-p2r3-stream-hardening",
+        )
         self.assertEqual(self.report.drop_capable_rules, 12)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(

@@ -41,7 +41,7 @@ from aegis_defender.protocol import (
 from .fakes import FakeTransport, http_request, ipv4_tcp, packet_frame
 
 _POLICY_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "policy"))
-_EXPLOIT_PORT = 8083
+_EXPLOIT_PORT = 8082
 _EXPLOIT_RULE = "http-l2-forged-admin-session-001"
 _SETTLE = 0.5
 

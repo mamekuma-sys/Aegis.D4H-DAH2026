@@ -136,8 +136,8 @@ if ($defenderText -notmatch 'ConfigOnly') {
 if ($defenderText -notmatch 'policy_source=active') {
     throw 'defender-deploy.md does not require policy_source=active.'
 }
-if ($defenderText -notmatch 'bundle_id=defender-2026-08-21-finals-portmap') {
-    throw 'defender-deploy.md does not require the P1-R2 SatDiag bundle id.'
+if ($defenderText -notmatch 'bundle_id=defender-2026-08-21-p2r3-stream-hardening') {
+    throw 'defender-deploy.md does not require the P2-R3 hardened bundle id.'
 }
 if ($defenderText -notmatch 'drop_capable_rules=12') {
     throw 'defender-deploy.md does not require drop_capable_rules=12.'
