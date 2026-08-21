@@ -24,6 +24,7 @@ from aegis_defender.advisory import (
     AdvisoryWorker,
     SecretLeakError,
     assert_no_secrets,
+    parse_advisory_candidates,
 )
 from aegis_defender.config import RuntimeConfig
 from aegis_defender.logging import AuditLogger
@@ -89,6 +90,7 @@ class TestRedaction(unittest.TestCase):
         self.assertNotIn("10.1.0.4", blob)
         self.assertNotIn("10.1.1.4", blob)
         self.assertNotIn("test-key-value", blob)
+        self.assertIn("8410/8420", blob)
 
     def test_secret_guard_blocks_flag_shaped_text(self):
         with self.assertRaises(SecretLeakError):
@@ -100,6 +102,28 @@ class TestRedaction(unittest.TestCase):
 
     def test_secret_guard_allows_plain_aggregates(self):
         assert_no_secrets("- flow 6/80: score=90 sig_hits=3 distinct_paths=4 stages=none")
+
+    def test_structured_candidates_are_bounded_for_break_review(self):
+        content = json.dumps({"candidates": [{
+            "protocol": "tcp",
+            "port": 8410,
+            "field": "Exchange.Envelope.sample",
+            "pattern_family": "exact topic and action tuple",
+            "evidence_needed": "positive plus normal negative and SLA fixtures",
+            "false_positive_risk": "unknown action overlap",
+        }]})
+        candidates = parse_advisory_candidates(content)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].port, 8410)
+        self.assertEqual(candidates[0].protocol, "tcp")
+
+    def test_unstructured_or_invalid_candidates_remain_non_actionable(self):
+        self.assertEqual(parse_advisory_candidates("DROP everything"), ())
+        self.assertEqual(parse_advisory_candidates(json.dumps({"candidates": [{
+            "protocol": "tcp", "port": 70000, "field": "x",
+            "pattern_family": "x", "evidence_needed": "x",
+            "false_positive_risk": "x",
+        }]})), ())
 
     def test_blocked_prompt_does_not_call_out(self):
         clock = FakeClock()

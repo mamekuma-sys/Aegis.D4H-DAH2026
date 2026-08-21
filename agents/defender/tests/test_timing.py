@@ -14,6 +14,7 @@
 import threading
 import time
 import unittest
+import os
 
 from aegis_defender.metrics import (
     L_GATE,
@@ -26,7 +27,7 @@ from aegis_defender.metrics import (
 from aegis_defender.packet import parse_ip
 from aegis_defender.policy import SOFT_CUTOFF_SECONDS, HotPolicy
 from aegis_defender.protocol import decode_frame, encode_verdict
-from aegis_defender.rules import compile_bundle
+from aegis_defender.rules import compile_bundle, load_policy
 from aegis_defender.session import (
     BROKER_DEADLINE_BUDGET,
     BROKER_SAFETY_MARGIN,
@@ -245,6 +246,38 @@ class TestHotPathBudget(unittest.TestCase):
         self.assertLess(sig, BUDGET_SIG_P99 * 1e6 * ci_noise)
         self.assertLess(score, BUDGET_SCORE_P99 * 1e6 * ci_noise)
         self.assertLess(policy, BUDGET_POLICY_P99 * 1e6 * ci_noise)
+
+    def test_shipped_r11_bundle_normal_mix_stays_under_hot_path_p99(self):
+        policy_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "policy")
+        )
+        compiled, report = load_policy(policy_dir, now_epoch=1787356800.0)
+        self.assertEqual(report.drop_capable_rules, 37)
+        policy = HotPolicy(policy=compiled)
+        samples = (
+            (8080, b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"),
+            (8082, b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"),
+            (9090, b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"),
+            (8410, b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"),
+            (8420, b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"),
+            (1883, b"\x10\x0c\x00\x04MQTT\x04\x02\x00<\x00\x00"),
+            (8554, b"OPTIONS rtsp://x/ RTSP/1.0\r\nCSeq: 1\r\n\r\n"),
+        )
+        latencies = []
+        for index in range(8000):
+            port, payload = samples[index % len(samples)]
+            parsed = parse_ip(ipv4_tcp(
+                payload, src_port=10000 + (index % 50000), dst_port=port,
+                sequence=index * 128,
+            ))
+            received_at = time.monotonic()
+            policy.decide(index, parsed, received_at)
+            latencies.append(time.monotonic() - received_at)
+        latencies.sort()
+        shipped_p99 = percentile(latencies, 0.99)
+        print(f"\n[shipped R11 policy us] p99={shipped_p99 * 1e6:.1f} "
+              f"max={max(latencies) * 1e6:.1f}")
+        self.assertLess(shipped_p99, BUDGET_HOT_PATH_P99)
 
     def test_latency_does_not_grow_under_sustained_load(self):
         """§15.4 — 1100 pkt/s에서 처리 지연이 누적되지 않는다.

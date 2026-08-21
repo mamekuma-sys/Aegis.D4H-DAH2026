@@ -110,7 +110,7 @@ class TestLinuxSeqpacketTransport(unittest.TestCase):
                 self.assertEqual(verdict, (42, VERDICT_ACCEPT))
                 self.assertEqual(connection.recv(64), HEARTBEAT_FRAME)
                 self.assertEqual(runtime.policy_report.source, "active")
-                self.assertEqual(runtime.policy_report.drop_capable_rules, 32)
+                self.assertEqual(runtime.policy_report.drop_capable_rules, 37)
                 summary = runtime.metrics.latency_summary(L_VERDICT_SEND_E2E)
                 self.assertEqual(summary["count"], 1.0)
                 self.assertLess(summary["max_us"], 300_000.0)

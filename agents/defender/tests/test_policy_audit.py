@@ -331,8 +331,8 @@ class TestLoadOrder(unittest.TestCase):
     def test_shipped_bundle_activates_only_reviewed_observed_rules(self):
         compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-r9-egress-lockdown")
-        self.assertEqual(report.drop_capable_rules, 32)
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p4-r11-l4-wire-hardening")
+        self.assertEqual(report.drop_capable_rules, 37)
         self.assertEqual(report.demotions, ())
         self.assertEqual(
             compiled.baseline_profiles,
@@ -366,6 +366,11 @@ class TestLoadOrder(unittest.TestCase):
             "http-l2-rsc-env-ref-semantic-001",
             "grpc-l1-tail-sensitive-file-001",
             "grpc-l1-export-flag-command-001",
+            "grpc-l4-diagnostic-map-snapshot-001",
+            "grpc-l4-calibration-pickle-code-001",
+            "grpc-l4-programming-secret-source-001",
+            "sig-l4-ros-secret-param-001",
+            "sig-l4-mission-flag-command-001",
             "http-l1-portal-feedback-ssti-semantic-001",
             "sig-l3-mqtt-wildcard-subscribe-001",
             "sig-l3-mqtt-uav-config-001",
@@ -378,8 +383,8 @@ class TestLoadOrder(unittest.TestCase):
 
     def test_shipped_bundle_keeps_reviewed_rules_active_during_finals_week(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1787356800.0)
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-r9-egress-lockdown")
-        self.assertEqual(report.drop_capable_rules, 32)
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p4-r11-l4-wire-hardening")
+        self.assertEqual(report.drop_capable_rules, 37)
         self.assertEqual(report.demotions, ())
 
     def test_shipped_active_rules_are_evidence_scoped_by_observed_layer(self):
@@ -394,7 +399,7 @@ class TestLoadOrder(unittest.TestCase):
                 self.assertIs(rule.promotion_state, PromotionState.ACTIVE)
                 self.assertEqual(
                     rule.pattern_source,
-                    r"FLAG\{[0-9a-fA-F]{6,128}\}",
+                    r"(?:FLAG\{|FLAG%7[Bb]|FLAG\\u007[bB])(?:[0-9a-fA-F]|%[0-9a-fA-F]{2}|\\u00[0-9a-fA-F]{2}){6,128}(?:\}|%7[Dd]|\\u007[dD])",
                 )
                 self.assertEqual(
                     set(rule.source_ports),
@@ -414,17 +419,17 @@ class TestLoadOrder(unittest.TestCase):
             for port in rule.ports:
                 active_by_port.setdefault(port, set()).add(rule.rule_id)
 
-        # 104개 실 PCAP이 증명한 profile만 ACTIVE다. 실제 L4 profile이 들어오면
-        # 같은 evidence gate를 통과시킨 뒤 이 기대값과 bundle을 함께 갱신한다.
+        # 본선 PCAP이 증명한 profile만 ACTIVE다. L4는 R11 wire contract와
+        # positive/negative/SLA fixture를 함께 고정했다.
         self.assertEqual(
             {port: len(rule_ids) for port, rule_ids in active_by_port.items()},
-            {8080: 7, 8082: 17, 9000: 4, 9090: 5, 8410: 1, 8420: 1, 1883: 2, 8554: 1},
+            {8080: 7, 8082: 17, 9000: 4, 9090: 5, 8410: 6, 8420: 6, 1883: 2, 8554: 1},
         )
 
     def test_shipped_bundle_expires_after_finals_validity_window(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1788220800.0)
         self.assertEqual(report.drop_capable_rules, 0)
-        self.assertEqual(len(report.demotions), 32)
+        self.assertEqual(len(report.demotions), 37)
         self.assertTrue(all(entry.endswith(":expired") for entry in report.demotions))
 
     def test_shipped_fallback_is_valid(self):

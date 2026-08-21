@@ -1,13 +1,19 @@
 """R6 one-byte HTTP/2 DATA fragmentation regression tests."""
 
 import os
+import base64
+import json
 import unittest
 
 from aegis_defender.grpc_semantics import (
     CLIENT_PREFACE,
     EXPORT_FLAG_COMMAND,
+    L4_CALIBRATION_PICKLE_CODE,
+    L4_DIAGNOSTIC_MAP_SNAPSHOT,
+    L4_PROGRAMMING_SECRET_SOURCE,
     TAIL_SENSITIVE_FILE,
     GrpcH2StreamInspector,
+    classify_grpc_message,
 )
 from aegis_defender.packet import parse_ip
 from aegis_defender.policy import HotPolicy
@@ -30,11 +36,47 @@ def _frame(frame_type, flags, stream_id, payload=b""):
 
 
 def _field(number, value):
-    raw = value.encode("utf-8")
-    return bytes(((number << 3) | 2, len(raw))) + raw
+    raw = value.encode("utf-8") if isinstance(value, str) else value
+    return _varint((number << 3) | 2) + _varint(len(raw)) + raw
 
 
-def _grpc_packets(message, src_port=51000, huffman_headers=True):
+def _varint(value):
+    encoded = bytearray()
+    while value >= 0x80:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def _int_field(number, value):
+    return _varint(number << 3) + _varint(value)
+
+
+def _l4_exchange(topic_id, type_id, sample, encoding=0):
+    envelope = (
+        _int_field(1, 23) + _int_field(2, 26165)
+        + _int_field(3, topic_id) + _int_field(4, type_id)
+        + _int_field(5, 68) + _int_field(6, 1) + _field(7, sample)
+    )
+    if encoding == 1:
+        encoded = base64.b64encode(envelope)
+    elif encoding == 2:
+        encoded = json.dumps({
+            "domainId": 23,
+            "participantId": 26165,
+            "topicId": topic_id,
+            "typeId": type_id,
+            "qos": 68,
+            "seq": "1",
+            "sample": base64.b64encode(sample).decode("ascii"),
+        }, separators=(",", ":")).encode("ascii")
+    else:
+        encoded = envelope
+    return _int_field(1, 1) + _int_field(2, 2) + _int_field(3, encoding) + _field(4, encoded)
+
+
+def _grpc_packets(message, src_port=51000, huffman_headers=True, dst_port=9000):
     envelope = b"\x00" + len(message).to_bytes(4, "big") + message
     # The header bytes deliberately do not expose the RPC in clear text.  The
     # semantic decision must depend only on the completed protobuf message.
@@ -48,7 +90,7 @@ def _grpc_packets(message, src_port=51000, huffman_headers=True):
     sequence = 1000
     for payload in payloads:
         packets.append(parse_ip(ipv4_tcp(
-            payload, src_port=src_port, dst_port=9000, sequence=sequence
+            payload, src_port=src_port, dst_port=dst_port, sequence=sequence
         )))
         sequence += len(payload)
     return packets
@@ -69,7 +111,7 @@ class TestGrpcH2StreamInspector(unittest.TestCase):
                     self.assertIsNone(inspector.feed(packet, 0.0))
                 self.assertEqual(inspector.feed(packets[-1], 0.0), expected)
 
-    def test_normal_or_gapped_stream_fails_open(self):
+    def test_normal_stream_accepts_and_bounded_reordering_recovers(self):
         inspector = GrpcH2StreamInspector()
         normal = _grpc_packets(_field(1, "diagnostic.log") + b"\x10\x01")
         self.assertTrue(all(inspector.feed(packet, 0.0) is None for packet in normal))
@@ -77,12 +119,60 @@ class TestGrpcH2StreamInspector(unittest.TestCase):
         inspector = GrpcH2StreamInspector()
         packets = _grpc_packets(_field(1, "/flag") + b"\x10\x01", src_port=52000)
         self.assertIsNone(inspector.feed(packets[0], 0.0))
-        gap_packet = parse_ip(ipv4_tcp(
-            packets[1].payload, src_port=52000, dst_port=9000,
-            sequence=packets[1].tcp_sequence + 1,
+        self.assertIsNone(inspector.feed(packets[2], 0.0))
+        self.assertIsNone(inspector.feed(packets[1], 0.0))
+        for packet in packets[3:-1]:
+            self.assertIsNone(inspector.feed(packet, 0.0))
+        self.assertEqual(inspector.feed(packets[-1], 0.0), TAIL_SENSITIVE_FILE)
+
+    def test_l4_exchange_encodings_and_exact_negative_shapes(self):
+        diagnostic = _int_field(1, 4) + _field(3, b"maintenance")
+        for encoding in (0, 1, 2):
+            with self.subTest(encoding=encoding):
+                self.assertEqual(
+                    classify_grpc_message(
+                        _l4_exchange(65536, 4097, diagnostic, encoding), 8410
+                    ),
+                    L4_DIAGNOSTIC_MAP_SNAPSHOT,
+                )
+        for action in (1, 2, 3):
+            self.assertIsNone(classify_grpc_message(
+                _l4_exchange(65536, 4097, _int_field(1, action)), 8420
+            ))
+
+    def test_l4_pickle_is_opcode_inspected_without_unpickling(self):
+        dangerous = b"cos\nsystem\n(S'cat /flag'\ntR."
+        benign = b"\x80\x04}\x94."
+        for blob, expected in (
+            (dangerous, L4_CALIBRATION_PICKLE_CODE),
+            (benign, None),
+        ):
+            sample = (
+                _int_field(1, 1) + _int_field(2, 1) + _int_field(3, 1)
+                + _field(4, blob) + _int_field(5, 1)
+            )
+            self.assertEqual(
+                classify_grpc_message(_l4_exchange(393216, 16384, sample), 8410),
+                expected,
+            )
+
+    def test_l4_programming_store_requires_explicit_secret_source(self):
+        def store(source):
+            return (
+                _int_field(1, 1) + _int_field(2, 1002) + _field(3, b"program-1")
+                + _int_field(4, 1) + _int_field(5, 1) + _field(6, source)
+            )
+
+        self.assertEqual(
+            classify_grpc_message(
+                _l4_exchange(655360, 28672, store(b"print(open('/flag').read())")),
+                8420,
+            ),
+            L4_PROGRAMMING_SECRET_SOURCE,
+        )
+        self.assertIsNone(classify_grpc_message(
+            _l4_exchange(655360, 28672, store(b"print('grpc-sla-ok')")), 8420
         ))
-        self.assertIsNone(inspector.feed(gap_packet, 0.0))
-        self.assertEqual(inspector.flow_count, 0)
 
     def test_payloadless_new_syn_retires_reused_tuple_state(self):
         inspector = GrpcH2StreamInspector()
@@ -110,6 +200,17 @@ class TestGrpcSemanticPolicy(unittest.TestCase):
         decision = policy.decide(len(packets), packets[-1], 0.0)
         self.assertEqual(decision.verdict, VERDICT_DROP)
         self.assertEqual(decision.rule_id, "grpc-l1-tail-sensitive-file-001")
+
+    def test_fragmented_l4_map_snapshot_drops_on_both_ports(self):
+        message = _l4_exchange(65536, 4097, _int_field(1, 4))
+        for port in (8410, 8420):
+            policy = HotPolicy(policy=self.compiled, clock=lambda: 0.0)
+            packets = _grpc_packets(message, src_port=52000 + port, dst_port=port)
+            for packet_id, packet in enumerate(packets[:-1], start=1):
+                self.assertEqual(policy.decide(packet_id, packet, 0.0).verdict, VERDICT_ACCEPT)
+            decision = policy.decide(len(packets), packets[-1], 0.0)
+            self.assertEqual(decision.verdict, VERDICT_DROP)
+            self.assertEqual(decision.rule_id, "grpc-l4-diagnostic-map-snapshot-001")
 
 
 if __name__ == "__main__":

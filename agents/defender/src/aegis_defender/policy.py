@@ -38,7 +38,15 @@ from .metrics import (
 )
 from .http_semantics import parse_http_request
 from .grpc_semantics import GrpcH2StreamInspector
-from .packet import TCP_FIN, TCP_RST, TCP_SYN, ParsedPacket, ParseStatus, is_scan_flag_combination
+from .packet import (
+    IPPROTO_TCP,
+    TCP_FIN,
+    TCP_RST,
+    TCP_SYN,
+    ParsedPacket,
+    ParseStatus,
+    is_scan_flag_combination,
+)
 from .protocol import FrameStatus, VERDICT_ACCEPT, VERDICT_DROP
 from .rules import (
     CompiledMatcher,
@@ -72,6 +80,8 @@ R_CANARY_SKIP = "accept-canary-not-selected"
 R_CONFLICT = "accept-rule-conflict"
 R_POLICY_EXCEPTION = "accept-policy-exception"
 R_SNAPSHOT_MISSING = "accept-snapshot-missing"
+
+_OBSERVED_HTTP_PORTS = frozenset({8080, 8082, 9090, 8410, 8420})
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +138,21 @@ class HotPolicy:
         self._http_stream = http_stream or HttpStreamStitcher()
         self._egress_stream = egress_stream or EgressStreamStitcher()
         self._grpc_stream = grpc_stream or GrpcH2StreamInspector()
+        self._grpc_ports = frozenset(
+            port for _, port, _ in self._policy.grpc_semantic_rules
+        )
+        # Only ports with compiled HTTP semantics need sparse HTTP reconstruction.
+        # Packet-local payload regexes still run on every scoped port below.
+        semantic_http_ports = frozenset(
+            port for _, port, _, _ in self._policy.http_json_rules
+        ) | frozenset(
+            port for _, port, _, _ in self._policy.http_semantic_rules
+        )
+        payload_http_ports = frozenset(
+            port for protocol, port in self._policy.payload_matchers
+            if protocol == IPPROTO_TCP
+        ) & _OBSERVED_HTTP_PORTS
+        self._http_ports = semantic_http_ports | payload_http_ports
 
     @property
     def policy(self) -> CompiledPolicy:
@@ -326,7 +351,7 @@ class HotPolicy:
         )
 
         # gRPC semantic rule이 없으면 H2 재조립을 돌리지 않는다(§5.2 Sig 예산).
-        if self._policy.grpc_semantic_rules:
+        if parsed.dst_port in self._grpc_ports:
             semantic = self._grpc_stream.feed(parsed, self._clock())
             if semantic is not None:
                 rules = self._policy.grpc_semantic_rules.get(
@@ -354,7 +379,10 @@ class HotPolicy:
             self._egress_stream.feed(parsed, self._clock())
             if source_matcher is not None else None
         )
-        stitched = self._http_stream.feed(parsed, self._clock())
+        stitched = (
+            self._http_stream.feed(parsed, self._clock())
+            if parsed.dst_port in self._http_ports else None
+        )
         payload_views = [payload]
         if stitched is not None and stitched != payload:
             payload_views.insert(0, stitched)

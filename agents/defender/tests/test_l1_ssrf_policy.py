@@ -52,6 +52,11 @@ _ACTIVE_RULES = {
     "http-l2-rsc-env-ref-semantic-001",
     "grpc-l1-tail-sensitive-file-001",
     "grpc-l1-export-flag-command-001",
+    "grpc-l4-diagnostic-map-snapshot-001",
+    "grpc-l4-calibration-pickle-code-001",
+    "grpc-l4-programming-secret-source-001",
+    "sig-l4-ros-secret-param-001",
+    "sig-l4-mission-flag-command-001",
     "http-l1-portal-feedback-ssti-semantic-001",
     "sig-l3-mqtt-wildcard-subscribe-001",
     "sig-l3-mqtt-uav-config-001",
@@ -534,6 +539,50 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 self.assertEqual(decision.verdict, VERDICT_DROP)
                 self.assertEqual(decision.rule_id, rule_id)
 
+    def test_finals_p4r11_l4_ros_and_mission_shapes_drop(self):
+        cases = (
+            (
+                b"GET /rosapi/get_param?name=%2Fdeploy_token HTTP/1.1\r\nHost: x\r\n\r\n",
+                "sig-l4-ros-secret-param-001",
+            ),
+            (
+                b"POST /api/command HTTP/1.1\r\nHost: x\r\n\r\n"
+                b'{"command":"run_mission","mission":"flag"}',
+                "sig-l4-mission-flag-command-001",
+            ),
+            (
+                b'{"action":"execute","task":"retrieve_flag"}',
+                "sig-l4-mission-flag-command-001",
+            ),
+        )
+        for port in (8410, 8420):
+            for index, (payload, rule_id) in enumerate(cases):
+                with self.subTest(port=port, rule_id=rule_id, index=index):
+                    decision = self.policy.decide(
+                        940 + index + port,
+                        parse_ip(ipv4_tcp(payload, dst_port=port, src_port=40000 + index)),
+                        0.0,
+                    )
+                    self.assertEqual(decision.verdict, VERDICT_DROP)
+                    self.assertEqual(decision.rule_id, rule_id)
+
+    def test_finals_p4r11_l4_normal_control_shapes_accept(self):
+        normal = (
+            b"GET /rosapi/get_param?name=%2Frobot_name HTTP/1.1\r\nHost: x\r\n\r\n",
+            b'{"command":"run_mission","mission":"survey"}',
+            b'{"action":"execute","task":"return_home"}',
+        )
+        for index in range(100):
+            port = 8410 if index % 2 == 0 else 8420
+            decision = self.policy.decide(
+                1000 + index,
+                parse_ip(ipv4_tcp(
+                    normal[index % len(normal)], dst_port=port, src_port=41000 + index
+                )),
+                0.0,
+            )
+            self.assertEqual(decision.verdict, VERDICT_ACCEPT)
+
     def test_config_path_traversal_encodings_drop_via_canonical_rule(self):
         cases = (
             "GET /config?file=../../../../flag HTTP/1.1\r\nHost: x\r\n\r\n",
@@ -602,9 +651,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p3-r9-egress-lockdown"
+            "defender-2026-08-21-p4-r11-l4-wire-hardening"
         )
-        self.assertEqual(self.report.drop_capable_rules, 32)
+        self.assertEqual(self.report.drop_capable_rules, 37)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

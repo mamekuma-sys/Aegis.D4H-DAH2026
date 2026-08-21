@@ -1,10 +1,12 @@
-"""Bounded in-order TCP stitching for request semantics and egress markers.
+"""Bounded TCP stitching for request semantics and egress markers.
 
 The Broker verdict is packet-scoped, while the protected application consumes a TCP
 stream.  This module keeps only the small request prefix needed to finish one HTTP
 header and, when a bounded ``Content-Length`` is present, its request body.  Gaps,
 oversized input, unsupported traffic, and capacity pressure all fail open and discard
-state; no packet waits for a future segment.
+state; no packet waits for a future segment.  A small sparse window tolerates
+ordinary TCP reordering while fixed byte, segment, flow, and TTL caps preserve the
+hot-path budget.
 """
 
 from __future__ import annotations
@@ -17,9 +19,14 @@ from .packet import IPPROTO_TCP, TCP_FIN, TCP_RST, TCP_SYN, FlowKey, ParsedPacke
 MAX_STREAM_BYTES = 4096
 MAX_STREAM_FLOWS = 2048
 STREAM_TTL_SECONDS = 5.0
-MAX_EGRESS_TAIL_BYTES = 133
+MAX_STREAM_SEGMENTS = 8
+# JSON ``\u00xx`` is the longest supported flag representation: six wire bytes
+# per logical byte plus the prefix/suffix.  Keeping this tail catches a marker
+# split at any packet boundary without retaining a response body.
+MAX_EGRESS_TAIL_BYTES = 786
 MAX_EGRESS_FLOWS = 2048
 EGRESS_TTL_SECONDS = 2.0
+MAX_EGRESS_PENDING_SEGMENTS = 8
 _HEADER_END = b"\r\n\r\n"
 _CONTENT_LENGTH = b"content-length"
 _METHOD_PREFIXES = (
@@ -30,8 +37,8 @@ _METHOD_PREFIXES = (
 
 @dataclass(slots=True)
 class _StreamState:
-    next_sequence: int
-    data: bytearray
+    start_sequence: int
+    segments: list[tuple[int, bytes]]
     expires_at: float
 
 
@@ -42,20 +49,16 @@ class _EgressState:
     head: bytearray
     tail: bytearray
     expires_at: float
-    pending_start: int | None = None
-    pending_end: int = 0
-    pending_head: bytearray | None = None
-    pending_tail: bytearray | None = None
+    pending: list[tuple[int, int, bytearray, bytearray]] | None = None
 
 
 class EgressStreamStitcher:
     """보호 서비스 응답의 경계 분할 marker만 복원하는 bounded tail stitcher.
 
-    `FLAG{` + 최대 128 hex + `}`의 전체 길이는 134바이트다. 각 contiguous 구간의
-    양끝 133바이트와 133바이트 미만의 단일 out-of-order gap만 보존하면 marker가
-    어느 TCP 경계에서 갈려도 현재 packet이 완성하는 순간 검출할 수 있다. 더 큰
-    gap·truncation·capacity pressure에서는 오래된 상태를 버리고 fail-open하며,
-    미래 packet을 기다리느라 verdict를 지연하지 않는다.
+    raw, URL escape, JSON unicode escape 표현 중 가장 긴 marker의 경계 앞뒤만
+    보존한다. 최대 8개의 작은 out-of-order gap을 처리하되, 더 큰 gap·truncation·
+    capacity pressure에서는 오래된 상태를 버리고 fail-open한다. 미래 packet을
+    기다리느라 verdict를 지연하지 않는다.
     """
 
     def __init__(
@@ -78,8 +81,7 @@ class EgressStreamStitcher:
         return sum(
             len(state.head)
             + len(state.tail)
-            + len(state.pending_head or ())
-            + len(state.pending_tail or ())
+            + sum(len(head) + len(tail) for _, _, head, tail in (state.pending or ()))
             for state in self._flows.values()
         )
 
@@ -99,6 +101,7 @@ class EgressStreamStitcher:
             head=bytearray(payload[:self._max_tail]),
             tail=bytearray(payload[-self._max_tail:]),
             expires_at=now + self._ttl,
+            pending=[],
         )
         self._flows.move_to_end(key)
 
@@ -113,36 +116,43 @@ class EgressStreamStitcher:
         sequence: int,
         next_sequence: int,
         payload: bytes,
-    ) -> None:
-        state.pending_start = sequence
-        state.pending_end = next_sequence
-        state.pending_head = bytearray(payload[:self._max_tail])
-        state.pending_tail = bytearray(payload[-self._max_tail:])
+    ) -> bool:
+        pending = state.pending
+        if pending is None:
+            pending = state.pending = []
+        if any(start == sequence and end == next_sequence for start, end, _, _ in pending):
+            return True
+        if len(pending) >= MAX_EGRESS_PENDING_SEGMENTS:
+            return False
+        pending.append((
+            sequence,
+            next_sequence,
+            bytearray(payload[:self._max_tail]),
+            bytearray(payload[-self._max_tail:]),
+        ))
+        return True
 
     def _consume_pending(self, state: _EgressState, combined: bytes) -> bytes:
-        pending_start = state.pending_start
-        pending_head = state.pending_head
-        pending_tail = state.pending_tail
-        if pending_start is None or pending_head is None or pending_tail is None:
+        pending = state.pending
+        if not pending:
             return combined
-        gap = self._signed_delta(pending_start, state.next_sequence)
-        if gap > 0:
-            return combined
-
-        overlap = -gap
-        if overlap < len(pending_head):
-            addition = bytes(pending_head[overlap:])
-            combined += addition
-            span = self._signed_delta(state.next_sequence, state.start_sequence)
-            if span < self._max_tail:
-                state.head[:] = (bytes(state.head) + addition)[:self._max_tail]
-        if self._signed_delta(state.pending_end, state.next_sequence) > 0:
-            state.next_sequence = state.pending_end
-            state.tail[:] = pending_tail
-        state.pending_start = None
-        state.pending_end = 0
-        state.pending_head = None
-        state.pending_tail = None
+        while pending:
+            pending.sort(key=lambda item: self._signed_delta(item[0], state.next_sequence))
+            pending_start, pending_end, pending_head, pending_tail = pending[0]
+            gap = self._signed_delta(pending_start, state.next_sequence)
+            if gap > 0:
+                break
+            pending.pop(0)
+            overlap = -gap
+            if overlap < len(pending_head):
+                addition = bytes(pending_head[overlap:])
+                combined += addition
+                span = self._signed_delta(state.next_sequence, state.start_sequence)
+                if span < self._max_tail:
+                    state.head[:] = (bytes(state.head) + addition)[:self._max_tail]
+            if self._signed_delta(pending_end, state.next_sequence) > 0:
+                state.next_sequence = pending_end
+                state.tail[:] = pending_tail
         return combined
 
     def feed(self, parsed: ParsedPacket, now: float) -> bytes | None:
@@ -197,10 +207,9 @@ class EgressStreamStitcher:
             self._store(key, next_sequence, payload, now)
             state = self._flows[key]
             if gap < self._max_tail:
-                state.pending_start = old.start_sequence
-                state.pending_end = old.next_sequence
-                state.pending_head = old.head
-                state.pending_tail = old.tail
+                state.pending = [(
+                    old.start_sequence, old.next_sequence, old.head, old.tail
+                )]
             return None
 
         if start_offset < 0:
@@ -234,9 +243,11 @@ class EgressStreamStitcher:
             if terminal:
                 self._flows.pop(key, None)
             elif gap < self._max_tail:
-                self._set_pending(state, sequence, next_sequence, payload)
-                state.expires_at = now + self._ttl
-                self._flows.move_to_end(key)
+                if self._set_pending(state, sequence, next_sequence, payload):
+                    state.expires_at = now + self._ttl
+                    self._flows.move_to_end(key)
+                else:
+                    self._flows.pop(key, None)
             else:
                 self._flows.pop(key, None)
                 self._store(key, next_sequence, payload, now)
@@ -314,19 +325,73 @@ class HttpStreamStitcher:
             return header_bytes
         return header_bytes + lengths[0]
 
-    def _start(self, parsed: ParsedPacket, now: float) -> bytes | None:
+    @staticmethod
+    def _signed_delta(value: int, base: int) -> int:
+        delta = (value - base) & 0xFFFFFFFF
+        return delta - 0x100000000 if delta & 0x80000000 else delta
+
+    @staticmethod
+    def _could_be_http_fragment(payload: bytes) -> bool:
+        if not payload or payload.startswith(b"PRI * HTTP/2.0") or b"\x00" in payload:
+            return False
+        printable = sum(byte in (9, 10, 13) or 32 <= byte <= 126 for byte in payload)
+        return printable * 10 >= len(payload) * 9 and (
+            b"\r\n" in payload or b":" in payload or payload[:1] in b"{["
+        )
+
+    def _insert_segment(
+        self, state: _StreamState, sequence: int, payload: bytes
+    ) -> bool:
+        if self._signed_delta(sequence, state.start_sequence) < 0:
+            state.start_sequence = sequence
+        items = state.segments + [(sequence, payload)]
+        items.sort(key=lambda item: self._signed_delta(item[0], state.start_sequence))
+        merged: list[tuple[int, bytes]] = []
+        for item_sequence, item_payload in items:
+            offset = self._signed_delta(item_sequence, state.start_sequence)
+            if offset < 0 or offset + len(item_payload) > self._max_bytes:
+                return False
+            if not merged:
+                merged.append((item_sequence, item_payload))
+                continue
+            previous_sequence, previous_payload = merged[-1]
+            previous_offset = self._signed_delta(previous_sequence, state.start_sequence)
+            previous_end = previous_offset + len(previous_payload)
+            if offset > previous_end:
+                merged.append((item_sequence, item_payload))
+                continue
+            overlap = previous_end - offset
+            if overlap < len(item_payload):
+                merged[-1] = (previous_sequence, previous_payload + item_payload[overlap:])
+        if len(merged) > MAX_STREAM_SEGMENTS:
+            return False
+        state.segments = merged
+        return True
+
+    def _complete_request(self, state: _StreamState) -> bytes | None:
+        if not state.segments:
+            return None
+        sequence, data = state.segments[0]
+        if sequence != state.start_sequence or not data.startswith(_METHOD_PREFIXES):
+            return None
+        required = self._required_bytes(data)
+        if required is None or len(data) < required:
+            return None
+        return data
+
+    def _start(self, parsed: ParsedPacket, now: float, *, candidate: bool = False) -> bytes | None:
         payload = parsed.payload
-        required = self._required_bytes(payload)
-        if required is not None:
-            if required <= len(payload) or required > self._max_bytes:
+        if not candidate:
+            required = self._required_bytes(payload)
+            if required is not None and (required <= len(payload) or required > self._max_bytes):
                 return payload
         if parsed.payload_truncated or len(payload) >= self._max_bytes:
             return None
         self._ensure_capacity(now)
-        sequence = parsed.tcp_sequence + (1 if parsed.tcp_flags & TCP_SYN else 0)
+        sequence = (parsed.tcp_sequence + (1 if parsed.tcp_flags & TCP_SYN else 0)) & 0xFFFFFFFF
         self._flows[parsed.flow_key] = _StreamState(
-            next_sequence=(sequence + len(payload)) & 0xFFFFFFFF,
-            data=bytearray(payload),
+            start_sequence=sequence,
+            segments=[(sequence, payload)],
             expires_at=now + self._ttl,
         )
         return None
@@ -349,45 +414,30 @@ class HttpStreamStitcher:
             state = None
 
         starts_request = payload.startswith(_METHOD_PREFIXES)
+        if parsed.tcp_flags & TCP_SYN and state is not None:
+            self._flows.pop(key, None)
+            state = None
         if state is None:
-            if not starts_request:
+            if not starts_request and not self._could_be_http_fragment(payload):
                 return None
-            return self._start(parsed, now)
+            return self._start(parsed, now, candidate=not starts_request)
 
         if parsed.tcp_flags & (TCP_FIN | TCP_RST):
             self._flows.pop(key, None)
             return None
 
-        sequence = parsed.tcp_sequence + (1 if parsed.tcp_flags & TCP_SYN else 0)
-        expected = state.next_sequence
-        if sequence == expected:
-            suffix = payload
-        elif sequence < expected:
-            overlap = expected - sequence
-            if overlap >= len(payload):
-                state.expires_at = now + self._ttl
-                self._flows.move_to_end(key)
-                return None
-            suffix = payload[overlap:]
-        else:
-            # A gap means the application and this bounded view no longer agree.
-            self._flows.pop(key, None)
-            if starts_request:
-                return self.feed(parsed, now)
-            return None
-
-        if len(state.data) + len(suffix) > self._max_bytes:
+        if parsed.payload_truncated:
             self._flows.pop(key, None)
             return None
-        state.data.extend(suffix)
-        state.next_sequence = (expected + len(suffix)) & 0xFFFFFFFF
+        sequence = (parsed.tcp_sequence + (1 if parsed.tcp_flags & TCP_SYN else 0)) & 0xFFFFFFFF
+        if not self._insert_segment(state, sequence, payload):
+            self._flows.pop(key, None)
+            return None
         state.expires_at = now + self._ttl
         self._flows.move_to_end(key)
-
-        required = self._required_bytes(state.data)
-        if required is None or len(state.data) < required:
+        complete = self._complete_request(state)
+        if complete is None:
             return None
-        complete = bytes(state.data)
         self._flows.pop(key, None)
         return complete
 

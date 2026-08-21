@@ -49,7 +49,7 @@ from .metrics import (
     Metrics,
 )
 from .packet import ParseStatus, parse_ip
-from .policy import HotPolicy, R_CONFLICT
+from .policy import HotPolicy, R_CONFLICT, R_SHADOW
 from .protocol import FrameStatus, VERDICT_DROP
 from .rules import load_policy
 from .session import (
@@ -263,6 +263,7 @@ class DefenderRuntime:
             baseline_match=decision.baseline_match,
             rule_id=decision.rule_id,
             cohort_conflict=cohort_conflict,
+            shadow_hit=decision.reason_code == R_SHADOW,
         )
 
         now = self.clock()
@@ -306,6 +307,7 @@ class DefenderRuntime:
             heartbeats=self.heartbeat.sent_count,
             audit_dropped=self.audit.dropped,
             counters=self.metrics.counters(),
+            rule_activity=self.anomaly.rule_summary(),
             hot_path=self.metrics.latency_summary(L_HOT_PATH),
             verdict_send_e2e=self.metrics.latency_summary(L_VERDICT_SEND_E2E),
         )
@@ -353,6 +355,7 @@ class DefenderRuntime:
             heartbeats=self.heartbeat.sent_count,
             advisory=self.advisory.usage_evidence(),
             counters=self.metrics.counters(),
+            rule_activity=self.anomaly.rule_summary(),
             hot_path=self.metrics.latency_summary(L_HOT_PATH),
             verdict_send_e2e=self.metrics.latency_summary(L_VERDICT_SEND_E2E),
         )

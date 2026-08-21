@@ -195,7 +195,7 @@ class ReplayReport:
                     "실제 HotPolicy DROP 수다. 값은 저장하거나 출력하지 않는다."
                 ),
                 "parsed_requests": (
-                    "packet-local 또는 bounded in-order stitching으로 완성된 HTTP 요청 "
+                    "packet-local 또는 bounded sparse stitching으로 완성된 HTTP 요청 "
                     "prefix를 세며, 실제 HotPolicy와 같은 상한·TTL을 적용한다."
                 ),
             },
@@ -367,6 +367,26 @@ def classify_observed_shape(
         and request.sql_source_matches(("id",), "app_meta")
     ):
         return "l3-app-meta-union-sqli"
+
+    if port in (8410, 8420):
+        if request.path in ("/flag", "/secret", "/admin", "/debug", "/api/flag"):
+            return "l4-sensitive-http-route"
+        if request.path == "/rosapi/get_param" and any(
+            name == "name" and value.lower().lstrip("/") in {
+                "flag", "deploy_token", "secret", "mcs_token", "token", "api_key",
+            }
+            for name, value in request.query_pairs
+        ):
+            return "l4-ros-secret-param"
+        if re.search(
+            rb"[\"'](?:command|action)[\"']\s*:\s*[\"']"
+            rb"(?:run_mission|complete_mission|execute)[\"'][^\r\n]{0,160}"
+            rb"[\"'](?:mission|id|task)[\"']\s*:\s*[\"']"
+            rb"(?:flag|retrieve_flag)[\"']",
+            payload,
+            re.IGNORECASE,
+        ):
+            return "l4-mission-flag-command"
     return None
 
 

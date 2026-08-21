@@ -15,7 +15,7 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ## 현재 상태
 
-현재 bundle은 `defender-2026-08-21-p3-r9-egress-lockdown`입니다. 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록했습니다. 증거·정상 negative·SLA fixture와 두 review가 있는 rule 32개가 `ACTIVE`이고, 광역 portal rule과 근거가 부족한 일반 휴리스틱·스캔·flow-score rule 13개는 `SHADOW`입니다. ACTIVE 규칙은 `2026-09-01T00:00:00Z`에 만료합니다.
+현재 bundle은 `defender-2026-08-21-p4-r11-l4-wire-hardening`입니다. 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록했습니다. 증거·정상 negative·SLA fixture와 두 review가 있는 rule 37개가 `ACTIVE`이고, 광역 portal rule과 근거가 부족한 일반 휴리스틱·스캔·flow-score rule 13개는 `SHADOW`입니다. R11에서 관측된 L4 gRPC semantic 3개와 ROS/mission exact payload rule 2개가 추가됐습니다. ACTIVE 규칙은 `2026-09-01T00:00:00Z`에 만료합니다.
 
 활성 범위는 L1 helper secret SSRF와 config-to-flag traversal, SatDiag Tail/Export 플래그 접근, `/svc/flag-*`, 증명된 portal SSTI, L2 GraphQL `missionAudit`, `/api/rsc-action` env-ref, `/ws/mission-feed`, Base64-JSON `session` 관리자 claim 위조와 loopback secret/registry SSRF, L3 `app_meta` 대상 UNION SQLi, MQTT/RTSP 민감 경로, 보호 서비스 응답의 `FLAG{hex}` 유출입니다. 일반 `service_id` query, query 없는 `/portal/feedback`, GraphQL `systemConfig`는 포함하지 않습니다. HTTP 의미 규칙은 완성된 bounded request prefix에만 적용하고 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. SHADOW 일치가 뒤의 ACTIVE 의미 규칙을 가리지 않도록 ACTIVE→CANARY→SHADOW 순서로 평가합니다.
 

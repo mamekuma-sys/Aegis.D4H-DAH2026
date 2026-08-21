@@ -269,13 +269,13 @@ class TestEndToEnd(unittest.TestCase):
         lines = [json.loads(line) for line in harness.stream.getvalue().splitlines() if line]
         startup = [line for line in lines if line["event"] == "startup"]
         self.assertEqual(len(startup), 1)
-        self.assertEqual(startup[0]["agent_version"], "0.3.6-r9-egress-reassembly")
+        self.assertEqual(startup[0]["agent_version"], "0.4.0-r11-l4-wire-hardening")
         self.assertEqual(startup[0]["policy_source"], "active")
         self.assertEqual(
             startup[0]["bundle_id"],
-            "defender-2026-08-21-p3-r9-egress-lockdown"
+            "defender-2026-08-21-p4-r11-l4-wire-hardening"
         )
-        self.assertEqual(startup[0]["drop_capable_rules"], 32)
+        self.assertEqual(startup[0]["drop_capable_rules"], 37)
         self.assertEqual(startup[0]["demotions"], [])
         self.assertFalse(startup[0]["advisory_enabled"])
 

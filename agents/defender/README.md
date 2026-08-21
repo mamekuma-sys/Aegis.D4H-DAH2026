@@ -85,7 +85,7 @@ p50·p95·p99·max가 남습니다.
 
 ## 현재 정책 상태
 
-현재 bundle `defender-2026-08-21-p3-r9-egress-lockdown`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, 증명된 portal SSTI, `/api/rsc-action` env-ref, `/ws/mission-feed`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi, MQTT/RTSP 민감 경로, 보호 서비스 응답의 hex flag 유출에 대응하는 32개 규칙이 `ACTIVE`입니다. 광역 portal rule과 근거가 부족한 일반 휴리스틱·스캔·flow-score 규칙 13개는 `SHADOW`입니다.
+현재 bundle `defender-2026-08-21-p4-r11-l4-wire-hardening`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. 기존 L1~L3 방어에 더해 R11에서 관측된 L4 gRPC Exchange의 map snapshot, 위험 pickle opcode, secret-reading STORE source와 ROS/mission exact field 조합을 방어합니다. raw·URL·JSON unicode escape flag egress까지 포함해 37개 규칙이 `ACTIVE`이고, 근거가 부족한 광역 휴리스틱 13개는 `SHADOW`입니다.
 
 egress 규칙은 목적지 포트가 아닌 보호 서비스 `source_ports`로 응답 방향을 제한하고 `FLAG{hex}` 형태만 차단합니다. 비-hex placeholder와 보호 서비스가 아닌 source port는 통과하며, 공식 SLA 하락 또는 정상 checker의 flag 회수가 확인되면 즉시 SHADOW로 되돌립니다. TCP 경계 분할은 응답 방향에서만 flow당 양끝 최대 133바이트, 최대 2,048 flow, 2초 TTL로 복원합니다. 작은 out-of-order gap 하나는 bounded 조각으로 합치고, 큰 gap·truncation·상한 압력은 상태를 버려 verdict를 기다리지 않습니다.
 
@@ -128,7 +128,7 @@ CI의 `defender-tests` job이 `ubuntu-latest` + Python 3.12(= 이미지와 같�
 소켓에만 의존시킬 수 없기 때문입니다. 설계 §15.4가 fake 기반 검증을 명시한 것도 같은 이유입니다.
 
 단, `tests/test_linux_seqpacket.py`는 Linux에서 실제 `AF_UNIX/SOCK_SEQPACKET`으로 전체 runtime을
-기동해 PACKET→VERDICT, HEARTBEAT, ACTIVE policy source·32개 DROP rule, 300ms 미만 송신 완료를
+기동해 PACKET→VERDICT, HEARTBEAT, ACTIVE policy source·37개 DROP rule, 300ms 미만 송신 완료를
 검증합니다. macOS에서는 명시적으로 skip되고 `ubuntu-latest` CI와 `linux/amd64` 이미지 검증에서
 실행됩니다. 공식 스켈레톤이 제공되면 이 검사를 대체하는 것이 아니라 그 위에 skeleton Compose
 E2E를 추가합니다.
@@ -171,6 +171,6 @@ correlation worker와 공유하지 않고 단일 producer만 소유하므로 loc
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
-- 정상 시작 로그: `{"event":"startup", "agent_version":"0.3.6-r9-egress-reassembly", "policy_source":"active", "bundle_id":"defender-2026-08-21-p3-r9-egress-lockdown", "drop_capable_rules":32, "demotions":[], ...}`
+- 정상 시작 로그: `{"event":"startup", "agent_version":"0.4.0-r11-l4-wire-hardening", "policy_source":"active", "bundle_id":"defender-2026-08-21-p4-r11-l4-wire-hardening", "drop_capable_rules":37, "demotions":[], ...}`
 - 종료: SIGTERM에서 2초 내 정리 종료, 종료 코드 0
 - 비밀 비출력: `FLAG{...}`, API key, Bearer 토큰, raw payload가 로그에 나오지 않음을 `tests/test_advisory.py`의 `TestAuditRedaction`이 검증
