@@ -1407,6 +1407,75 @@ class TestUgvObservedDiscovery(unittest.TestCase):
         self.assertLessEqual(arena.banner_calls[0][3], 4096)
         self.assertEqual(arena.llm_calls, 0)
 
+    def test_r11_l4_ports_run_existing_probes_after_silent_bootstrap(self):
+        class SilentBootstrapL4Arena:
+            def __init__(self, flag):
+                self.flag = flag
+                self.submits = []
+                self.target_calls = []
+                self.passive_calls = []
+                self.http_root_calls = 0
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    return HttpResponse(500, "unused")
+                parts = urlsplit(url)
+                self.target_calls.append((parts.scheme, method, parts.path))
+                if parts.scheme == "https":
+                    return HttpResponse(0, "", {})
+                if parts.path == "/":
+                    self.http_root_calls += 1
+                    if self.http_root_calls == 1:
+                        return HttpResponse(0, "", {})
+                if parts.path == "/telemetry":
+                    return HttpResponse(200, self.flag, {})
+                return HttpResponse(404, "not found", {})
+
+            def read_passive_banner(self, host, port, timeout, max_bytes):
+                self.passive_calls.append((host, port, timeout, max_bytes))
+                return HttpResponse(0, "", {})
+
+        for port in (8410, 8420):
+            with self.subTest(port=port):
+                arena = SilentBootstrapL4Arena(f"FLAG{{r11_l4_{port}}}")
+                cfg = AttackerConfig(
+                    targets=("t2.lig.internal",), ports=(port,),
+                    submit_url="http://backend:4100/submit", submit_token="tok-team1",
+                    llm_api_key="", concurrency=1,
+                )
+                clk = FakeClock()
+                audit_lines = []
+                report = AttackerRuntime(
+                    cfg,
+                    http=arena,
+                    clock=clk,
+                    sleep=lambda dt: clk.advance(dt),
+                    audit=AuditLogger(sink=audit_lines.append, clock=clk),
+                ).run_once()
+
+                self.assertEqual(report.accepted_count(), 1)
+                self.assertEqual(len(arena.submits), 1)
+                self.assertEqual(len(arena.passive_calls), 1)
+                self.assertEqual(arena.target_calls[0], ("http", "GET", "/"))
+                self.assertEqual(arena.target_calls[1], ("https", "GET", "/"))
+                forced_calls = arena.target_calls[2:]
+                self.assertTrue(forced_calls)
+                self.assertTrue(all(call[0] == "http" for call in forced_calls))
+                self.assertIn(("http", "GET", "/telemetry"), forced_calls)
+                self.assertIn(("http", "GET", "/flag"), forced_calls)
+                events = [json.loads(line) for line in audit_lines]
+                self.assertTrue(any(
+                    item["event"] == "l4-prebanner-probes-forced" for item in events
+                ))
+                self.assertFalse(any(
+                    item["event"] == "skip"
+                    and item.get("reason") == "no-http-https-or-passive-banner"
+                    for item in events
+                ))
+
 
 class TestRuntimeInert(unittest.TestCase):
     def test_inert_without_targets_returns(self):
