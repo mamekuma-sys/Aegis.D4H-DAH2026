@@ -309,12 +309,12 @@ class TestLoadOrder(unittest.TestCase):
     def test_shipped_bundle_activates_only_reviewed_observed_rules(self):
         compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-p1r1-8080-hotfix")
-        self.assertEqual(report.drop_capable_rules, 9)
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-finals-portmap")
+        self.assertEqual(report.drop_capable_rules, 12)
         self.assertEqual(report.demotions, ())
         self.assertEqual(
             compiled.baseline_profiles,
-            frozenset({"6/8080", "6/8082", "6/8083", "6/8084"}),
+            frozenset({"6/8080", "6/9000", "6/8082", "6/1883", "6/8554", "6/9090", "6/8410", "6/8420"}),
         )
         active_ids = {
             "sig-l1-helper-secret-001",
@@ -326,6 +326,9 @@ class TestLoadOrder(unittest.TestCase):
             "http-l3-app-meta-canonical-001",
             "sig-l1-config-flag-traversal-001",
             "http-l2-loopback-registry-canonical-001",
+            "sig-l1-satdiag-tail-flag-001",
+            "sig-l1-satdiag-export-flag-echo-001",
+            "sig-l2-graphql-mission-audit-001",
         }
         for rule_id, rule in compiled.rules_by_id.items():
             expected = PromotionState.ACTIVE if rule_id in active_ids else PromotionState.SHADOW
@@ -333,8 +336,8 @@ class TestLoadOrder(unittest.TestCase):
 
     def test_shipped_bundle_keeps_reviewed_rules_active_during_finals_week(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1787356800.0)
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-p1r1-8080-hotfix")
-        self.assertEqual(report.drop_capable_rules, 9)
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-finals-portmap")
+        self.assertEqual(report.drop_capable_rules, 12)
         self.assertEqual(report.demotions, ())
 
     def test_shipped_active_rules_are_evidence_scoped_by_observed_layer(self):
@@ -360,13 +363,13 @@ class TestLoadOrder(unittest.TestCase):
         # 같은 evidence gate를 통과시킨 뒤 이 기대값과 bundle을 함께 갱신한다.
         self.assertEqual(
             {port: len(rule_ids) for port, rule_ids in active_by_port.items()},
-            {8080: 3, 8082: 3, 8083: 4, 8084: 2},
+            {8080: 3, 8082: 8, 9000: 2, 9090: 2},
         )
 
     def test_shipped_bundle_expires_after_finals_validity_window(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1788220800.0)
         self.assertEqual(report.drop_capable_rules, 0)
-        self.assertEqual(len(report.demotions), 9)
+        self.assertEqual(len(report.demotions), 12)
         self.assertTrue(all(entry.endswith(":expired") for entry in report.demotions))
 
     def test_shipped_fallback_is_valid(self):
@@ -387,7 +390,7 @@ class TestShippedBroadHeuristicSafety(unittest.TestCase):
         compiled, _ = load_policy(_POLICY_DIR)
         self.policy = HotPolicy(policy=compiled, clock=lambda: 0.0)
 
-    def _verdict(self, payload, dst_port=8083, src_port=51234):
+    def _verdict(self, payload, dst_port=8082, src_port=51234):
         from aegis_defender.packet import parse_ip
         from .fakes import ipv4_tcp
         parsed = parse_ip(ipv4_tcp(payload, src_port=src_port, dst_port=dst_port))

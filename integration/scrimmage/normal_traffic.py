@@ -16,7 +16,7 @@ import urllib.request
 CASES = tuple(
     (f"team{team}.lig.internal", port, path)
     for team in (1, 2)
-    for port, path in ((8082, "/health"), (8083, "/health"), (8084, "/health"))
+    for port, path in ((8080, "/health"), (8082, "/health"), (9090, "/health"))
 )
 
 

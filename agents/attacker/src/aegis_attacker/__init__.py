@@ -7,5 +7,5 @@
 AI 진위 증빙(운영세칙 제23조)을 단순하게 만들기 위한 선택이다.
 """
 
-__version__ = "0.3.0-p1ports"
-ATTACK_PROFILE = "sol-fallback+p1-grpc"  # 본선 8080 HTTP·9000 gRPC 프로필.
+__version__ = "0.3.6-finals-portmap"
+ATTACK_PROFILE = "gpt-5.6-sol-always+creative-satdiag"

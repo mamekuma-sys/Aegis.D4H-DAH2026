@@ -34,19 +34,31 @@ def total_rounds() -> int:
     return sum(FINALS_PHASE_ROUNDS.values())
 
 
-# 본선 P1의 8080 HTTP·9000 gRPC는 같은 L1 서비스의 두 진입점이다. 과거 데모
-# 8082~8085 매핑은 회귀 fixture 순회에만 유지한다.
-_DEMO_LAYER_PORTS = {8080: 1, 9000: 1, 8082: 1, 8083: 2, 8084: 3, 8085: 4}
+# 본선 레이어 진입 포트 (대회 대시보드 기준).
+# L1 starlink-gw: 8080 HTTP · 9000 gRPC SatDiag
+# L2 mission-c2: 8082
+# L3 uav-node: 1883 MQTT · 8554 RTSP · 9090
+# L4 ugv-node: 8410 · 8420
+_LAYER_PORTS = {
+    8080: 1,
+    9000: 1,
+    8082: 2,
+    1883: 3,
+    8554: 3,
+    9090: 3,
+    8410: 4,
+    8420: 4,
+}
 
 
 def layer_of_port(port: int) -> int:
-    return _DEMO_LAYER_PORTS.get(port, 0)  # 미상
+    return _LAYER_PORTS.get(port, 0)  # 미상
 
 
 def cumulative_endpoint_order(endpoints) -> list:
     """누적 개방 레이어를 공정하게 섞되 새 L4를 첫 wave에 포함한다.
 
-    알려진 데모 포트는 host별로 ``L4→L1→L2→L3`` 순환한다. Phase 4 UGV를 늦게
+    알려진 본선 포트는 host별로 ``L4→L1→L2→L3`` 순환한다. Phase 4 UGV를 늦게
     시작하지 않으면서도 이전 레이어가 굶지 않게 한 슬롯씩 배치한다. 포트-레이어 관계가
     관측되지 않은 endpoint는 입력 순서를 보존하며, 전부 미상인 경우 원본 순서 그대로다.
     """

@@ -8,8 +8,10 @@ L2 관리자 session 위조·loopback secret/registry SSRF, L3 `app_meta` SQLi�
 endpoint당 최대 20회의 zero-token fast path로 일반 정찰보다 먼저 실행합니다. Phase 4
 본선 P1의 `8080`은 Open-Satellite HTTP 포털로 관측됐고, `9000`은 plaintext gRPC
 `satdiag.v1.SatDiag` 서비스로 관측됐습니다. 9000에서는 `Health`로 protocol을 확인한 뒤
-`TailDiagnosticLog`와 `ProbeEndpoint`의 관측된 필드만 읽기 전용으로 실행합니다. 서버에 파일을
-생성하는 `ExportDiagnosticBundle`은 자동 실행하지 않습니다. 그 밖의 미확인 서비스는 root와 읽기 전용
+P1-R2에서 flag를 회수한 경로와, HTTP 팀들이 잘 안 보는 축을 앞에 둡니다:
+`ExportDiagnosticBundle` command-injection(`${FLAG}`/cat/printenv/environ),
+`TailDiagnosticLog(/proc/self/environ|/flag)`, `ProbeEndpoint` loopback pivot.
+이어서 관측 필드 변형을 bounded로 시도합니다. 그 밖의 미확인 서비스는 root와 읽기 전용
 probe 응답이 실제로 노출한 route·parameter만 bounded discovery text로 다음 결정론 공격에 전달합니다.
 미확인 포트의 discovery는 상태·문서용 6개 GET으로 제한하고, parameter를 광고된 정확한 route에
 결속합니다. traversal·파괴적 action route는 실행하지 않으며, 포트별 인터페이스와 flag 상태를 섞지

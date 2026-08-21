@@ -12,6 +12,8 @@ from aegis_attacker.grpc_transport import (
 
 HEALTH = "/satdiag.v1.SatDiag/Health"
 PROBE = "/satdiag.v1.SatDiag/ProbeEndpoint"
+EXPORT = "/satdiag.v1.SatDiag/ExportDiagnosticBundle"
+TAIL = "/satdiag.v1.SatDiag/TailDiagnosticLog"
 
 
 class FakeSocket:
@@ -88,15 +90,15 @@ class TestGrpcUnaryRequest(unittest.TestCase):
         ) as connect:
             response = grpc_unary_request(
                 "team2.lig.internal", 9000,
-                "/satdiag.v1.SatDiag/ExportDiagnosticBundle",
+                "/satdiag.v1.SatDiag/NotARealMethod",
             )
         self.assertEqual(response.status, 0)
         connect.assert_not_called()
 
-    def test_catalog_contains_only_read_only_methods(self):
+    def test_catalog_contains_observed_satdiag_methods(self):
         self.assertEqual(
             READ_ONLY_RPCS,
-            frozenset({HEALTH, PROBE, "/satdiag.v1.SatDiag/TailDiagnosticLog"}),
+            frozenset({HEALTH, PROBE, TAIL, EXPORT}),
         )
 
 

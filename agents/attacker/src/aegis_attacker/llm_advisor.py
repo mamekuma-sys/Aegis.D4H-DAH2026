@@ -15,10 +15,10 @@ from .config import DEFAULT_LLM_FALLBACK_MODEL, DEFAULT_LLM_MODEL
 from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
-MAX_LLM_CALLS_PER_ROUND = 48  # R17의 111회/93k token 무진전 확산을 막고 대표 service solver에 집중.
-LLM_TIMEOUT = 20.0
-LLM_MAX_COMPLETION_TOKENS = 800
-LLM_REASONING_EFFORT = "low"
+MAX_LLM_CALLS_PER_ROUND = 240  # sol 다턴·재시도. LLM 스킵 없이 flag 우선.
+LLM_TIMEOUT = 30.0
+LLM_MAX_COMPLETION_TOKENS = 1200
+LLM_REASONING_EFFORT = "medium"
 _RETRYABLE_LLM_STATUSES = frozenset({0, 408, 409, 425, 429, 500, 502, 503, 504})
 # 공격 대상이 반환한 최대 1MiB 응답을 그대로 prompt로 보내지 않는다. 토큰 수는
 # tokenizer 없이 정확히 계산할 수 없으므로 UTF-8 byte를 보수적인 상한으로 사용한다.
@@ -158,10 +158,8 @@ class LLMAdvisor:
             ],
         }
         if is_gpt56:
-            # GPT-5.6의 기본 medium은 20초 hot path에 불리하므로 저지연 low를 명시한다.
             payload_obj["reasoning_effort"] = LLM_REASONING_EFFORT
         else:
-            # 기존 비-reasoning 모델을 LLM_MODEL로 명시한 경우의 동작을 보존한다.
             payload_obj["temperature"] = 0
 
         payload = json.dumps(payload_obj)

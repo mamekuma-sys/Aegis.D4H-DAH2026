@@ -1,8 +1,17 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-p1r1-8080-hotfix",
-  "generated_at": "2026-08-21T01:43:56Z",
-  "baseline_profiles": ["6/8080", "6/8082", "6/8083", "6/8084"],
+  "bundle_id": "defender-2026-08-21-finals-portmap",
+  "generated_at": "2026-08-21T02:30:00Z",
+  "baseline_profiles": [
+    "6/8080",
+    "6/9000",
+    "6/8082",
+    "6/1883",
+    "6/8554",
+    "6/9090",
+    "6/8410",
+    "6/8420"
+  ],
   "rules": [
     {
       "rule_id": "sig-path-traversal-001",
@@ -10,7 +19,14 @@
       "category": "path-traversal",
       "reason_code": "sig-path-traversal",
       "protocol": "tcp",
-      "ports": [8083, 8084],
+      "ports": [
+        8082,
+        1883,
+        8554,
+        9090,
+        8410,
+        8420
+      ],
       "pattern": "\\.\\.(?:/|\\\\|%2[fF]|%5[cC])|%2[eE]%2[eE]",
       "ignore_case": false,
       "promotion_state": "SHADOW",
@@ -19,7 +35,9 @@
       "promotion_cohort": "l2-enforce-20260815",
       "promoted_in_bundle": "defender-2026-08-15-l2-enforce",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "finals-p2r8-l2-8083-pcap",
       "positive_fixture_id": "fx-p2r8-lfi-pos",
       "negative_fixture_id": "fx-p2r8-l2-normal",
@@ -35,7 +53,14 @@
       "category": "sql-injection",
       "reason_code": "sig-sql-injection",
       "protocol": "tcp",
-      "ports": [8083, 8084],
+      "ports": [
+        8082,
+        1883,
+        8554,
+        9090,
+        8410,
+        8420
+      ],
       "pattern": "'\\s*or\\s|union\\s+select|;\\s*drop\\s|sleep\\(|benchmark\\(",
       "ignore_case": true,
       "promotion_state": "SHADOW",
@@ -44,7 +69,9 @@
       "promotion_cohort": "l2-enforce-20260815",
       "promoted_in_bundle": "defender-2026-08-15-l2-enforce",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "finals-p2r8-l2-8083-pcap",
       "positive_fixture_id": "fx-p2r8-sqli-pos",
       "negative_fixture_id": "fx-p2r8-l2-normal",
@@ -69,7 +96,9 @@
       "promotion_cohort": "initial-shadow",
       "promoted_in_bundle": "",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "PENDING-FINALS-PCAP",
       "positive_fixture_id": "pending",
       "negative_fixture_id": "pending",
@@ -94,7 +123,9 @@
       "promotion_cohort": "initial-shadow",
       "promoted_in_bundle": "",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "PENDING-FINALS-PCAP",
       "positive_fixture_id": "pending",
       "negative_fixture_id": "pending",
@@ -119,7 +150,9 @@
       "promotion_cohort": "initial-shadow",
       "promoted_in_bundle": "",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "PENDING-FINALS-PCAP",
       "positive_fixture_id": "pending",
       "negative_fixture_id": "pending",
@@ -135,7 +168,14 @@
       "category": "file-read",
       "reason_code": "sig-file-read",
       "protocol": "tcp",
-      "ports": [8083, 8084],
+      "ports": [
+        8082,
+        1883,
+        8554,
+        9090,
+        8410,
+        8420
+      ],
       "pattern": "/etc/passwd|/proc/self/|file://",
       "ignore_case": true,
       "promotion_state": "SHADOW",
@@ -144,7 +184,9 @@
       "promotion_cohort": "l2-enforce-20260815",
       "promoted_in_bundle": "defender-2026-08-15-l2-enforce",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "finals-p2r8-l2-8083-pcap",
       "positive_fixture_id": "fx-p2r8-fileread-pos",
       "negative_fixture_id": "fx-p2r8-l2-normal",
@@ -160,7 +202,14 @@
       "category": "sensitive-path",
       "reason_code": "sig-sensitive-path",
       "protocol": "tcp",
-      "ports": [8083, 8084],
+      "ports": [
+        8082,
+        1883,
+        8554,
+        9090,
+        8410,
+        8420
+      ],
       "pattern": "/flags?(?:[/\\s?]|$)|\\.git/|\\.env(?:[\\s?&]|$)|/backup",
       "ignore_case": true,
       "promotion_state": "SHADOW",
@@ -169,7 +218,9 @@
       "promotion_cohort": "l2-enforce-20260815",
       "promoted_in_bundle": "defender-2026-08-15-l2-enforce",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "finals-p2r8-l2-8083-pcap",
       "positive_fixture_id": "fx-p2r8-sensitivepath-pos",
       "negative_fixture_id": "fx-p2r8-l2-normal",
@@ -185,7 +236,14 @@
       "category": "ssrf-internal",
       "reason_code": "sig-ssrf-internal",
       "protocol": "tcp",
-      "ports": [8083, 8084],
+      "ports": [
+        8082,
+        1883,
+        8554,
+        9090,
+        8410,
+        8420
+      ],
       "pattern": "(?:%2[fF]%2[fF]|//)(?:127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0|\\[?::1)|169\\.254\\.169\\.254",
       "ignore_case": true,
       "promotion_state": "SHADOW",
@@ -194,7 +252,9 @@
       "promotion_cohort": "l2-enforce-20260815",
       "promoted_in_bundle": "defender-2026-08-15-l2-enforce",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "finals-p2r8-l2-8083-pcap",
       "positive_fixture_id": "fx-p2r8-ssrf-pos",
       "negative_fixture_id": "fx-p2r8-l2-normal",
@@ -219,7 +279,9 @@
       "promotion_cohort": "l2-enforce-20260815",
       "promoted_in_bundle": "defender-2026-08-15-l2-enforce",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "finals-p2r8-l2-8083-pcap",
       "positive_fixture_id": "fx-p2r8-flag-pos",
       "negative_fixture_id": "fx-p2r8-l2-normal",
@@ -243,7 +305,9 @@
       "promotion_cohort": "initial-shadow",
       "promoted_in_bundle": "",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "PENDING-FINALS-PCAP",
       "positive_fixture_id": "pending",
       "negative_fixture_id": "pending",
@@ -267,7 +331,9 @@
       "promotion_cohort": "initial-shadow",
       "promoted_in_bundle": "",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "PENDING-FINALS-PCAP",
       "positive_fixture_id": "pending",
       "negative_fixture_id": "pending",
@@ -291,7 +357,9 @@
       "promotion_cohort": "initial-shadow",
       "promoted_in_bundle": "",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "PENDING-FINALS-PCAP",
       "positive_fixture_id": "pending",
       "negative_fixture_id": "pending",
@@ -315,7 +383,9 @@
       "promotion_cohort": "initial-shadow",
       "promoted_in_bundle": "",
       "parser_version": 1,
-      "profile_scope": ["*"],
+      "profile_scope": [
+        "*"
+      ],
       "evidence_id": "PENDING-FINALS-PCAP",
       "positive_fixture_id": "pending",
       "negative_fixture_id": "pending",
@@ -331,7 +401,10 @@
       "category": "ssrf",
       "reason_code": "sig-l1-helper-secret",
       "protocol": "tcp",
-      "ports": [8080, 8082],
+      "ports": [
+        8080,
+        8082
+      ],
       "pattern": "(?:GET|POST) [^\\r\\n ]{0,1000}(?:helper-box\\.?(?::|%3a)8080(?:/|%2f)secret|%68%65%6c%70%65%72%2d%62%6f%78%3a%38%30%38%30%2f%73%65%63%72%65%74) HTTP/1\\.[01]",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
@@ -340,7 +413,10 @@
       "promotion_cohort": "team1-capture-l1-helper-ssrf",
       "promoted_in_bundle": "defender-2026-08-21-p1r1-8080-hotfix",
       "parser_version": 1,
-      "profile_scope": ["6/8080", "6/8082"],
+      "profile_scope": [
+        "6/8080",
+        "6/8082"
+      ],
       "evidence_id": "TEAM1-PCAP-P1-R1-L1-8080-PLUS-PRIOR-8082-20260821",
       "positive_fixture_id": "TEAM1-L1-HELPER-SECRET-VARIANTS-POS-002",
       "negative_fixture_id": "TEAM1-L1-HTTP-NEG-002",
@@ -356,12 +432,39 @@
       "category": "ssrf",
       "reason_code": "http-l1-helper-secret-canonical",
       "protocol": "tcp",
-      "ports": [8080, 8082],
+      "ports": [
+        8080,
+        8082
+      ],
       "http_method": "GET",
-      "http_paths": ["/fetch", "/proxy"],
-      "query_names": ["url", "uri", "target", "u", "dest", "path", "host", "callback", "next", "fetch", "proxy", "resource"],
-      "target_hosts": ["helper-box", "172.18.0.2", "0xac120002", "2886860802", "::ffff:ac12:2"],
-      "target_ports": [8080],
+      "http_paths": [
+        "/fetch",
+        "/proxy"
+      ],
+      "query_names": [
+        "url",
+        "uri",
+        "target",
+        "u",
+        "dest",
+        "path",
+        "host",
+        "callback",
+        "next",
+        "fetch",
+        "proxy",
+        "resource"
+      ],
+      "target_hosts": [
+        "helper-box",
+        "172.18.0.2",
+        "0xac120002",
+        "2886860802",
+        "::ffff:ac12:2"
+      ],
+      "target_ports": [
+        8080
+      ],
       "target_path": "/secret",
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
@@ -369,7 +472,10 @@
       "promotion_cohort": "team1-r17-l1-canonical-ssrf",
       "promoted_in_bundle": "defender-2026-08-21-p1r1-8080-hotfix",
       "parser_version": 1,
-      "profile_scope": ["6/8080", "6/8082"],
+      "profile_scope": [
+        "6/8080",
+        "6/8082"
+      ],
       "evidence_id": "TEAM1-PCAP-P1-R1-L1-8080-PLUS-PRIOR-8082-20260821",
       "positive_fixture_id": "TEAM1-R17-L1-CANONICAL-POS-001",
       "negative_fixture_id": "TEAM1-R17-L1-CANONICAL-NEG-001",
@@ -385,7 +491,10 @@
       "category": "path-traversal",
       "reason_code": "sig-l1-config-flag-traversal",
       "protocol": "tcp",
-      "ports": [8080, 8082],
+      "ports": [
+        8080,
+        8082
+      ],
       "pattern": "(?:GET|POST) /config\\?file=(?:(?:\\.\\./)|(?:\\.\\.%2f)|(?:%2e%2e%2f)|(?:%252e%252e%252f)){1,8}flag(?: HTTP|[&#][^\\r\\n ]{0,128} HTTP)/1\\.[01]",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
@@ -394,7 +503,10 @@
       "promotion_cohort": "team1-full-corpus-l1-config-traversal",
       "promoted_in_bundle": "defender-2026-08-21-p1r1-8080-hotfix",
       "parser_version": 1,
-      "profile_scope": ["6/8080", "6/8082"],
+      "profile_scope": [
+        "6/8080",
+        "6/8082"
+      ],
       "evidence_id": "TEAM1-PCAP-P1-R1-L1-8080-PLUS-PRIOR-8082-20260821",
       "positive_fixture_id": "TEAM1-R18-L1-CONFIG-FLAG-POS-001",
       "negative_fixture_id": "TEAM1-R18-L1-CONFIG-NONSECRET-NEG-001",
@@ -405,24 +517,117 @@
       "lead_review": "approved"
     },
     {
+      "rule_id": "sig-l1-satdiag-tail-flag-001",
+      "kind": "payload_regex",
+      "category": "file-read",
+      "reason_code": "sig-l1-satdiag-tail-flag",
+      "protocol": "tcp",
+      "ports": [
+        9000
+      ],
+      "pattern": "satdiag\\.v1\\.SatDiag/TailDiagnosticLog[\\s\\S]{0,400}(?:/flag|/proc/(?:self|1)/environ)",
+      "ignore_case": false,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p1r2-l1-satdiag-tail",
+      "promoted_in_bundle": "defender-2026-08-21-finals-portmap",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/9000"
+      ],
+      "evidence_id": "TEAM1-PCAP-P1-R2-L1-9000-TAIL-FLAG-20260821",
+      "positive_fixture_id": "TEAM1-P1R2-SATDIAG-TAIL-FLAG-POS-001",
+      "negative_fixture_id": "TEAM1-P1R2-SATDIAG-HEALTH-NEG-001",
+      "sla_fixture_id": "TEAM1-P1R2-SATDIAG-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 SatDiag Health/정상 Probe fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "sig-l1-satdiag-export-flag-echo-001",
+      "kind": "payload_regex",
+      "category": "command-injection",
+      "reason_code": "sig-l1-satdiag-export-flag-echo",
+      "protocol": "tcp",
+      "ports": [
+        9000
+      ],
+      "pattern": "satdiag\\.v1\\.SatDiag/ExportDiagnosticBundle[\\s\\S]{0,500}(?:;\\s*echo|\\$\\{FLAG\\}|;\\s*cat\\s+/flag|;\\s*printenv)",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p1r2-l1-satdiag-export",
+      "promoted_in_bundle": "defender-2026-08-21-finals-portmap",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/9000"
+      ],
+      "evidence_id": "TEAM1-PCAP-P1-R2-L1-9000-EXPORT-FLAG-ECHO-20260821",
+      "positive_fixture_id": "TEAM1-P1R2-SATDIAG-EXPORT-ECHO-POS-001",
+      "negative_fixture_id": "TEAM1-P1R2-SATDIAG-EXPORT-BUNDLE-NEG-001",
+      "sla_fixture_id": "TEAM1-P1R2-SATDIAG-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 benign ExportDiagnosticBundle(diagnostic-bundle/gzip) fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "sig-l2-graphql-mission-audit-001",
+      "kind": "payload_regex",
+      "category": "sensitive-path",
+      "reason_code": "sig-l2-graphql-mission-audit",
+      "protocol": "tcp",
+      "ports": [
+        8082
+      ],
+      "pattern": "POST /graphql[\\s\\S]{0,800}(?:missionAudit|systemConfig)",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p2r3-l2-graphql-mission-audit",
+      "promoted_in_bundle": "defender-2026-08-21-finals-portmap",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/8082"
+      ],
+      "evidence_id": "TEAM1-PCAP-P2-R3-L2-8082-GRAPHQL-MISSION-AUDIT-20260821",
+      "positive_fixture_id": "TEAM1-P2R3-GRAPHQL-MISSION-AUDIT-POS-001",
+      "negative_fixture_id": "TEAM1-P2R3-GRAPHQL-HEALTH-NEG-001",
+      "sla_fixture_id": "TEAM1-P2R3-L2-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 missionAudit 없는 정상 GraphQL fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
       "rule_id": "http-l2-forged-admin-session-001",
       "kind": "http_json_cookie_claim",
       "category": "broken-auth",
       "reason_code": "http-l2-forged-admin-session",
       "protocol": "tcp",
-      "ports": [8083],
+      "ports": [
+        8082
+      ],
       "http_method": "GET",
       "http_path": "/admin",
       "cookie_name": "session",
       "claim_key": "role",
-      "claim_values": ["admin"],
+      "claim_values": [
+        "admin"
+      ],
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-capture-l2-admin-session",
       "promoted_in_bundle": "defender-2026-08-15-team1-capture-enforce",
       "parser_version": 1,
-      "profile_scope": ["6/8083"],
+      "profile_scope": [
+        "6/8082"
+      ],
       "evidence_id": "TEAM1-PCAP-L2-R7-R14-ADMIN-COOKIE-20260815",
       "positive_fixture_id": "TEAM1-L2-ADMIN-COOKIE-11-VARIANTS-POS-001",
       "negative_fixture_id": "TEAM1-L2-GUEST-COOKIE-NEG-001",
@@ -438,8 +643,10 @@
       "category": "ssrf",
       "reason_code": "sig-l2-loopback-secret",
       "protocol": "tcp",
-      "ports": [8083],
-      "pattern": "(?:GET|POST) [^\\r\\n ]{0,1000}127\\.0\\.0\\.1(?::|%3a)8083(?:/|%2f)secret[^\\r\\n ]{0,256} HTTP/1\\.[01]",
+      "ports": [
+        8082
+      ],
+      "pattern": "(?:GET|POST) [^\\r\\n ]{0,1000}127\\.0\\.0\\.1(?::|%3a)8082(?:/|%2f)secret[^\\r\\n ]{0,256} HTTP/1\\.[01]",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
@@ -447,7 +654,9 @@
       "promotion_cohort": "team1-capture-l2-loopback-ssrf",
       "promoted_in_bundle": "defender-2026-08-15-team1-capture-enforce",
       "parser_version": 1,
-      "profile_scope": ["6/8083"],
+      "profile_scope": [
+        "6/8082"
+      ],
       "evidence_id": "TEAM1-PCAP-P2-R11-L2-LOOPBACK-SECRET-20260815",
       "positive_fixture_id": "TEAM1-L2-LOOPBACK-SECRET-POS-001",
       "negative_fixture_id": "TEAM1-L2-LOOPBACK-NONSECRET-NEG-002",
@@ -463,12 +672,36 @@
       "category": "ssrf",
       "reason_code": "http-l2-loopback-secret-canonical",
       "protocol": "tcp",
-      "ports": [8083],
+      "ports": [
+        8082
+      ],
       "http_method": "GET",
-      "http_paths": ["/fetch", "/proxy"],
-      "query_names": ["url", "uri", "target", "u", "dest", "path", "host", "callback", "next", "fetch", "proxy", "resource"],
-      "target_hosts": ["127.0.0.1", "localhost", "::1"],
-      "target_ports": [8083],
+      "http_paths": [
+        "/fetch",
+        "/proxy"
+      ],
+      "query_names": [
+        "url",
+        "uri",
+        "target",
+        "u",
+        "dest",
+        "path",
+        "host",
+        "callback",
+        "next",
+        "fetch",
+        "proxy",
+        "resource"
+      ],
+      "target_hosts": [
+        "127.0.0.1",
+        "localhost",
+        "::1"
+      ],
+      "target_ports": [
+        8082
+      ],
       "target_path": "/secret",
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
@@ -476,7 +709,9 @@
       "promotion_cohort": "team1-r17-l2-canonical-ssrf",
       "promoted_in_bundle": "defender-2026-08-15-r17-stream-canonical",
       "parser_version": 1,
-      "profile_scope": ["6/8083"],
+      "profile_scope": [
+        "6/8082"
+      ],
       "evidence_id": "TEAM1-PCAP-P3-R17-L2-STREAM-CANONICAL-20260815",
       "positive_fixture_id": "TEAM1-R17-L2-STREAM-CANONICAL-POS-001",
       "negative_fixture_id": "TEAM1-R17-L2-STREAM-CANONICAL-NEG-001",
@@ -492,12 +727,35 @@
       "category": "ssrf",
       "reason_code": "http-l2-loopback-registry-canonical",
       "protocol": "tcp",
-      "ports": [8083],
+      "ports": [
+        8082
+      ],
       "http_method": "GET",
-      "http_paths": ["/fetch", "/proxy"],
-      "query_names": ["url", "uri", "target", "u", "dest", "path", "host", "callback", "next", "fetch", "proxy", "resource"],
-      "target_hosts": ["127.0.0.1", "127.1"],
-      "target_ports": [8083],
+      "http_paths": [
+        "/fetch",
+        "/proxy"
+      ],
+      "query_names": [
+        "url",
+        "uri",
+        "target",
+        "u",
+        "dest",
+        "path",
+        "host",
+        "callback",
+        "next",
+        "fetch",
+        "proxy",
+        "resource"
+      ],
+      "target_hosts": [
+        "127.0.0.1",
+        "127.1"
+      ],
+      "target_ports": [
+        8082
+      ],
       "target_path": "/registry",
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
@@ -505,7 +763,9 @@
       "promotion_cohort": "team1-full-corpus-l2-loopback-registry",
       "promoted_in_bundle": "defender-2026-08-15-full-corpus-hardening",
       "parser_version": 1,
-      "profile_scope": ["6/8083"],
+      "profile_scope": [
+        "6/8082"
+      ],
       "evidence_id": "TEAM1-PCAP-P3-R15-L2-1271-REGISTRY-20260815",
       "positive_fixture_id": "TEAM1-R15-L2-LOOPBACK-REGISTRY-POS-001",
       "negative_fixture_id": "TEAM1-R15-L2-EXTERNAL-REGISTRY-NEG-001",
@@ -521,7 +781,9 @@
       "category": "sql-injection",
       "reason_code": "sig-l3-app-meta-union",
       "protocol": "tcp",
-      "ports": [8084],
+      "ports": [
+        9090
+      ],
       "pattern": "GET /product\\?id=[^\\r\\n ]{0,256}union(?:%20|\\+)+(?:all(?:%20|\\+)+)?select[^\\r\\n ]{0,256}(?:%20|\\+)+from(?:%20|\\+)+app_meta[^\\r\\n ]{0,256} HTTP/1\\.[01]",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
@@ -530,7 +792,9 @@
       "promotion_cohort": "team1-capture-l3-app-meta-sqli",
       "promoted_in_bundle": "defender-2026-08-15-team1-capture-enforce",
       "parser_version": 1,
-      "profile_scope": ["6/8084"],
+      "profile_scope": [
+        "6/9090"
+      ],
       "evidence_id": "TEAM1-PCAP-P3-R13-R14-L3-APP-META-20260815",
       "positive_fixture_id": "TEAM1-L3-APP-META-UNION-POS-001",
       "negative_fixture_id": "TEAM1-L3-PRODUCT-NEG-001",
@@ -546,10 +810,16 @@
       "category": "sql-injection",
       "reason_code": "http-l3-app-meta-canonical",
       "protocol": "tcp",
-      "ports": [8084],
+      "ports": [
+        9090
+      ],
       "http_method": "GET",
-      "http_paths": ["/product"],
-      "query_names": ["id"],
+      "http_paths": [
+        "/product"
+      ],
+      "query_names": [
+        "id"
+      ],
       "sql_source": "app_meta",
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
@@ -557,7 +827,9 @@
       "promotion_cohort": "team1-r17-l3-canonical-sqli",
       "promoted_in_bundle": "defender-2026-08-15-r17-stream-canonical",
       "parser_version": 1,
-      "profile_scope": ["6/8084"],
+      "profile_scope": [
+        "6/9090"
+      ],
       "evidence_id": "TEAM1-PCAP-P3-R17-L3-CANONICAL-BYPASS-20260815",
       "positive_fixture_id": "TEAM1-R17-L3-CANONICAL-POS-001",
       "negative_fixture_id": "TEAM1-R17-L3-CANONICAL-NEG-001",

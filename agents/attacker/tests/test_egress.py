@@ -165,8 +165,17 @@ class TestEgressGateway(unittest.TestCase):
                 Capability.ATTACK_TARGET,
                 "team2.lig.internal",
                 9000,
-                "/satdiag.v1.SatDiag/ExportDiagnosticBundle",
+                "/satdiag.v1.SatDiag/NotARealMethod",
             )
+
+        gw.request_grpc(
+            Capability.ATTACK_TARGET,
+            "team2.lig.internal",
+            9000,
+            "/satdiag.v1.SatDiag/ExportDiagnosticBundle",
+            {1: "telemetry.log;echo x${FLAG}x", 2: "capture", 3: "gzip"},
+        )
+        self.assertEqual(transport.calls[-1][3], "/satdiag.v1.SatDiag/ExportDiagnosticBundle")
 
 
 if __name__ == "__main__":

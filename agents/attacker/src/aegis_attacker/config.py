@@ -13,7 +13,7 @@ from typing import Mapping
 from .models import Endpoint
 
 DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
-# 스켈레톤/운영이 주입하는 구형 기본 모델로 되돌아가지 않도록 런타임 프로필을 강제한다.
+# 스켈레톤이 mini를 주입해도 무시한다. 본선 공격은 항상 gpt-5.6-sol을 강제한다.
 DEFAULT_LLM_MODEL = "gpt-5.6-sol"
 DEFAULT_LLM_FALLBACK_MODEL = "gpt-5.6-terra"
 DEFAULT_CONCURRENCY = 8

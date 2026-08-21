@@ -23,10 +23,15 @@ _L2_CANONICAL_RULE_ID = "http-l2-loopback-secret-canonical-001"
 _L3_CANONICAL_RULE_ID = "http-l3-app-meta-canonical-001"
 _L1_CONFIG_RULE_ID = "sig-l1-config-flag-traversal-001"
 _L2_REGISTRY_RULE_ID = "http-l2-loopback-registry-canonical-001"
+_L1_SATDIAG_TAIL_RULE_ID = "sig-l1-satdiag-tail-flag-001"
+_L1_SATDIAG_EXPORT_RULE_ID = "sig-l1-satdiag-export-flag-echo-001"
+_L2_GRAPHQL_RULE_ID = "sig-l2-graphql-mission-audit-001"
 _ACTIVE_RULES = {
     _L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID,
     _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
     _L1_CONFIG_RULE_ID, _L2_REGISTRY_RULE_ID,
+    _L1_SATDIAG_TAIL_RULE_ID, _L1_SATDIAG_EXPORT_RULE_ID,
+    _L2_GRAPHQL_RULE_ID,
 }
 
 _POSITIVE_PATHS = (
@@ -112,7 +117,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         for index, path in enumerate(_POSITIVE_PATHS, start=1):
             with self.subTest(path=path):
                 self.assertEqual(
-                    self._decide(path, dst_port=8083, pkt_id=index).verdict,
+                    self._decide(path, dst_port=8082, pkt_id=index).verdict,
                     VERDICT_ACCEPT,
                 )
 
@@ -130,7 +135,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
             for path in ("/admin", "/%61%64%6D%69%6E"):
                 with self.subTest(document=document, path=path):
                     decision = self._decide(
-                        path, dst_port=8083, pkt_id=index,
+                        path, dst_port=8082, pkt_id=index,
                         headers=f"Cookie: session = {encoded}\r\n",
                     )
                     self.assertEqual(decision.verdict, VERDICT_DROP)
@@ -139,7 +144,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
     def test_l2_empty_query_admin_cookie_drops(self):
         encoded = base64.urlsafe_b64encode(b'{"user":"admin","role":"admin"}').decode("ascii")
         decision = self._decide(
-            "/admin?", dst_port=8083,
+            "/admin?", dst_port=8082,
             headers=f"Cookie: session={encoded}\r\n",
         )
         self.assertEqual(decision.verdict, VERDICT_DROP)
@@ -158,7 +163,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         for variant in variants:
             with self.subTest(length=len(variant)):
                 decision = self._decide(
-                    "/admin", dst_port=8083,
+                    "/admin", dst_port=8082,
                     headers=f"Cookie: session={variant}\r\n",
                 )
                 self.assertEqual(decision.verdict, VERDICT_DROP)
@@ -170,13 +175,13 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         for index, headers in enumerate(cases):
             with self.subTest(headers=bool(headers)):
                 self.assertEqual(
-                    self._decide("/admin", dst_port=8083, pkt_id=index, headers=headers).verdict,
+                    self._decide("/admin", dst_port=8082, pkt_id=index, headers=headers).verdict,
                     VERDICT_ACCEPT,
                 )
 
     def test_l2_observed_absolute_form_loopback_secret_drops(self):
-        path = "http://team1.lig.internal:8083/fetch?url=http%3A%2F%2F127.0.0.1%3A8083%2Fsecret"
-        decision = self._decide(path, dst_port=8083)
+        path = "http://team1.lig.internal:8082/fetch?url=http%3A%2F%2F127.0.0.1%3A8082%2Fsecret"
+        decision = self._decide(path, dst_port=8082)
         self.assertEqual(decision.verdict, VERDICT_DROP)
         self.assertEqual(decision.rule_id, _L2_SSRF_RULE_ID)
 
@@ -204,12 +209,12 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
 
     def test_full_corpus_l2_loopback_registry_drops(self):
         paths = (
-            "/fetch?host=http%3A%2F%2F127.1%3A8083%2Fregistry",
-            "/proxy?url=http%3A%2F%2F127.0.0.1%3A8083%2Fregistry",
+            "/fetch?host=http%3A%2F%2F127.1%3A8082%2Fregistry",
+            "/proxy?url=http%3A%2F%2F127.0.0.1%3A8082%2Fregistry",
         )
         for index, path in enumerate(paths):
             with self.subTest(path=path):
-                decision = self._decide(path, dst_port=8083, pkt_id=620 + index)
+                decision = self._decide(path, dst_port=8082, pkt_id=620 + index)
                 self.assertEqual(decision.verdict, VERDICT_DROP)
                 self.assertEqual(decision.rule_id, _L2_REGISTRY_RULE_ID)
 
@@ -219,8 +224,8 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
             (8082, "/config?file=../settings.json"),
             (8082, "/config?file=flag"),
             (8082, "/fetch?url=http%3A%2F%2F172.18.0.2%3A8080%2Fhealth"),
-            (8083, "/fetch?url=http%3A%2F%2Fexample.invalid%3A8083%2Fregistry"),
-            (8084, "/config?file=../../../../flag"),
+            (9090, "/fetch?url=http%3A%2F%2Fexample.invalid%3A8082%2Fregistry"),
+            (9090, "/config?file=../../../../flag"),
         )
         for index in range(100):
             port, path = cases[index % len(cases)]
@@ -238,7 +243,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         )
         for index, path in enumerate(paths):
             with self.subTest(path=path):
-                decision = self._decide(path, dst_port=8084, pkt_id=index)
+                decision = self._decide(path, dst_port=9090, pkt_id=index)
                 self.assertEqual(decision.verdict, VERDICT_DROP)
                 self.assertEqual(decision.rule_id, _L3_RULE_ID)
 
@@ -247,8 +252,8 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
             (8082, "/%66%65%74%63%68?%75%72%6C=%68%74%74%70%3A%2F%2F%68%65%6C%70%65%72%2D%62%6F%78%2E%3A%38%30%38%30%2F%73%65%63%72%65%74", _L1_CANONICAL_RULE_ID),
             (8082, "/fetch?url=http%3A%2F%2F127.0.0.1%3A8082%2Ffetch%3Furl%3Dhttp%253A%252F%252Fhelper-box%253A8080%252Fsecret", _L1_CANONICAL_RULE_ID),
             (8082, "/fetch?url=http%3A%2F%2Fhelper-box%3A08080%2Fsecret", _L1_CANONICAL_RULE_ID),
-            (8084, "/product?id=-1%20UNION%0A%0ASELECT%20k%2Cv%2C3%20FROM%20app_meta", _L3_CANONICAL_RULE_ID),
-            (8084, "/product?id=0%2F%2Ax%2A%2FUNION%2F%2Ax%2A%2FSELECT%2F%2Ax%2A%2F1%2Cv%2C3%2F%2Ax%2A%2FFROM%2F%2Ax%2A%2F%5Bapp_meta%5D", _L3_CANONICAL_RULE_ID),
+            (9090, "/product?id=-1%20UNION%0A%0ASELECT%20k%2Cv%2C3%20FROM%20app_meta", _L3_CANONICAL_RULE_ID),
+            (9090, "/product?id=0%2F%2Ax%2A%2FUNION%2F%2Ax%2A%2FSELECT%2F%2Ax%2A%2F1%2Cv%2C3%2F%2Ax%2A%2FFROM%2F%2Ax%2A%2F%5Bapp_meta%5D", _L3_CANONICAL_RULE_ID),
         )
         for index, (port, path, rule_id) in enumerate(cases):
             with self.subTest(path=path):
@@ -258,18 +263,90 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
 
     def test_cross_layer_and_normal_product_requests_accept(self):
         attack = "/product?id=-1%20UNION%20SELECT%201,k,v%20FROM%20app_meta"
-        self.assertEqual(self._decide(attack, dst_port=8083).verdict, VERDICT_ACCEPT)
+        self.assertEqual(self._decide(attack, dst_port=8082).verdict, VERDICT_ACCEPT)
         for path in ("/product?id=1", "/product?name=app_meta", "/health"):
-            self.assertEqual(self._decide(path, dst_port=8084).verdict, VERDICT_ACCEPT)
+            self.assertEqual(self._decide(path, dst_port=9090).verdict, VERDICT_ACCEPT)
+
+    def test_finals_p1_9000_satdiag_attacks_drop(self):
+        cases = (
+            (
+                b":path*/satdiag.v1.SatDiag/TailDiagnosticLog\x00\x0a\x05/flag",
+                _L1_SATDIAG_TAIL_RULE_ID,
+                "sig-l1-satdiag-tail-flag",
+            ),
+            (
+                b":path*/satdiag.v1.SatDiag/TailDiagnosticLog\x00\x0a\x12/proc/self/environ",
+                _L1_SATDIAG_TAIL_RULE_ID,
+                "sig-l1-satdiag-tail-flag",
+            ),
+            (
+                b":path*/satdiag.v1.SatDiag/ExportDiagnosticBundle\x00"
+                b"telemetry.log;echo AegisD4H${FLAG}AegisD4H\x12\x07capture",
+                _L1_SATDIAG_EXPORT_RULE_ID,
+                "sig-l1-satdiag-export-flag-echo",
+            ),
+            (
+                b":path*/satdiag.v1.SatDiag/ExportDiagnosticBundle\x00"
+                b"x;cat /flag\x12\x07capture",
+                _L1_SATDIAG_EXPORT_RULE_ID,
+                "sig-l1-satdiag-export-flag-echo",
+            ),
+        )
+        for index, (payload, rule_id, reason) in enumerate(cases, start=1):
+            with self.subTest(rule_id=rule_id, index=index):
+                parsed = parse_ip(ipv4_tcp(payload, dst_port=9000))
+                decision = self.policy.decide(700 + index, parsed, 0.0)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, rule_id)
+                self.assertEqual(decision.reason_code, reason)
+
+    def test_finals_p2_8082_graphql_mission_audit_drops(self):
+        cases = (
+            b"POST /graphql HTTP/1.1\r\nHost: team1.lig.internal:8082\r\n"
+            b"Content-Type: application/json\r\n\r\n"
+            b'{"query":"{ missionAudit { lastDeployment { notes } } }"}',
+            b"POST /graphql HTTP/1.1\r\nHost: team1.lig.internal:8082\r\n\r\n"
+            b'{"query":"{ systemConfig { mqtt broker password } }"}',
+        )
+        for index, payload in enumerate(cases, start=1):
+            with self.subTest(index=index):
+                parsed = parse_ip(ipv4_tcp(payload, dst_port=8082))
+                decision = self.policy.decide(850 + index, parsed, 0.0)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, _L2_GRAPHQL_RULE_ID)
+                self.assertEqual(decision.reason_code, "sig-l2-graphql-mission-audit")
+
+    def test_finals_p2_8082_benign_graphql_accepts(self):
+        payload = (
+            b"POST /graphql HTTP/1.1\r\nHost: team1.lig.internal:8082\r\n\r\n"
+            b'{"query":"{ __typename }"}'
+        )
+        parsed = parse_ip(ipv4_tcp(payload, dst_port=8082))
+        self.assertEqual(self.policy.decide(860, parsed, 0.0).verdict, VERDICT_ACCEPT)
+
+    def test_finals_p1_9000_benign_satdiag_accepts(self):
+        payloads = (
+            b":path*/satdiag.v1.SatDiag/Health",
+            b":path*/satdiag.v1.SatDiag/ExportDiagnosticBundle"
+            b"\x12\x11diagnostic-bundle\x1a\x04gzip",
+            b":path*/satdiag.v1.SatDiag/ProbeEndpoint\x0a\x09telemetry\x12\x05/ping",
+        )
+        for index, payload in enumerate(payloads, start=1):
+            with self.subTest(index=index):
+                parsed = parse_ip(ipv4_tcp(payload, dst_port=9000))
+                self.assertEqual(
+                    self.policy.decide(800 + index, parsed, 0.0).verdict,
+                    VERDICT_ACCEPT,
+                )
 
     def test_shipped_bundle_activates_only_observed_exact_rules(self):
         self.assertEqual(self.report.source, "active")
-        self.assertEqual(self.report.bundle_id, "defender-2026-08-21-p1r1-8080-hotfix")
-        self.assertEqual(self.report.drop_capable_rules, 9)
+        self.assertEqual(self.report.bundle_id, "defender-2026-08-21-finals-portmap")
+        self.assertEqual(self.report.drop_capable_rules, 12)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,
-            frozenset({"6/8080", "6/8082", "6/8083", "6/8084"}),
+            frozenset({"6/8080", "6/9000", "6/8082", "6/1883", "6/8554", "6/9090", "6/8410", "6/8420"}),
         )
         for rule_id, rule in self.compiled.rules_by_id.items():
             expected = PromotionState.ACTIVE if rule_id in _ACTIVE_RULES else PromotionState.SHADOW

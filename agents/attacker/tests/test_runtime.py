@@ -149,7 +149,9 @@ class TestRuntimeEndToEnd(unittest.TestCase):
                 self.grpc_calls.append((host, port, rpc, fields, dict(varint_fields or {})))
                 if rpc.endswith("/Health"):
                     return HttpResponse(200, "ok")
-                if rpc.endswith("/TailDiagnosticLog") and fields.get(1) == "../../flag":
+                if rpc.endswith("/ExportDiagnosticBundle") and "${FLAG}" in fields.get(1, ""):
+                    return HttpResponse(200, "AegisD4HFLAG{finals_export_first}AegisD4H")
+                if rpc.endswith("/TailDiagnosticLog") and fields.get(1) == "/flag":
                     return HttpResponse(200, "FLAG{finals_grpc_fixture}")
                 return HttpResponse(200, "no flag")
 
@@ -164,24 +166,79 @@ class TestRuntimeEndToEnd(unittest.TestCase):
             cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
         ).run_once()
 
-        self.assertEqual(report.accepted_count(), 1)
-        self.assertEqual(arena.submits[0]["flag"], "FLAG{finals_grpc_fixture}")
+        self.assertGreaterEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{finals_export_first}")
         self.assertEqual(arena.target_http_calls, [])
         self.assertEqual(arena.llm_calls, 0)
         self.assertTrue(arena.grpc_calls[0][2].endswith("/Health"))
         self.assertTrue(any(call[2].endswith("/ProbeEndpoint") for call in arena.grpc_calls))
+        self.assertTrue(any(
+            call[2].endswith("/ExportDiagnosticBundle")
+            and "${FLAG}" in call[3].get(1, "")
+            for call in arena.grpc_calls
+        ))
+        self.assertTrue(any(
+            call[2].endswith("/TailDiagnosticLog") and call[3].get(1) == "/proc/self/environ"
+            for call in arena.grpc_calls
+        ))
 
-    def test_finals_8080_does_not_replay_legacy_fast_path_or_spend_llm(self):
+    def test_finals_9000_export_flag_echo_captures_when_tail_misses(self):
+        class ExportArena:
+            def __init__(self):
+                self.submits = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                return HttpResponse(0, "")
+
+            def request_grpc(self, host, port, rpc, string_fields=None,
+                             varint_fields=None, timeout=6.0):
+                fields = dict(string_fields or {})
+                if rpc.endswith("/Health"):
+                    return HttpResponse(200, "ok")
+                if rpc.endswith("/ExportDiagnosticBundle") and "${FLAG}" in fields.get(1, ""):
+                    return HttpResponse(
+                        200,
+                        "AegisD4HFLAG{finals_export_fixture}AegisD4H",
+                    )
+                return HttpResponse(200, "no flag")
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(9000,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        arena = ExportArena()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{finals_export_fixture}")
+
+    def test_finals_8080_skips_legacy_fast_path_but_always_calls_sol_llm(self):
         class FinalsHttpArena:
             def __init__(self):
                 self.target_paths = []
                 self.llm_calls = 0
+                self.llm_models = []
 
             def request(self, method, url, headers=None, body=None, timeout=6.0):
                 parts = urlsplit(url)
                 if "/v1/chat/completions" in url:
                     self.llm_calls += 1
-                    return HttpResponse(500, "unused")
+                    self.llm_models.append(json.loads(body).get("model"))
+                    return HttpResponse(
+                        200,
+                        json.dumps({
+                            "choices": [{"message": {
+                                "content": '{"vuln":"OTHER","method":"GET","path":"/portal","headers":{},"body":"","reason":"probe"}'
+                            }, "finish_reason": "stop"}],
+                            "usage": {"total_tokens": 12},
+                        }),
+                    )
                 self.target_paths.append(parts.path)
                 if parts.path == "/":
                     return HttpResponse(303, "", {"Location": "/login"})
@@ -199,11 +256,13 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         ).run_once()
 
         self.assertEqual(report.accepted_count(), 0)
-        self.assertEqual(arena.llm_calls, 0)
+        self.assertGreater(arena.llm_calls, 0)
+        self.assertTrue(all(m == "gpt-5.6-sol" for m in arena.llm_models))
         self.assertNotIn("/fetch", arena.target_paths)
         self.assertNotIn("/config", arena.target_paths)
+        self.assertIn("/portal", arena.target_paths)
 
-    def test_unknown_l4_rejects_llm_invented_route(self):
+    def test_unknown_l4_executes_llm_invented_route_under_pro_profile(self):
         arena = FakeArena(
             "Phase 4 UGV URL gateway online",
             "/invented?url=x",
@@ -221,8 +280,8 @@ class TestRuntimeEndToEnd(unittest.TestCase):
             cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
         ).run_once()
         self.assertEqual(report.accepted_count(), 0)
-        self.assertEqual(arena.llm_calls, 1)
-        self.assertFalse(any(path.startswith("/invented") for path in arena.target_requests))
+        self.assertGreaterEqual(arena.llm_calls, 1)
+        self.assertTrue(any(path.startswith("/invented") for path in arena.target_requests))
 
     def test_recon_captures_without_llm(self):
         # 흔한 경로 /flag 에서 flag → recon이 LLM 토큰 없이 획득
@@ -541,10 +600,10 @@ class TestRuntimeResilience(unittest.TestCase):
         self.assertEqual(rt.budget.llm_calls, after_first)
         self.assertEqual(rt._report.summary()["llm_calls"], after_first)
 
-    def test_llm_model_stays_configured_after_failed_turns(self):
+    def test_llm_model_always_forced_sol(self):
         from aegis_attacker.planner import MAX_TURNS
 
-        # 결정론·LLM 모두 flag를 못 잡아도 임의의 고가 모델로 승급하지 않는다.
+        # 결정론·LLM 모두 flag를 못 잡아도 강제 sol 모델을 유지한다(env/mini 무시).
         arena = FakeArena(
             "URL Fetcher — GET /fetch?url=<url>",
             "/fetch?url=miss",
@@ -553,9 +612,8 @@ class TestRuntimeResilience(unittest.TestCase):
         )
         rt = make_runtime(arena)
         rt.run_once()
-        # make_cfg가 명시한 모델을 전 턴 유지한다.
         self.assertGreaterEqual(len(arena.llm_models), 2)
-        self.assertTrue(all(m == "gpt-4o-mini" for m in arena.llm_models[:MAX_TURNS]))
+        self.assertTrue(all(m == "gpt-5.6-sol" for m in arena.llm_models[:MAX_TURNS]))
         self.assertEqual(len(arena.llm_models[:MAX_TURNS]), MAX_TURNS)
 
 

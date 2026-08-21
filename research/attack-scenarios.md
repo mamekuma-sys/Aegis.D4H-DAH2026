@@ -58,9 +58,10 @@ Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한�
 `satdiag.v1.SatDiag` 서비스다.
 
 - `9000`: `Health`로 protocol을 bootstrap한다.
-- 읽기 전용 자동 실행: `TailDiagnosticLog(filename, max_lines)`와
-  `ProbeEndpoint(service_id, path)`에서 PCAP으로 확인된 필드만 사용한다.
-- `ExportDiagnosticBundle`은 인터페이스가 관측됐어도 서버에 파일을 생성하므로 자동 실행하지 않는다.
+- 최우선 자동 실행(P1-R2 PCAP): `TailDiagnosticLog(filename=/flag)`와
+  `ExportDiagnosticBundle` field1=`telemetry.log;echo …${FLAG}…` / field2=`capture` /
+  field3=`gzip`(유한 flag-directed mutation).
+- 추가 bounded: Tail filename 변형과 `ProbeEndpoint(service_id, path)` 관측 필드.
 - `8080`에서 읽기 전용 exploit route가 추가 관측되기 전에는 validator가 거부할 LLM 호출을 생략한다.
 
 ### L4 증거 gate

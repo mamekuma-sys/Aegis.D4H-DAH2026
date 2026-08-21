@@ -136,11 +136,11 @@ if ($defenderText -notmatch 'ConfigOnly') {
 if ($defenderText -notmatch 'policy_source=active') {
     throw 'defender-deploy.md does not require policy_source=active.'
 }
-if ($defenderText -notmatch 'bundle_id=defender-2026-08-15-full-corpus-hardening') {
-    throw 'defender-deploy.md does not require the TEAM1 capture bundle id.'
+if ($defenderText -notmatch 'bundle_id=defender-2026-08-21-finals-portmap') {
+    throw 'defender-deploy.md does not require the P1-R2 SatDiag bundle id.'
 }
-if ($defenderText -notmatch 'drop_capable_rules=9') {
-    throw 'defender-deploy.md does not require drop_capable_rules=9.'
+if ($defenderText -notmatch 'drop_capable_rules=12') {
+    throw 'defender-deploy.md does not require drop_capable_rules=12.'
 }
 if ($defenderText -notmatch 'COPY policy /policy') {
     throw 'defender-deploy.md does not document the /policy image path.'

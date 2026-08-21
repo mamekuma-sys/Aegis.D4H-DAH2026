@@ -11,10 +11,10 @@ from aegis_attacker.phase_policy import (
     total_rounds,
 )
 
-L1 = Endpoint("team2.lig.internal", 8082)
-L2 = Endpoint("team2.lig.internal", 8083)
-L3 = Endpoint("team2.lig.internal", 8084)
-L4 = Endpoint("team2.lig.internal", 8085)
+L1 = Endpoint("team2.lig.internal", 8080)
+L2 = Endpoint("team2.lig.internal", 8082)
+L3 = Endpoint("team2.lig.internal", 9090)
+L4 = Endpoint("team2.lig.internal", 8410)
 
 
 class TestFinalsPhaseStructure(unittest.TestCase):
@@ -27,7 +27,7 @@ class TestFinalsPhaseStructure(unittest.TestCase):
     def test_cumulative_layers(self):
         self.assertEqual(layers_open(1), [1])
         self.assertEqual(layers_open(2), [1, 2])
-        self.assertEqual(layers_open(4), [1, 2, 3, 4])  # Phase N에서 Layer 1~N 누적
+        self.assertEqual(layers_open(4), [1, 2, 3, 4])
 
     def test_bad_phase_rejected(self):
         with self.assertRaises(ValueError):
@@ -37,16 +37,19 @@ class TestFinalsPhaseStructure(unittest.TestCase):
 
 
 class TestLayerOfPort(unittest.TestCase):
-    def test_demo_ports(self):
+    def test_finals_ports(self):
         self.assertEqual(layer_of_port(8080), 1)
-        self.assertEqual(layer_of_port(8082), 1)
-        self.assertEqual(layer_of_port(8084), 3)
-        self.assertEqual(layer_of_port(8085), 4)
         self.assertEqual(layer_of_port(9000), 1)
+        self.assertEqual(layer_of_port(8082), 2)
+        self.assertEqual(layer_of_port(1883), 3)
+        self.assertEqual(layer_of_port(8554), 3)
+        self.assertEqual(layer_of_port(9090), 3)
+        self.assertEqual(layer_of_port(8410), 4)
+        self.assertEqual(layer_of_port(8420), 4)
 
     def test_unknown_port(self):
         self.assertEqual(layer_of_port(443), 0)
-        self.assertEqual(layer_of_port(8099), 0)
+        self.assertEqual(layer_of_port(8083), 0)
 
 
 class TestCumulativeEndpointOrder(unittest.TestCase):
@@ -64,13 +67,13 @@ class TestCumulativeEndpointOrder(unittest.TestCase):
         endpoints = [
             Endpoint(host, port)
             for host in ("team2.lig.internal", "team3.lig.internal")
-            for port in (8082, 8083, 8084, 8085)
+            for port in (8080, 8082, 9090, 8410)
         ]
         ordered = cumulative_endpoint_order(endpoints)
         self.assertEqual(set(ordered), set(endpoints))
         self.assertEqual(
             [endpoint.port for endpoint in ordered[:4]],
-            [8085, 8082, 8083, 8084],
+            [8410, 8080, 8082, 9090],
         )
 
 
@@ -78,7 +81,7 @@ class TestAllocateBudget(unittest.TestCase):
     def test_even_split_min_one(self):
         b = allocate_budget([L1, L2, L3], 30)
         self.assertEqual(set(b.values()), {10})
-        b2 = allocate_budget([L1, L2, L3], 2)  # 부족해도 최소 1
+        b2 = allocate_budget([L1, L2, L3], 2)
         self.assertEqual(set(b2.values()), {1})
 
     def test_empty(self):
@@ -89,7 +92,7 @@ class TestFairScheduler(unittest.TestCase):
     def test_round_robin(self):
         s = FairScheduler([L1, L2, L3], per_target_budget=2)
         picks = [s.next() for _ in range(3)]
-        self.assertEqual(set(picks), {L1, L2, L3})  # 한 바퀴에 모두 등장
+        self.assertEqual(set(picks), {L1, L2, L3})
 
     def test_budget_exhaustion(self):
         s = FairScheduler([L1, L2], per_target_budget=1)
@@ -104,15 +107,14 @@ class TestFairScheduler(unittest.TestCase):
         self.assertTrue(s.all_exhausted())
 
     def test_new_layer_does_not_starve_old(self):
-        # L1만 있다가 L2 개방 → L1 예산 유지, L2도 예산 받음
         s = FairScheduler([L1], per_target_budget=3)
-        s.charge(L1)  # L1 남은 2
+        s.charge(L1)
         s.add_endpoints([L2, L3], per_target_budget=3)
-        self.assertEqual(s.remaining(L1), 2)  # 기존 예산 유지(굶지 않음)
+        self.assertEqual(s.remaining(L1), 2)
         self.assertEqual(s.remaining(L2), 3)
         self.assertEqual(s.remaining(L3), 3)
         picks = {s.next() for _ in range(3)}
-        self.assertIn(L1, picks)  # 이전 레이어도 계속 순회 대상
+        self.assertIn(L1, picks)
 
     def test_boost_promising_target(self):
         s = FairScheduler([L1, L2], per_target_budget=2, boost_extra=5)

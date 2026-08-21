@@ -12,9 +12,11 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from dataclasses import replace
+
 from . import ATTACK_PROFILE, __version__ as ATTACKER_VERSION
 from .audit import AuditLogger, Redactor
-from .config import AttackerConfig
+from .config import AttackerConfig, FORCED_LLM_MODEL
 from .egress import EgressError, EgressGateway, build_allowlists
 from .exploits import (
     Attempt,
@@ -27,7 +29,6 @@ from .exploits import (
     observed_grpc_bootstrap,
     ssrf_pivot_attempts,
     tamper_token,
-    uses_observed_read_only_interface,
 )
 from .flags import FlagPipeline, SubmitClient
 from .llm_advisor import LLMAdvisor, MAX_LLM_CALLS_PER_ROUND
@@ -68,14 +69,17 @@ class AttackerRuntime:
 
     def __init__(self, config: AttackerConfig, http=None, rate=None,
                  clock=time.monotonic, sleep=time.sleep, audit=None, budget=None):
-        self.config = config
+        # 어떤 경로로 config가 와도 LLM은 항상 강제 gpt-5.6-sol이다.
+        self.config = replace(config, llm_model=FORCED_LLM_MODEL)
         self.transport = http or UrllibHttp()
         self.rate = rate or RateLimiter(clock=clock, sleep=sleep)
         self.clock = clock
         self.sleep = sleep
         self.budget = budget or RoundBudget()
         # 로그에서 제출 토큰·LLM 키를 제거(원문은 저장소로 옮기지만 config가 origin).
-        self.audit = audit or AuditLogger(Redactor({config.submit_token, config.llm_api_key}))
+        self.audit = audit or AuditLogger(Redactor({
+            self.config.submit_token, self.config.llm_api_key,
+        }))
         self._round_seq = 0
         # run_once에서 설정하는 Round 한정 컴포넌트
         self._round_id = ""
@@ -369,10 +373,15 @@ class AttackerRuntime:
         return result, False
 
     def _execute_grpc_attempt(self, endpoint, attempt: GrpcAttempt, evidence_ref):
-        """관측된 읽기 전용 gRPC 시도를 evidence에 묶어 실행한다."""
+        """관측된 gRPC 시도를 evidence에 묶어 실행한다."""
         if self._stop_event.is_set():
             return None, False
         now = self.clock()
+        side_effect = (
+            SideEffectClass.BOUNDED_FLAG_DIRECTED_MUTATION
+            if attempt.mutating
+            else SideEffectClass.READ_ONLY
+        )
         plan = ExecutionPlan(
             tool="grpc",
             target=endpoint,
@@ -388,7 +397,10 @@ class AttackerRuntime:
             evidence_refs=[evidence_ref] if evidence_ref else [],
             created_at_monotonic=now,
             expires_at_monotonic=now + PLAN_TTL,
-            side_effect_class=SideEffectClass.READ_ONLY,
+            side_effect_class=side_effect,
+            preconditions=(
+                ["bounded", "flag-directed", "safe-stop"] if attempt.mutating else []
+            ),
             reason="det:" + attempt.reason,
         )
         try:
@@ -544,9 +556,10 @@ class AttackerRuntime:
     def attack_endpoint(self, endpoint) -> bool:
         if self._stop_event.is_set():
             return False
-        grpc_handled, grpc_captured = self._attack_observed_grpc(endpoint)
-        if grpc_handled:
-            return grpc_captured
+        grpc_captured = self._attack_observed_grpc(endpoint)[1]
+        if grpc_captured:
+            return True
+        # gRPC가 protocol만 확인되고 flag가 없으면 HTTP/LLM 경로로 이어서 비싼 모델도 쓴다.
         obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
         for _ in range(bootstrap_requests):
             self._report.record_observation()
@@ -641,28 +654,12 @@ class AttackerRuntime:
         if captured_any:
             return True
 
-        # P1 8080은 PCAP에서 인증 포털로 확인됐고 읽기 전용 exploit route가 노출되지 않았다.
-        # 현재 validator가 반드시 거부할 LLM 계획에 호출 예산을 쓰지 않는다.
-        if endpoint.port == 8080 and observed_only:
-            self.audit.log(
-                "skip", target=endpoint.key(),
-                reason="finals-8080-no-observed-read-only-exploit",
-            )
-            return False
-
         # single-flight + 재사용: 같은 배너(같은 이미지)는 한 표적만 LLM으로 풀고, 나머지는
-        # 그 성공 형태(method·path·headers·body)를 재사용한다(§7.6, 제22조). 병렬 첫 사이클에
-        # 11개 표적이 동시에 LLM을 두드리는 낭비를 막는다. 재사용이 이 표적에 안 맞으면
-        # (표적 특정 exploit) 직접 LLM으로 이어서 푼다.
+        # 그 성공 형태(method·path·headers·body)를 재사용한다. skip이 나와도 본선 hot
+        # 프로필은 비싼 LLM을 포기하지 않고 바로 solver 루프로 들어간다.
         tried_reuse = False
         while not self._stop_event.is_set():
             known = self._playbook.lookup(banner_fp)
-            if (known and observed_only
-                    and not uses_observed_read_only_interface(known, observed_banner)):
-                # 같은 root fingerprint의 다른 서비스에서 얻은 경로라도 현 endpoint가
-                # 읽기 전용 interface로 직접 노출하지 않았으면 재사용하지 않는다.
-                known = None
-                tried_reuse = True
             if known:
                 result, captured = self._run_bound_exploit(
                     endpoint, known, current_evidence, "playbook")
@@ -685,9 +682,8 @@ class AttackerRuntime:
                 return captured_any
             if slot == "reuse":
                 continue          # 대기 중 다른 표적이 새로 풀었다 — 새 항목으로 재시도
-            if slot == "skip":
-                return captured_any  # 다른 표적이 푸는 중 — 다음 사이클에 재사용
-            break                 # slot == "solve" → 아래 LLM 루프로 직접 푼다
+            # "solve" 또는 "skip" — skip이어도 비싼 LLM을 생략하지 않는다.
+            break
 
         state = EndpointState(endpoint)
         feedback = ""
@@ -695,18 +691,10 @@ class AttackerRuntime:
             while (not self._stop_event.is_set()
                    and not self._planner.should_stop(state)):
                 state.turn += 1
-                # 성공·실패와 무관하게 검증된 기본 모델을 유지하고, 전송 실패 시 advisor가
-                # 한 번만 fallback 모델을 사용한다.
+                # 항상 강제 sol 모델. 전송 실패 시 advisor가 terra로 한 번 fallback.
                 plan = self._planner.plan_next(endpoint, observed_banner, feedback, state,
                                                model=self.config.llm_model)
                 if plan is None:
-                    break
-                if (observed_only
-                        and not uses_observed_read_only_interface(plan.args, observed_banner)):
-                    self.audit.log(
-                        "reject", target=endpoint.key(), turn=state.turn,
-                        reason="unobserved-read-only-interface",
-                    )
                     break
                 self._bind_plan(plan, endpoint, current_evidence)
                 try:

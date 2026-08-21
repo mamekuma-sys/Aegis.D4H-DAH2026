@@ -120,7 +120,7 @@ class TestLLMAdvisor(unittest.TestCase):
         self.assertEqual(payload["max_completion_tokens"], LLM_MAX_COMPLETION_TOKENS)
         self.assertNotIn("max_tokens", payload)
 
-    def test_gpt56_uses_low_reasoning_and_developer_message(self):
+    def test_gpt56_uses_reasoning_and_developer_message(self):
         adv, transport = make_advisor(
             chat_response('{"path":"/x"}'), config=SOL_CFG
         )
@@ -158,7 +158,7 @@ class TestLLMAdvisor(unittest.TestCase):
             json.loads(body)["reasoning_effort"] == LLM_REASONING_EFFORT
             for body in transport.bodies
         ))
-        self.assertEqual(transport.timeouts, [20.0, 20.0])
+        self.assertEqual(transport.timeouts, [30.0, 30.0])
         self.assertEqual(budget.llm_calls, 2)
         self.assertEqual(budget.llm_tokens, 42)
 
@@ -215,7 +215,7 @@ class TestLLMAdvisor(unittest.TestCase):
         self.assertEqual(transport.calls, 1)
         self.assertEqual(budget.llm_calls, 1)
 
-    def test_explicit_non_sol_model_does_not_switch_to_terra(self):
+    def test_explicit_non_pro_model_does_not_switch_to_fallback(self):
         adv, transport = make_advisor(
             [chat_response("busy", status=503), chat_response('{"path":"/unused"}')]
         )

@@ -32,8 +32,8 @@ from aegis_defender.policy import HotPolicy  # noqa: E402
 from aegis_defender.rules import CompiledPolicy, load_policy  # noqa: E402
 
 
-SERVICE_PORTS = frozenset({8082, 8083, 8084})
-PORT_LAYERS = {8082: "L1", 8083: "L2", 8084: "L3"}
+SERVICE_PORTS = frozenset({8080, 8082, 9000, 9090})
+PORT_LAYERS = {8080: "L1", 9000: "L1", 8082: "L2", 9090: "L3"}
 QUERY_NAMES = (
     "url", "uri", "target", "u", "dest", "path", "host",
     "callback", "next", "fetch", "proxy", "resource",
@@ -265,23 +265,23 @@ def classify_observed_shape(port: int, request: HttpRequestView) -> str | None:
                 if name == "file" and re.fullmatch(r"(?:\.\./){1,8}flag", normalized):
                     return "l1-config-flag-traversal"
 
-    if port == 8083:
+    if port == 8082:
         if request.path == "/admin" and request.cookie_claim_matches(
             "session", "role", ("admin",)
         ):
             return "l2-forged-admin-session"
         if request.path in ("/fetch", "/proxy"):
             if request.ssrf_target_matches(
-                QUERY_NAMES, ("127.0.0.1", "localhost", "::1"), (8083,), "/secret"
+                QUERY_NAMES, ("127.0.0.1", "localhost", "::1"), (8082,), "/secret"
             ):
                 return "l2-loopback-secret-ssrf"
             if request.ssrf_target_matches(
-                QUERY_NAMES, ("127.0.0.1", "127.1"), (8083,), "/registry"
+                QUERY_NAMES, ("127.0.0.1", "127.1"), (8082,), "/registry"
             ):
                 return "l2-loopback-registry-ssrf"
 
     if (
-        port == 8084
+        port == 9090
         and request.path == "/product"
         and request.sql_source_matches(("id",), "app_meta")
     ):

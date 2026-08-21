@@ -1,6 +1,6 @@
 """본선 9000/tcp plaintext gRPC unary 전송.
 
-외부 패키지 없이 PCAP에서 관측된 읽기 전용 ``satdiag.v1.SatDiag`` 메서드만 호출한다.
+외부 패키지 없이 PCAP에서 관측된 ``satdiag.v1.SatDiag`` 메서드만 호출한다.
 HTTP/2·HPACK·protobuf 전체 구현이 아니라 unary 요청에 필요한 최소 부분만 bounded하게
 구현하며, 응답 원문은 로그로 남기지 않고 상위 flag 파이프라인에만 전달한다.
 """
@@ -17,11 +17,15 @@ CLIENT_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 MAX_GRPC_REQUEST_BYTES = 16 * 1024
 MAX_GRPC_RESPONSE_BYTES = 1024 * 1024
 
-READ_ONLY_RPCS = frozenset({
+# Health/Probe/Tail은 읽기 전용. Export는 P1-R2에서 flag echo에 쓰인 관측 RPC다.
+ALLOWED_GRPC_RPCS = frozenset({
     "/satdiag.v1.SatDiag/Health",
     "/satdiag.v1.SatDiag/ProbeEndpoint",
     "/satdiag.v1.SatDiag/TailDiagnosticLog",
+    "/satdiag.v1.SatDiag/ExportDiagnosticBundle",
 })
+# 하위 호환 별칭 — 기존 테스트·호출부가 READ_ONLY_RPCS를 참조한다.
+READ_ONLY_RPCS = ALLOWED_GRPC_RPCS
 
 
 def _varint(value: int) -> bytes:
@@ -139,8 +143,8 @@ def _decode_grpc_messages(data: bytes) -> str:
 
 def grpc_unary_request(host: str, port: int, rpc: str, string_fields=None,
                        varint_fields=None, timeout: float = 6.0) -> HttpResponse:
-    """관측된 읽기 전용 RPC 하나를 h2c unary 요청으로 실행한다."""
-    if rpc not in READ_ONLY_RPCS:
+    """관측된 SatDiag RPC 하나를 h2c unary 요청으로 실행한다."""
+    if rpc not in ALLOWED_GRPC_RPCS:
         return HttpResponse(0, "", {})
     try:
         message = encode_protobuf(string_fields, varint_fields)
