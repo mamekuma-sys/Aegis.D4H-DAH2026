@@ -22,7 +22,7 @@ DEFAULT_AGENT_SOCKET = "/run/agent.sock"
 DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
 
 # §12.1 — 공격자와 같은 chat 티어(gpt-5.4)를 강제해 운영 환경의 구형 mini 기본값으로
-# 되돌아가지 않는다. 방어 LLM은 비동기 조언 경로에서만 최대 20회 호출되므로 packet
+# 되돌아가지 않는다. 방어 LLM은 비동기 조언 경로에서만 최대 12회 호출되므로 packet
 # verdict의 300ms hot path에는 영향을 주지 않는다.
 # R9 로그에서 gpt-5.6-sol(responses 티어)은 9/9 TimeoutError로 조언·크레딧이 모두
 # 0이 됐다. 60초 안에 완료되는 chat 티어로 바꿔 조언이 실제로 도착하게 한다.
