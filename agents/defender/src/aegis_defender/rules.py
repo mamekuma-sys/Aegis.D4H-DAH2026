@@ -169,6 +169,7 @@ class CompiledPolicy:
     bundle_id: str
     schema_version: int
     payload_matchers: Mapping[tuple[int, int], CompiledMatcher]
+    source_payload_matchers: Mapping[tuple[int, int], CompiledMatcher]
     wildcard_matchers: Mapping[int, CompiledMatcher]
     http_json_rules: Mapping[tuple[int, int, str, str], tuple[Rule, ...]]
     http_semantic_rules: Mapping[tuple[int, int, str, str], tuple[Rule, ...]]
@@ -201,6 +202,7 @@ EMPTY_POLICY = CompiledPolicy(
     bundle_id="empty",
     schema_version=SUPPORTED_SCHEMA_VERSION,
     payload_matchers=MappingProxyType({}),
+    source_payload_matchers=MappingProxyType({}),
     wildcard_matchers=MappingProxyType({}),
     http_json_rules=MappingProxyType({}),
     http_semantic_rules=MappingProxyType({}),
@@ -337,6 +339,14 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
 
     ports = parse_ports("ports")
     source_ports = parse_ports("source_ports")
+    if source_ports and kind is not MatchKind.PAYLOAD_REGEX:
+        raise PolicyValidationError(
+            f"{context}: source_ports 는 payload_regex rule 에서만 지원한다"
+        )
+    if source_ports and ports:
+        raise PolicyValidationError(
+            f"{context}: ports 와 source_ports 를 동시에 지정할 수 없다"
+        )
 
     canary_fraction = float(raw.get("canary_fraction", 0.0))
     if not (0.0 <= canary_fraction <= 1.0):
@@ -660,6 +670,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
         rules.append(rule)
 
     payload_buckets: dict[tuple[int, int], list[Rule]] = {}
+    source_payload_buckets: dict[tuple[int, int], list[Rule]] = {}
     wildcard_buckets: dict[int, list[Rule]] = {}
     http_json_buckets: dict[tuple[int, int, str, str], list[Rule]] = {}
     http_semantic_buckets: dict[tuple[int, int, str, str], list[Rule]] = {}
@@ -670,7 +681,10 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
 
     for rule in rules:
         if rule.kind is MatchKind.PAYLOAD_REGEX:
-            if rule.ports:
+            if rule.source_ports:
+                for port in rule.source_ports:
+                    source_payload_buckets.setdefault((rule.protocol, port), []).append(rule)
+            elif rule.ports:
                 for port in rule.ports:
                     payload_buckets.setdefault((rule.protocol, port), []).append(rule)
             else:
@@ -708,7 +722,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
         PromotionState.SHADOW: 2,
     }
     for buckets in (
-        payload_buckets.values(), wildcard_buckets.values(),
+        payload_buckets.values(), source_payload_buckets.values(), wildcard_buckets.values(),
         http_json_buckets.values(), http_semantic_buckets.values(),
         grpc_semantic_buckets.values(),
     ):
@@ -717,6 +731,9 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
 
     payload_matchers = {
         key: _compile_matcher(bucket) for key, bucket in payload_buckets.items()
+    }
+    source_payload_matchers = {
+        key: _compile_matcher(bucket) for key, bucket in source_payload_buckets.items()
     }
     wildcard_matchers = {
         key: _compile_matcher(bucket) for key, bucket in wildcard_buckets.items()
@@ -751,6 +768,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
         bundle_id=bundle_id,
         schema_version=schema_version,
         payload_matchers=MappingProxyType(payload_matchers),
+        source_payload_matchers=MappingProxyType(source_payload_matchers),
         wildcard_matchers=MappingProxyType(wildcard_matchers),
         http_json_rules=MappingProxyType(http_json_rules),
         http_semantic_rules=MappingProxyType(http_semantic_rules),

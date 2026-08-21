@@ -273,9 +273,17 @@ class HotPolicy:
         if found is None:
             return None
         rule = matcher.rules_by_group.get(found.lastgroup or "")
-        if rule is None or not self._scope_allows(rule, parsed):
+        if rule is None or not self._regex_profile_allows(rule, parsed):
             return None
         return rule
+
+    @staticmethod
+    def _regex_profile_allows(rule: Rule, parsed: ParsedPacket) -> bool:
+        """컴파일된 matcher가 protocol·방향 port를 보장하므로 profile만 확인한다."""
+        if rule.profile_scope and "*" not in rule.profile_scope:
+            profile = parsed.profile
+            return profile is not None and profile.scope_key() in rule.profile_scope
+        return True
 
     def _gate_flags(
         self,
@@ -339,9 +347,32 @@ class HotPolicy:
         if stitched is not None and stitched != payload:
             payload_views.insert(0, stitched)
 
-        # 포트별 matcher와 포트 무관 matcher 최대 두 번. 정규식 수십 개를 패킷마다
-        # 순차 실행하지 않는 것이 §5.2 `Sig` 100μs 예산의 전제다(§9.3).
+        # source-port matcher는 해당 규칙이 있을 때만 조회한다. 일반 ingress는
+        # destination-port와 wildcard matcher 최대 두 번만 검색한다(§5.2, §9.3).
+        source_matchers = self._policy.source_payload_matchers
         for candidate in payload_views:
+            source_matcher = (
+                source_matchers.get((parsed.protocol, parsed.src_port))
+                if source_matchers else None
+            )
+            if source_matcher is not None:
+                found = source_matcher.pattern.search(candidate)
+                if found is not None:
+                    rule = source_matcher.rules_by_group.get(found.lastgroup or "")
+                    if rule is not None and self._regex_profile_allows(rule, parsed):
+                        if rule.promotion_state is PromotionState.SHADOW:
+                            if deferred_shadow is None:
+                                deferred_shadow = (rule, rule.category)
+                            rule = self._enforcing_regex_match(
+                                source_matcher, candidate, parsed
+                            )
+                        if rule is not None:
+                            self._http_stream.discard(parsed.flow_key)
+                            return self._enforce(
+                                pkt_id, rule, parsed, received_at, STAGE_SIG,
+                                allowed_by, rule.category, baseline,
+                            )
+
             for matcher in (
                 self._policy.payload_matchers.get((parsed.protocol, parsed.dst_port)),
                 self._policy.wildcard_matchers.get(parsed.protocol),
@@ -352,7 +383,7 @@ class HotPolicy:
                 if found is None:
                     continue
                 rule = matcher.rules_by_group.get(found.lastgroup or "")
-                if rule is None or not self._scope_allows(rule, parsed):
+                if rule is None or not self._regex_profile_allows(rule, parsed):
                     continue
                 if rule.promotion_state is PromotionState.SHADOW:
                     if deferred_shadow is None:

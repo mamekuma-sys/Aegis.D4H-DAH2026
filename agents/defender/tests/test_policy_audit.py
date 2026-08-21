@@ -106,11 +106,21 @@ class TestBundleRejection(unittest.TestCase):
                 self._reject(minimal_bundle(
                     rules=[rule_document("r", ports=[], source_ports=source_ports)]
                 ))
+        self._reject(minimal_bundle(
+            rules=[rule_document("r", ports=[8082], source_ports=[8080])]
+        ))
+        self._reject(minimal_bundle(
+            rules=[rule_document(
+                "r", kind="flow_score", ports=[], source_ports=[8080], min_score=10
+            )]
+        ))
         compiled, _ = compile_bundle(minimal_bundle(
             rules=[rule_document("r", ports=[], source_ports=[8080, 8080, 9000])],
             baseline_profiles=BASELINE,
         ))
         self.assertEqual(compiled.rules_by_id["r"].source_ports, (8080, 9000))
+        self.assertEqual(set(compiled.source_payload_matchers), {(6, 8080), (6, 9000)})
+        self.assertEqual(compiled.wildcard_matchers, {})
 
     def test_missing_promotion_cohort(self):
         document = rule_document("r")
