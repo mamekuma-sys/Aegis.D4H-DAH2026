@@ -13,8 +13,8 @@ from typing import Mapping
 from .models import Endpoint
 
 DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
-DEFAULT_LLM_MODEL = "gpt-4o-mini"
-DEFAULT_CONCURRENCY = 8
+DEFAULT_LLM_MODEL = "gpt-5.4-pro"
+DEFAULT_CONCURRENCY = 16
 MAX_CONCURRENCY = 32
 
 

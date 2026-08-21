@@ -45,11 +45,17 @@ class FakeArena:
         self.llm_status = llm_status
         self.submits = []
         self.llm_calls = 0
+        self.llm_models = []
         self.target_requests = []
 
     def request(self, method, url, headers=None, body=None, timeout=6.0):
         if "/v1/chat/completions" in url:
             self.llm_calls += 1
+            if body:
+                try:
+                    self.llm_models.append(json.loads(body).get("model"))
+                except Exception:
+                    pass
             if self.llm_status != 200:
                 return HttpResponse(self.llm_status, "llm down")
             content = json.dumps({
@@ -267,7 +273,8 @@ class TestRuntimeResilience(unittest.TestCase):
             sleeps.append(dt)
             clk.advance(dt)
 
-        with patch("aegis_attacker.runtime.ROUND_DURATION", 5.0):
+        with patch("aegis_attacker.runtime.ROUND_DURATION", 5.0), \
+             patch("aegis_attacker.runtime.LOOP_SLEEP", 4.0):
             rt = CycleOnlyRuntime(make_cfg(), http=FakeArena("b", "/x", "FLAG{x}"),
                                   clock=clk, sleep=sleep)
             rt.run_forever(max_cycles=3)
@@ -367,12 +374,13 @@ class TestRuntimeResilience(unittest.TestCase):
             sleep=lambda dt: clk.advance(dt),
             audit=AuditLogger(sink=lines.append, clock=clk),
         )
-        rt.start_round()
-        try:
-            rt.run_cycle()
-            rt.run_cycle()
-        finally:
-            rt.finish_round()
+        with patch("aegis_attacker.runtime.PER_TARGET_BUDGET", 1):
+            rt.start_round()
+            try:
+                rt.run_cycle()
+                rt.run_cycle()
+            finally:
+                rt.finish_round()
 
         events = [json.loads(line) for line in lines]
         scheduled = [line for line in events if line["event"] == "endpoint-retry-scheduled"]
@@ -454,6 +462,24 @@ class TestRuntimeResilience(unittest.TestCase):
         # 라운드별 예산은 격리되어야 한다: 누적(2N)이 아니라 라운드 단위(N)로 리셋
         self.assertEqual(rt.budget.llm_calls, after_first)
         self.assertEqual(rt._report.summary()["llm_calls"], after_first)
+
+    def test_llm_model_escalates_after_failed_turns(self):
+        from aegis_attacker.llm_advisor import ESCALATION_MODELS
+        from aegis_attacker.planner import MAX_TURNS
+
+        # 결정론·LLM 모두 flag를 못 잡게 해 MAX_TURNS까지 승급 경로를 탄다.
+        arena = FakeArena(
+            "URL Fetcher — GET /fetch?url=<url>",
+            "/fetch?url=miss",
+            "FLAG{never}",
+            flag_when=lambda full: False,
+        )
+        rt = make_runtime(arena)
+        rt.run_once()
+        # 전 턴 최상단 고가용만.
+        self.assertGreaterEqual(len(arena.llm_models), 2)
+        self.assertTrue(all(m == "gpt-5.4-pro" for m in arena.llm_models[:MAX_TURNS]))
+        self.assertEqual(len(arena.llm_models[:MAX_TURNS]), MAX_TURNS)
 
 
 class MultiPortArena:

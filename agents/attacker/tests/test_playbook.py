@@ -123,15 +123,13 @@ class TestSingleFlight(unittest.TestCase):
 
 
 class TestModelEscalation(unittest.TestCase):
-    def test_level_0_uses_base(self):
-        self.assertEqual(escalated_model("gpt-4o-mini", 0), "gpt-4o-mini")
+    def test_always_top_tier(self):
+        self.assertEqual(escalated_model("gpt-4o-mini", 0), "gpt-5.4-pro")
+        self.assertEqual(escalated_model("gpt-5", 1), "gpt-5.4-pro")
+        self.assertEqual(escalated_model("gpt-5.4-pro", 99), "gpt-5.4-pro")
 
-    def test_escalates(self):
-        self.assertEqual(escalated_model("gpt-4o-mini", 1), ESCALATION_MODELS[0])
-        self.assertEqual(escalated_model("gpt-4o-mini", 2), ESCALATION_MODELS[1])
-
-    def test_caps_at_top(self):
-        self.assertEqual(escalated_model("gpt-4o-mini", 99), ESCALATION_MODELS[-1])
+    def test_ladder_is_max_only(self):
+        self.assertEqual(ESCALATION_MODELS, ("gpt-5.4-pro",))
 
 
 if __name__ == "__main__":

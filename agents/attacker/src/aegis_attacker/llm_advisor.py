@@ -14,7 +14,7 @@ from .audit import Redactor
 from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
-MAX_LLM_CALLS_PER_ROUND = 48  # R17의 111회/93k token 무진전 확산을 막고 대표 service solver에 집중.
+MAX_LLM_CALLS_PER_ROUND = 160  # 고가용·다턴 공략용. 대표 solver + 재시도 여유.
 LLM_TIMEOUT = 20.0
 # 공격 대상이 반환한 최대 1MiB 응답을 그대로 prompt로 보내지 않는다. 토큰 수는
 # tokenizer 없이 정확히 계산할 수 없으므로 UTF-8 byte를 보수적인 상한으로 사용한다.
@@ -63,15 +63,13 @@ SUPPORTED_LLM_MODELS = frozenset({
     "gpt-5.3-codex",
 })
 
-# 실패가 쌓이면 더 센 모델로 승급한다(cheap-first). 동점 시 토큰 비용이 적은 팀이
-# 이기므로(운영세칙 제22조) 값비싼 모델은 저비용 모델이 막혔을 때만 쓴다.
-ESCALATION_MODELS = ("gpt-4.1", "gpt-5.2")
+# 맵게: 저가/중간 없이 최상단 고가용만. 전 턴 gpt-5.4-pro.
+ESCALATION_MODELS = ("gpt-5.4-pro",)
 
 
 def escalated_model(base: str, level: int) -> str:
-    if level <= 0:
-        return base
-    return ESCALATION_MODELS[min(level - 1, len(ESCALATION_MODELS) - 1)]
+    """항상 고가용 최상단. base·level과 무관하게 gpt-5.4-pro."""
+    return ESCALATION_MODELS[-1]
 
 SYSTEM_PROMPT = (
     "You are an offensive web-security agent in an authorized CTF attack-defense match. Each target is an "
