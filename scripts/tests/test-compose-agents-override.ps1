@@ -139,8 +139,8 @@ if ($defenderText -notmatch 'policy_source=active') {
 if ($defenderText -notmatch 'bundle_id=defender-2026-08-21-p3-mqtt-rtsp') {
     throw 'defender-deploy.md does not require the P2-R3 hardened bundle id.'
 }
-if ($defenderText -notmatch 'drop_capable_rules=22') {
-    throw 'defender-deploy.md does not require drop_capable_rules=22.'
+if ($defenderText -notmatch 'drop_capable_rules=24') {
+    throw 'defender-deploy.md does not require drop_capable_rules=24.'
 }
 if ($defenderText -notmatch 'COPY policy /policy') {
     throw 'defender-deploy.md does not document the /policy image path.'
