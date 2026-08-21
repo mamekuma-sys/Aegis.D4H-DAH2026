@@ -283,22 +283,24 @@ class HotPolicy:
         payload = parsed.payload
         deferred_shadow: tuple[Rule, str] | None = None
 
-        semantic = self._grpc_stream.feed(parsed, self._clock())
-        if semantic is not None:
-            rules = self._policy.grpc_semantic_rules.get(
-                (parsed.protocol, parsed.dst_port, semantic), ()
-            )
-            for rule in rules:
-                if not self._scope_allows(rule, parsed):
-                    continue
-                if rule.promotion_state is PromotionState.SHADOW:
-                    if deferred_shadow is None:
-                        deferred_shadow = (rule, semantic)
-                    continue
-                return self._enforce(
-                    pkt_id, rule, parsed, received_at, STAGE_SIG,
-                    allowed_by, semantic, baseline,
+        # gRPC semantic rule이 없으면 H2 재조립을 돌리지 않는다(§5.2 Sig 예산).
+        if self._policy.grpc_semantic_rules:
+            semantic = self._grpc_stream.feed(parsed, self._clock())
+            if semantic is not None:
+                rules = self._policy.grpc_semantic_rules.get(
+                    (parsed.protocol, parsed.dst_port, semantic), ()
                 )
+                for rule in rules:
+                    if not self._scope_allows(rule, parsed):
+                        continue
+                    if rule.promotion_state is PromotionState.SHADOW:
+                        if deferred_shadow is None:
+                            deferred_shadow = (rule, semantic)
+                        continue
+                    return self._enforce(
+                        pkt_id, rule, parsed, received_at, STAGE_SIG,
+                        allowed_by, semantic, baseline,
+                    )
 
         if not payload:
             if parsed.tcp_flags & (TCP_SYN | TCP_FIN | TCP_RST):
