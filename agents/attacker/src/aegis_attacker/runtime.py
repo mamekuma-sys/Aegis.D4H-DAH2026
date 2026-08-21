@@ -26,6 +26,7 @@ from .exploits import (
     build_attempts,
     extract_internal_urls,
     extract_svc_flag_paths,
+    l4_prebanner_attempts,
     observed_attempts,
     observed_grpc_attempts,
     observed_grpc_bootstrap,
@@ -940,7 +941,12 @@ class AttackerRuntime:
         attempted_keys = set()
 
         # TEAM1 PCAP에서 성공이 확인된 L1~L4 형태를 일반 정찰보다 먼저 실행한다.
-        confirmed = observed_attempts(endpoint.port)
+        # R13: silent L4 는 전체 UGV 세트를 쏟지 않고 우선 파만 친다. 응답이 오면
+        # 아래에서 전체 세트로 확장하고, 무응답이면 L1/L2/L3 예산을 남긴다.
+        if force_prebanner_probes and endpoint.port in (8410, 8420):
+            confirmed = l4_prebanner_attempts()
+        else:
+            confirmed = observed_attempts(endpoint.port)
         observed_only = not bool(confirmed)
         if force_prebanner_probes and not confirmed:
             # 배너가 없고 이 포트의 observed 형태도 없으면, 범용 읽기 전용 프로브로
@@ -974,6 +980,14 @@ class AttackerRuntime:
                     reason="no-http-response-after-observed",
                 )
                 return captured_any
+            # silent가 아니면 R13에서 놓친 나머지 UGV 제어면을 이어서 친다.
+            if endpoint.port in (8410, 8420):
+                captured_any = self._deterministic_exploit(
+                    endpoint, banner, banner_fp, resp.headers, current_evidence,
+                    attempts=observed_attempts(endpoint.port),
+                    attempted_keys=attempted_keys,
+                    include_cookie_tamper=False) or captured_any
+                current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # root 배너가 취약 부류를 직접 노출하면 정찰 sweep보다 먼저 zero-token 공격한다.
         root_hints = suggest_vuln_classes(banner)

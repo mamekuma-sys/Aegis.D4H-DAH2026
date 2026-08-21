@@ -21,6 +21,10 @@ MQTT_READ_TOPICS = (
     "uav/#", "drone/#", "mavlink/#", "telemetry/#",
     "mission/#", "command/#", "status/#", "secret/#",
     "+/flag", "uav/+/flag", "drone/+/telemetry",
+    # P4-R13: team2/3/4/5/7/8 은 MQTT CONNECT는 됐지만 config topic만으로는
+    # flag가 안 왔다. ugv/robot/node 와일드카드를 한 번에 더 읽는다.
+    "ugv/#", "robot/#", "node/#", "layer4/#",
+    "uav/node/#", "uav/+/config",
 )
 RTSP_READ_METHODS = frozenset({"OPTIONS", "DESCRIBE"})
 _RTSP_BASE_PATHS = (
