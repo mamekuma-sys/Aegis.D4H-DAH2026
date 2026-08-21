@@ -24,7 +24,7 @@
 |---|---|
 | `AGENT_SOCKET` | 공식 계약. 기본값 `/run/agent.sock` |
 | `LLM_BASE_URL` · `LLM_API_KEY` | 공식 주입 계약 |
-| `LLM_MODEL` | 운영 주입값을 사용하지 않고 내부 기본값 `gpt-5.6-sol` 강제 |
+| `LLM_MODEL` | 운영 주입값을 사용하지 않고 내부 기본값 `gpt-5.4`(chat 티어) 강제. R9에서 `gpt-5.6-sol`은 9/9 TimeoutError로 조언 0이었다. |
 | `PHASE` · `LAYER` · `ROUND` · `TEAM_ID` | 공식 계약 아님. 런타임이 요구하지 않는다 |
 
 Dockerfile: `COPY policy /policy`. 런타임 기본 policy 경로는 패키지 `/app/aegis_defender` 기준 `../../policy` 이므로 컨테이너에서는 `/policy`여야 한다. `/app/policy`에 두면 `policy_source=empty`가 된다.
