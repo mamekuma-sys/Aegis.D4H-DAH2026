@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "bundle_id": "defender-2026-08-21-p3-r9-egress-lockdown",
-  "generated_at": "2026-08-21T07:40:00Z",
+  "generated_at": "2026-08-21T05:30:00Z",
   "baseline_profiles": [
     "6/8080",
     "6/9000",
@@ -283,7 +283,7 @@
       "profile_scope": [
         "*"
       ],
-      "evidence_id": "TEAM1-P3-SHADOW-1631-FLAG-LEAK-20260821",
+      "evidence_id": "TEAM1-P3-R9-SHADOW-1775-FLAG-LEAK-20260821",
       "positive_fixture_id": "TEAM1-P3-FLAG-EGRESS-HEX-POS-001",
       "negative_fixture_id": "TEAM1-P3-FLAG-EGRESS-NONHEX-NEG-001",
       "sla_fixture_id": "TEAM1-P3-FLAG-EGRESS-NONFLAG-SLA100-001",
