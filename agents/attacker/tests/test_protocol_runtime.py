@@ -66,6 +66,22 @@ class TestProtocolRuntime(unittest.TestCase):
         self.assertEqual(arena.http_target_calls, [])
         self.assertEqual(arena.submits[0]["flag"], "FLAG{rtsp-runtime}")
 
+    def test_silent_protocol_ports_do_not_fall_through_to_http(self):
+        class SilentProtocolArena(ProtocolArena):
+            def request_mqtt(self, host, port, topics=(), timeout=3.0):
+                self.mqtt_calls.append((host, port, tuple(topics)))
+                return HttpResponse(0, "")
+
+            def request_rtsp(self, host, port, method, path, timeout=3.0):
+                self.rtsp_calls.append((host, port, method, path))
+                return HttpResponse(0, "")
+
+        for port in (1883, 8554, 9000):
+            with self.subTest(port=port):
+                arena = SilentProtocolArena()
+                AttackerRuntime(config(port), http=arena).run_once()
+                self.assertEqual(arena.http_target_calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

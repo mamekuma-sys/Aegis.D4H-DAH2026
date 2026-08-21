@@ -1535,6 +1535,46 @@ class TestUgvObservedDiscovery(unittest.TestCase):
         self.assertIn("FLAG{r12_api_flag}", flags)
         self.assertIn("FLAG{r12_diag_component}", flags)
 
+    def test_r13_l4_hits_uds_and_rosapi_on_silent_bootstrap(self):
+        class SilentL4UgvArena:
+            def __init__(self):
+                self.submits = []
+                self.calls = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    return HttpResponse(500, "unused")
+                parts = urlsplit(url)
+                self.calls.append((parts.scheme, method, parts.path, body or ""))
+                if parts.scheme == "https" or parts.path == "/":
+                    return HttpResponse(0, "", {})
+                if parts.path == "/uds" and body and "22F187" in body:
+                    return HttpResponse(200, "VIN FLAG{r13_uds_did}", {})
+                if parts.path == "/rosapi/get_param" and body and "/flag" in body:
+                    return HttpResponse(200, "FLAG{r13_rosapi}", {})
+                return HttpResponse(404, "not found", {})
+
+            def read_passive_banner(self, host, port, timeout, max_bytes):
+                return HttpResponse(0, "", {})
+
+        arena = SilentL4UgvArena()
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8420,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+        self.assertEqual(report.accepted_count(), 2)
+        flags = {s["flag"] for s in arena.submits}
+        self.assertIn("FLAG{r13_uds_did}", flags)
+        self.assertIn("FLAG{r13_rosapi}", flags)
+
 
 class TestRuntimeInert(unittest.TestCase):
     def test_inert_without_targets_returns(self):

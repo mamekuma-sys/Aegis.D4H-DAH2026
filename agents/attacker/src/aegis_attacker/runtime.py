@@ -59,15 +59,18 @@ from .round_report import RoundReport
 from .secrets import KIND_LLM_KEY, KIND_SESSION, KIND_SUBMIT_TOKEN, RoundSecretStore
 from .tools import ExecutionAdapter, PlanBindingError, evasion_variants
 
-# 마지막 라운드 — 제한 개방. LLM이 endpoint당 깊게 파고(12턴), 무응답(필터 DROP)이면
-# 재인코딩 변형을 넉넉히 시도하고, 미해결 endpoint를 짧은 쿨다운으로 재타격한다.
-# PER_TARGET_BUDGET=3 으로 표적당 스케줄 사이클마다 더 깊게 두드린다.
-MAX_LLM_TURNS_PER_ENDPOINT = 12
-LOOP_SLEEP = 2.0
-PER_TARGET_BUDGET = 3
+# 최후 라운드 — 제한 전면 개방. L4 UGV를 먼저 깊게 두드리고, silent 타깃은
+# evasion/LLM 로 시간을 태우지 않는다(R13: 45 LLM 중 35가 죽은 MQTT/gRPC GraphQL).
+MAX_LLM_TURNS_PER_ENDPOINT = 20
+LOOP_SLEEP = 0.5
+PER_TARGET_BUDGET = 8
 MAX_EVASION_VARIANTS = 16
-ENDPOINT_RETRY_COOLDOWN = 3.0
-BOOTSTRAP_RETRY_COOLDOWN = 1.0
+ENDPOINT_RETRY_COOLDOWN = 1.0
+BOOTSTRAP_RETRY_COOLDOWN = 0.5
+PREBANNER_TIMEOUT = 1.5
+# MQTT/RTSP/SatDiag 는 HTTP fallback 금지. R13에서 team6/12 프로토콜 포트에
+# GraphQL×12턴을 낭비해 L4 재타격이 굶었다.
+PROTOCOL_ONLY_PORTS = frozenset({1883, 8554, 9000})
 PLAN_TTL = 30.0
 EVIDENCE_TTL = 90.0
 ROUND_DURATION = 20 * 60.0  # Round 20분 → 제출 재시도 경계
@@ -353,10 +356,12 @@ class AttackerRuntime:
 
     # ---- 결정론적 exploit 엔진 (LLM 전, 토큰 0) ----
 
-    def _execute_attempt(self, endpoint, attempt: Attempt, evidence_ref):
+    def _execute_attempt(self, endpoint, attempt: Attempt, evidence_ref,
+                         evade: bool = True, timeout: float = 6.0):
         """단일 결정론 시도를 READ_ONLY 계획으로 실행한다. (result, captured) 반환.
 
         무응답(필터 DROP)이면 경로 재인코딩 evasion 변형으로 재시도한다.
+        silent prebanner 에서는 evade 를 끄고 timeout 을 짧게 잡아 라운드를 태우지 않는다.
         """
         if self._stop_event.is_set():
             return None, False
@@ -371,6 +376,7 @@ class AttackerRuntime:
             evidence_refs=[evidence_ref] if evidence_ref else [],
             created_at_monotonic=now, expires_at_monotonic=now + PLAN_TTL,
             side_effect_class=SideEffectClass.READ_ONLY,
+            timeout=timeout,
             reason="det:" + attempt.reason)
         try:
             result = self._adapter.execute(plan)
@@ -380,9 +386,12 @@ class AttackerRuntime:
         self._remember_evidence(endpoint, result.observation.evidence_ref)
         if self._stop_event.is_set():
             return result, False
+        if result.observation.status not in (0, None):
+            with self._state_lock:
+                self._responsive_endpoints.add(endpoint.endpoint_id)
         if self._process_flags(result.body, result.observation.redacted_header_hints):
             return result, True
-        if result.outcome == Outcome.TIMEOUT:
+        if evade and result.outcome == Outcome.TIMEOUT:
             evaded, captured = self._try_evasion(plan, result.observation.evidence_ref)
             if captured:
                 return evaded, True
@@ -751,7 +760,8 @@ class AttackerRuntime:
     def _deterministic_exploit(self, endpoint, banner, banner_fp,
                                banner_headers, evidence_ref, attempts=None,
                                attempted_keys=None, include_cookie_tamper=True,
-                               observed_only=False) -> bool:
+                               observed_only=False, evade: bool = True,
+                               timeout: float = 6.0) -> bool:
         """배너 힌트로 4개 취약 부류(SSRF·LFI·AUTH·SQLI)를 토큰 0으로 시도한다.
 
         SSRF 2단 피벗은 base 시도 직후 **즉시** 실행한다. 승리 경로(예: /registry가 흘린
@@ -781,7 +791,9 @@ class AttackerRuntime:
             if attempt_key in attempted_keys:
                 return False
             attempted_keys.add(attempt_key)
-            result, captured = self._execute_attempt(endpoint, attempt, evidence_ref)
+            result, captured = self._execute_attempt(
+                endpoint, attempt, evidence_ref, evade=evade, timeout=timeout,
+            )
             if captured:
                 winning_args = result.plan.args if result is not None else {
                     "method": attempt.method,
@@ -857,6 +869,15 @@ class AttackerRuntime:
         grpc_handled, grpc_captured = self._attack_observed_grpc(endpoint)
         if grpc_handled:
             return grpc_captured
+        # MQTT/RTSP/SatDiag 포트는 프로토콜이 안 열려도 HTTP GraphQL+LLM 으로
+        # 빠지지 않는다. R13에서 team6:1883/8554/9000 에 GraphQL×12턴을 낭비했다.
+        if endpoint.port in PROTOCOL_ONLY_PORTS:
+            self.audit.log(
+                "protocol-silent",
+                target=endpoint.key(),
+                reason="no-native-protocol-skip-http",
+            )
+            return False
         obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
         for _ in range(bootstrap_requests):
             self._report.record_observation()
@@ -932,14 +953,27 @@ class AttackerRuntime:
                     "/debug", "/secret", "/health", "/metrics", "/swagger.json",
                 )
             ]
+        det_timeout = PREBANNER_TIMEOUT if force_prebanner_probes else 6.0
+        det_evade = not force_prebanner_probes
         if confirmed:
             captured_any = self._deterministic_exploit(
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
                 attempts=confirmed, attempted_keys=attempted_keys,
-                include_cookie_tamper=False) or captured_any
+                include_cookie_tamper=False,
+                evade=det_evade, timeout=det_timeout) or captured_any
         if self._stop_event.is_set():
             return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
+        if force_prebanner_probes:
+            with self._state_lock:
+                still_silent = endpoint.endpoint_id not in self._responsive_endpoints
+            if still_silent:
+                self.audit.log(
+                    "prebanner-silent-after-det",
+                    target=endpoint.key(),
+                    reason="no-http-response-after-observed",
+                )
+                return captured_any
 
         # root 배너가 취약 부류를 직접 노출하면 정찰 sweep보다 먼저 zero-token 공격한다.
         root_hints = suggest_vuln_classes(banner)
@@ -1003,7 +1037,19 @@ class AttackerRuntime:
         if captured_any:
             return True
 
-        # miss 뒤에만 짧은 chat LLM을 돌린다(endpoint당 최대 2턴).
+        # silent prebanner(배너·프로브 전부 무응답)에 LLM을 태우면 R13처럼
+        # GraphQL×12턴으로 라운드가 죽는다. 응답이 하나라도 온 endpoint만 LLM.
+        if force_prebanner_probes:
+            with self._state_lock:
+                silent = endpoint.endpoint_id not in self._responsive_endpoints
+            if silent:
+                self.audit.log(
+                    "llm-skip", target=endpoint.key(),
+                    reason="silent-prebanner-det-only",
+                )
+                return captured_any
+
+        # miss 뒤에만 chat LLM을 돌린다. L4 UGV 는 응답이 있으면 깊게 판다.
         self.audit.log(
             "llm-primary", target=endpoint.key(),
             after_confirmed_det=bool(confirmed),

@@ -178,7 +178,7 @@ class TestLLMAdvisor(unittest.TestCase):
         first, second = (json.loads(body) for body in transport.bodies)
         self.assertEqual(first["temperature"], 0)
         self.assertEqual(second["temperature"], 0)
-        self.assertEqual(transport.timeouts, [60.0, 60.0])
+        self.assertEqual(transport.timeouts, [45.0, 45.0])
         self.assertEqual(budget.llm_calls, 2)
         self.assertEqual(budget.llm_tokens, 42)
 
