@@ -2,8 +2,8 @@ import os
 import unittest
 
 from aegis_defender.packet import parse_ip
-from aegis_defender.policy import HotPolicy, R_ACCEPT_DEFAULT, R_SHADOW
-from aegis_defender.protocol import VERDICT_ACCEPT
+from aegis_defender.policy import HotPolicy, R_ACCEPT_DEFAULT
+from aegis_defender.protocol import VERDICT_ACCEPT, VERDICT_DROP
 from aegis_defender.rules import load_policy
 
 from .fakes import ipv4_tcp
@@ -23,29 +23,37 @@ class TestL3ProtocolPolicy(unittest.TestCase):
         policy = HotPolicy(policy=self.compiled, clock=lambda: 0.0)
         return policy.decide(1, parse_ip(ipv4_tcp(payload, dst_port=port)), 0.0)
 
-    def test_mqtt_wildcard_subscribe_is_observed_without_drop(self):
+    def test_mqtt_wildcard_subscribe_drops_on_active_r7_lockdown(self):
         # SUBSCRIBE, packet id 1, topic filter '#', QoS 0.
         payload = b"\x82\x06\x00\x01\x00\x01#\x00"
         decision = self._decide(payload, 1883)
 
-        self.assertEqual(decision.verdict, VERDICT_ACCEPT)
-        self.assertEqual(decision.reason_code, R_SHADOW)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.reason_code, "sig-l3-mqtt-wildcard-subscribe")
         self.assertEqual(decision.rule_id, "sig-l3-mqtt-wildcard-subscribe-001")
+
+    def test_mqtt_uav_node_config_drops(self):
+        decision = self._decide(b"uav/node/config", 1883)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertIn(
+            decision.rule_id,
+            {"sig-l3-mqtt-wildcard-subscribe-001", "sig-l3-mqtt-uav-config-001"},
+        )
 
     def test_mqtt_connect_is_normal_default_accept(self):
         decision = self._decide(b"\x10\x0c\x00\x04MQTT\x04\x02\x00\x05\x00\x00", 1883)
         self.assertEqual(decision.verdict, VERDICT_ACCEPT)
         self.assertEqual(decision.reason_code, R_ACCEPT_DEFAULT)
 
-    def test_rtsp_sensitive_describe_is_observed_without_drop(self):
+    def test_rtsp_sensitive_describe_drops_on_active_r7_lockdown(self):
         payload = (
             b"DESCRIBE rtsp://uav-node:8554/flag RTSP/1.0\r\n"
             b"CSeq: 1\r\n\r\n"
         )
         decision = self._decide(payload, 8554)
 
-        self.assertEqual(decision.verdict, VERDICT_ACCEPT)
-        self.assertEqual(decision.reason_code, R_SHADOW)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.reason_code, "sig-l3-rtsp-sensitive-describe")
         self.assertEqual(decision.rule_id, "sig-l3-rtsp-sensitive-describe-001")
 
     def test_rtsp_live_describe_is_normal_default_accept(self):

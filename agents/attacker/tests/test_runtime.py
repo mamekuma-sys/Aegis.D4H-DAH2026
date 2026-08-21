@@ -7,7 +7,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from aegis_attacker.audit import AuditLogger
-from aegis_attacker.config import AttackerConfig
+from aegis_attacker.config import AttackerConfig, DEFAULT_LLM_MODEL
 from aegis_attacker.models import SubmitState
 from aegis_attacker.observation import HttpResponse
 from aegis_attacker.runtime import BOOTSTRAP_RETRY_COOLDOWN, AttackerRuntime
@@ -344,7 +344,7 @@ class TestRuntimeEndToEnd(unittest.TestCase):
 
         self.assertEqual(report.accepted_count(), 0)
         self.assertGreater(arena.llm_calls, 0)
-        self.assertEqual(arena.llm_models, ["gpt-4o-mini", "gpt-4o-mini"])
+        self.assertEqual(arena.llm_models, [DEFAULT_LLM_MODEL, DEFAULT_LLM_MODEL])
         self.assertIn("/fetch", arena.target_paths)
         self.assertIn("/config", arena.target_paths)
         self.assertIn("/portal", arena.target_paths)
