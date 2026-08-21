@@ -87,6 +87,7 @@ class Rule:
     reason_code: str
     protocol: int
     ports: tuple[int, ...]
+    source_ports: tuple[int, ...]
     promotion_state: PromotionState
     canary_fraction: float
     canary_seed: str
@@ -159,6 +160,7 @@ class CompiledMatcher:
     """
 
     pattern: re.Pattern
+    enforcing_pattern: re.Pattern | None
     rules_by_group: Mapping[str, Rule]
 
 
@@ -320,16 +322,21 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
         raise PolicyValidationError(f"{context}: 알 수 없는 protocol {protocol_name!r}")
     protocol = _PROTOCOL_NAMES[protocol_name]
 
-    ports_raw = raw.get("ports", [])
-    if not isinstance(ports_raw, list):
-        raise PolicyValidationError(f"{context}: ports 는 배열이어야 한다")
-    ports: list[int] = []
-    for port in ports_raw:
-        value = int(port)
-        if not (1 <= value <= 65535):
-            raise PolicyValidationError(f"{context}: 포트 범위 밖 {value}")
-        if value not in ports:
-            ports.append(value)
+    def parse_ports(key: str) -> list[int]:
+        raw_ports = raw.get(key, [])
+        if not isinstance(raw_ports, list):
+            raise PolicyValidationError(f"{context}: {key} 는 배열이어야 한다")
+        normalized: list[int] = []
+        for port in raw_ports:
+            value = int(port)
+            if not (1 <= value <= 65535):
+                raise PolicyValidationError(f"{context}: {key} 포트 범위 밖 {value}")
+            if value not in normalized:
+                normalized.append(value)
+        return normalized
+
+    ports = parse_ports("ports")
+    source_ports = parse_ports("source_ports")
 
     canary_fraction = float(raw.get("canary_fraction", 0.0))
     if not (0.0 <= canary_fraction <= 1.0):
@@ -526,6 +533,7 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
         reason_code=reason_code,
         protocol=protocol,
         ports=tuple(ports),
+        source_ports=tuple(source_ports),
         promotion_state=promotion_state,
         canary_fraction=canary_fraction,
         canary_seed=canary_seed,
@@ -760,20 +768,33 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
 def _compile_matcher(bucket: list[Rule]) -> CompiledMatcher:
     """한 scope의 rule들을 이름 있는 그룹 하나로 합쳐 컴파일한다."""
     fragments: list[str] = []
+    enforcing_fragments: list[str] = []
     rules_by_group: dict[str, Rule] = {}
     ignore_case = False
     for index, rule in enumerate(bucket):
         group = f"r{index}"
         rules_by_group[group] = rule
-        fragments.append(f"(?P<{group}>{rule.pattern_source})")
+        fragment = f"(?P<{group}>{rule.pattern_source})"
+        fragments.append(fragment)
+        if rule.enforces_drop:
+            enforcing_fragments.append(fragment)
         ignore_case = ignore_case or rule.ignore_case
 
     flags = re.IGNORECASE if ignore_case else 0
     try:
         pattern = re.compile("|".join(fragments).encode("latin-1"), flags)
+        enforcing_pattern = (
+            re.compile("|".join(enforcing_fragments).encode("latin-1"), flags)
+            if enforcing_fragments
+            else None
+        )
     except re.error as exc:
         raise PolicyValidationError(f"정규식 컴파일 실패: {exc}") from exc
-    return CompiledMatcher(pattern=pattern, rules_by_group=MappingProxyType(rules_by_group))
+    return CompiledMatcher(
+        pattern=pattern,
+        enforcing_pattern=enforcing_pattern,
+        rules_by_group=MappingProxyType(rules_by_group),
+    )
 
 
 def load_bundle_file(path: str, now_epoch: float | None = None) -> tuple[CompiledPolicy, tuple[str, ...]]:

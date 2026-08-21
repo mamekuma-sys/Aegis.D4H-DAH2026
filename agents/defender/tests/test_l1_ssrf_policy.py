@@ -34,6 +34,7 @@ _L3_SENSITIVE_RULE_ID = "sig-l3-sensitive-routes-001"
 _L3_UNION_BROAD_RULE_ID = "sig-l3-product-union-broad-001"
 _L2_SCHEMA_RULE_ID = "sig-l2-graphql-schema-001"
 _L4_FLAG_RULE_ID = "sig-l4-flag-secret-001"
+_EGRESS_FLAG_RULE_ID = "sig-flag-egress-001"
 _L1_CONFIG_CANON_RULE_ID = "http-l1-config-flag-canonical-001"
 _L1_CONFIG_CANON_POST_RULE_ID = "http-l1-config-flag-canonical-post-001"
 _ACTIVE_RULES = {
@@ -44,6 +45,7 @@ _ACTIVE_RULES = {
     _L2_GRAPHQL_RULE_ID, "sig-l2-graphql-mission-audit-body-001", _L1_SVC_FLAG_RULE_ID,
     _L2_RSC_RULE_ID, _L2_WS_FEED_RULE_ID,
     _L3_SENSITIVE_RULE_ID, _L3_UNION_BROAD_RULE_ID, _L2_SCHEMA_RULE_ID, _L4_FLAG_RULE_ID,
+    _EGRESS_FLAG_RULE_ID,
     _L1_CONFIG_CANON_RULE_ID, _L1_CONFIG_CANON_POST_RULE_ID,
     "http-l2-graphql-get-semantic-001",
     "http-l2-graphql-post-semantic-001",
@@ -88,6 +90,64 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         ).encode("ascii")
         parsed = parse_ip(ipv4_tcp(payload, dst_port=dst_port))
         return self.policy.decide(pkt_id, parsed, 0.0)
+
+    def _decide_response(self, payload, src_port=8080, pkt_id=1):
+        parsed = parse_ip(ipv4_tcp(
+            payload,
+            src_ip=bytes((10, 1, 1, 4)),
+            dst_ip=bytes((10, 1, 0, 4)),
+            src_port=src_port,
+            dst_port=51234,
+        ))
+        return self.policy.decide(pkt_id, parsed, 0.0)
+
+    def test_flag_shaped_service_response_is_dropped(self):
+        payload = (
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"
+            b"FLAG{f754c99511e9caa26226bc372215084b}"
+        )
+        decision = self._decide_response(payload)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _EGRESS_FLAG_RULE_ID)
+
+    def test_earlier_shadow_marker_does_not_mask_flag_egress_drop(self):
+        payload = (
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
+            b"{{ harmless-template-marker }}"
+            b"<div>FLAG{f754c99511e9caa26226bc372215084b}</div>"
+        )
+        decision = self._decide_response(payload)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _EGRESS_FLAG_RULE_ID)
+
+    def test_non_hex_flag_placeholder_response_is_not_dropped(self):
+        decision = self._decide_response(
+            b"HTTP/1.1 200 OK\r\n\r\nFLAG{synthetic-marker}"
+        )
+        self.assertEqual(decision.verdict, VERDICT_ACCEPT)
+
+    def test_flag_shape_from_unprotected_source_port_is_not_egress(self):
+        decision = self._decide_response(
+            b"FLAG{f754c99511e9caa26226bc372215084b}", src_port=51234
+        )
+        self.assertEqual(decision.verdict, VERDICT_ACCEPT)
+
+    def test_non_flag_service_responses_accept_100_times(self):
+        ports = (8080, 9000, 8082, 1883, 8554, 9090, 8410, 8420)
+        payloads = (
+            b"HTTP/1.1 200 OK\r\n\r\nhealthy",
+            b"HTTP/1.1 204 No Content\r\n\r\n",
+            b"normal telemetry payload",
+            b"FLAG{synthetic-marker}",
+        )
+        for index in range(100):
+            with self.subTest(index=index):
+                decision = self._decide_response(
+                    payloads[index % len(payloads)],
+                    src_port=ports[index % len(ports)],
+                    pkt_id=10_000 + index,
+                )
+                self.assertEqual(decision.verdict, VERDICT_ACCEPT)
 
     def test_observed_plain_and_encoded_variants_drop(self):
         for index, path in enumerate(_POSITIVE_PATHS, start=1):
@@ -520,9 +580,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p3-r8-harden"
+            "defender-2026-08-21-p3-r9-egress-lockdown"
         )
-        self.assertEqual(self.report.drop_capable_rules, 31)
+        self.assertEqual(self.report.drop_capable_rules, 32)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

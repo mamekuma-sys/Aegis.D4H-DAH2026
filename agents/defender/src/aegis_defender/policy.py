@@ -40,7 +40,15 @@ from .http_semantics import parse_http_request
 from .grpc_semantics import GrpcH2StreamInspector
 from .packet import TCP_FIN, TCP_RST, TCP_SYN, ParsedPacket, ParseStatus, is_scan_flag_combination
 from .protocol import FrameStatus, VERDICT_ACCEPT, VERDICT_DROP
-from .rules import CompiledPolicy, EMPTY_POLICY, MatchKind, PromotionState, Rule, canary_selected
+from .rules import (
+    CompiledMatcher,
+    CompiledPolicy,
+    EMPTY_POLICY,
+    MatchKind,
+    PromotionState,
+    Rule,
+    canary_selected,
+)
 from .state import CorrelationSnapshotRef
 from .stream import HttpStreamStitcher
 
@@ -244,11 +252,30 @@ class HotPolicy:
             return False
         if rule.ports and parsed.dst_port not in rule.ports:
             return False
+        if rule.source_ports and parsed.src_port not in rule.source_ports:
+            return False
         if rule.profile_scope and "*" not in rule.profile_scope:
             profile = parsed.profile
             if profile is None or profile.scope_key() not in rule.profile_scope:
                 return False
         return True
+
+    def _enforcing_regex_match(
+        self,
+        matcher: CompiledMatcher,
+        candidate: bytes,
+        parsed: ParsedPacket,
+    ) -> Rule | None:
+        """SHADOW의 더 이른 바이트 매치가 뒤의 DROP 증거를 가리지 않게 한다."""
+        if matcher.enforcing_pattern is None:
+            return None
+        found = matcher.enforcing_pattern.search(candidate)
+        if found is None:
+            return None
+        rule = matcher.rules_by_group.get(found.lastgroup or "")
+        if rule is None or not self._scope_allows(rule, parsed):
+            return None
+        return rule
 
     def _gate_flags(
         self,
@@ -330,7 +357,12 @@ class HotPolicy:
                 if rule.promotion_state is PromotionState.SHADOW:
                     if deferred_shadow is None:
                         deferred_shadow = (rule, rule.category)
-                    continue
+                    enforcing_rule = self._enforcing_regex_match(
+                        matcher, candidate, parsed
+                    )
+                    if enforcing_rule is None:
+                        continue
+                    rule = enforcing_rule
                 self._http_stream.discard(parsed.flow_key)
                 return self._enforce(
                     pkt_id, rule, parsed, received_at, STAGE_SIG,

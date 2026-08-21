@@ -136,11 +136,11 @@ if ($defenderText -notmatch 'ConfigOnly') {
 if ($defenderText -notmatch 'policy_source=active') {
     throw 'defender-deploy.md does not require policy_source=active.'
 }
-if ($defenderText -notmatch 'bundle_id=defender-2026-08-21-p3-r8-harden') {
+if ($defenderText -notmatch 'bundle_id=defender-2026-08-21-p3-r9-egress-lockdown') {
     throw 'defender-deploy.md does not require the P2-R3 hardened bundle id.'
 }
-if ($defenderText -notmatch 'drop_capable_rules=31') {
-    throw 'defender-deploy.md does not require drop_capable_rules=31.'
+if ($defenderText -notmatch 'drop_capable_rules=32') {
+    throw 'defender-deploy.md does not require drop_capable_rules=32.'
 }
 if ($defenderText -notmatch 'COPY policy /policy') {
     throw 'defender-deploy.md does not document the /policy image path.'

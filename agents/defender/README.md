@@ -85,9 +85,9 @@ p50·p95·p99·max가 남습니다.
 
 ## 현재 정책 상태
 
-현재 bundle `defender-2026-08-21-p3-r8-harden`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, 분할된 `service_id` SSTI를 포함한 portal feedback, `/api/rsc-action` env-ref, `/ws/mission-feed`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi와 L4 민감 경로에 대응하는 31개 규칙이 `ACTIVE`입니다. 일반 휴리스틱과 L3 MQTT wildcard 구독·RTSP 민감 DESCRIBE 후보 15개는 `SHADOW`입니다.
+현재 bundle `defender-2026-08-21-p3-r9-egress-lockdown`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, 증명된 portal SSTI, `/api/rsc-action` env-ref, `/ws/mission-feed`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi, MQTT/RTSP 민감 경로, 보호 서비스 응답의 hex flag 유출에 대응하는 32개 규칙이 `ACTIVE`입니다. 광역 portal rule과 근거가 부족한 일반 휴리스틱·스캔·flow-score 규칙 13개는 `SHADOW`입니다.
 
-`1883`·`8554`는 공식 포트·프로토콜만 확인됐고 정상/공격 PCAP은 아직 없으므로 즉시 DROP하지 않습니다. 두 후보는 packet-local 형식을 정확히 식별해 비민감 reason code로 관측하며, 동일 프로토콜 negative·SLA fixture와 방어 담당자·팀장 review가 확보되기 전에는 ACTIVE로 올리지 않습니다.
+egress 규칙은 목적지 포트가 아닌 보호 서비스 `source_ports`로 응답 방향을 제한하고 `FLAG{hex}` 형태만 차단합니다. 비-hex placeholder와 보호 서비스가 아닌 source port는 통과하며, 공식 SLA 하락 또는 정상 checker의 flag 회수가 확인되면 즉시 SHADOW로 되돌립니다.
 
 L2 cookie rule은 raw Base64 문자열을 나열하지 않고 packet-local 또는 최대 4KB in-order stitching으로 완성된 HTTP request prefix와 bounded JSON scalar claim만 해석합니다. GraphQL은 숫자 하나로 명확한 bounded `Content-Length` 본문까지 기다려 분할된 `missionAudit` 요청도 판정합니다. gap·불완전·상한 초과는 차단 사유가 아닙니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
 
@@ -100,7 +100,7 @@ PCAP은 계속 Git 제외 경로에 두며 출력에는 payload, 주소, cookie,
 bash scripts/replay-defender-pcaps.sh <private-p2-pcap-dir> \
   --as-of 2026-08-21T03:00:00Z \
   --require-files 10 \
-  --require-drop-rules 14 \
+  --require-drop-rules 32 \
   --min-exploit-block-rate 1.0 \
   --require-zero-unexpected-other-drops
 ```
@@ -171,6 +171,6 @@ correlation worker와 공유하지 않고 단일 producer만 소유하므로 loc
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
-- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-21-p3-canonical-lfi", "drop_capable_rules":20, "demotions":[], ...}`
+- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-21-p3-r9-egress-lockdown", "drop_capable_rules":32, "demotions":[], ...}`
 - 종료: SIGTERM에서 2초 내 정리 종료, 종료 코드 0
 - 비밀 비출력: `FLAG{...}`, API key, Bearer 토큰, raw payload가 로그에 나오지 않음을 `tests/test_advisory.py`의 `TestAuditRedaction`이 검증

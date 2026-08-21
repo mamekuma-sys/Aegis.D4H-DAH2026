@@ -100,6 +100,18 @@ class TestBundleRejection(unittest.TestCase):
     def test_port_out_of_range(self):
         self._reject(minimal_bundle(rules=[rule_document("r", ports=[70000])]))
 
+    def test_source_port_scope_is_validated_and_preserved(self):
+        for source_ports in ("8080", [0], [65536]):
+            with self.subTest(source_ports=source_ports):
+                self._reject(minimal_bundle(
+                    rules=[rule_document("r", ports=[], source_ports=source_ports)]
+                ))
+        compiled, _ = compile_bundle(minimal_bundle(
+            rules=[rule_document("r", ports=[], source_ports=[8080, 8080, 9000])],
+            baseline_profiles=BASELINE,
+        ))
+        self.assertEqual(compiled.rules_by_id["r"].source_ports, (8080, 9000))
+
     def test_missing_promotion_cohort(self):
         document = rule_document("r")
         document.pop("promotion_cohort")
@@ -309,8 +321,8 @@ class TestLoadOrder(unittest.TestCase):
     def test_shipped_bundle_activates_only_reviewed_observed_rules(self):
         compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-r8-harden")
-        self.assertEqual(report.drop_capable_rules, 31)
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-r9-egress-lockdown")
+        self.assertEqual(report.drop_capable_rules, 32)
         self.assertEqual(report.demotions, ())
         self.assertEqual(
             compiled.baseline_profiles,
@@ -348,6 +360,7 @@ class TestLoadOrder(unittest.TestCase):
             "sig-l3-mqtt-wildcard-subscribe-001",
             "sig-l3-mqtt-uav-config-001",
             "sig-l3-rtsp-sensitive-describe-001",
+            "sig-flag-egress-001",
         }
         for rule_id, rule in compiled.rules_by_id.items():
             expected = PromotionState.ACTIVE if rule_id in active_ids else PromotionState.SHADOW
@@ -355,8 +368,8 @@ class TestLoadOrder(unittest.TestCase):
 
     def test_shipped_bundle_keeps_reviewed_rules_active_during_finals_week(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1787356800.0)
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-r8-harden")
-        self.assertEqual(report.drop_capable_rules, 31)
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-r9-egress-lockdown")
+        self.assertEqual(report.drop_capable_rules, 32)
         self.assertEqual(report.demotions, ())
 
     def test_shipped_active_rules_are_evidence_scoped_by_observed_layer(self):
@@ -366,7 +379,15 @@ class TestLoadOrder(unittest.TestCase):
             if rule.promotion_state is not PromotionState.ACTIVE:
                 continue
             self.assertEqual(rule.protocol, 6, rule.rule_id)
-            self.assertGreaterEqual(len(rule.ports), 1, rule.rule_id)
+            if rule.rule_id == "sig-flag-egress-001":
+                self.assertEqual(rule.ports, ())
+                self.assertEqual(
+                    set(rule.source_ports),
+                    {8080, 9000, 8082, 1883, 8554, 9090, 8410, 8420},
+                )
+            else:
+                self.assertGreaterEqual(len(rule.ports), 1, rule.rule_id)
+                self.assertEqual(rule.source_ports, (), rule.rule_id)
             self.assertNotIn("PENDING", rule.evidence_id.upper(), rule.rule_id)
             self.assertNotEqual(rule.positive_fixture_id.lower(), "pending", rule.rule_id)
             self.assertNotEqual(rule.negative_fixture_id.lower(), "pending", rule.rule_id)
@@ -388,7 +409,7 @@ class TestLoadOrder(unittest.TestCase):
     def test_shipped_bundle_expires_after_finals_validity_window(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1788220800.0)
         self.assertEqual(report.drop_capable_rules, 0)
-        self.assertEqual(len(report.demotions), 31)
+        self.assertEqual(len(report.demotions), 32)
         self.assertTrue(all(entry.endswith(":expired") for entry in report.demotions))
 
     def test_shipped_fallback_is_valid(self):
@@ -446,7 +467,7 @@ class TestShippedBroadHeuristicSafety(unittest.TestCase):
                 VERDICT_ACCEPT,
             )
 
-    def test_response_marker_rule_remains_shadow(self):
+    def test_non_hex_unprotected_response_markers_accept(self):
         from aegis_defender.protocol import VERDICT_ACCEPT
         for index in range(200):
             payload = b"HTTP/1.1 200 OK\r\n\r\nFLAG{fixture_%d}" % index

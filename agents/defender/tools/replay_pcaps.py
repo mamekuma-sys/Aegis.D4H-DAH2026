@@ -41,12 +41,16 @@ from aegis_defender.rules import CompiledPolicy, load_policy  # noqa: E402
 from aegis_defender.stream import HttpStreamStitcher  # noqa: E402
 
 
-SERVICE_PORTS = frozenset({8080, 8082, 9000, 9090})
+SERVICE_PORTS = frozenset({8080, 9000, 8082, 1883, 8554, 9090, 8410, 8420})
 PORT_LAYERS = {
     8080: "L1-HTTP-8080",
     9000: "L1-GRPC-9000",
     8082: "L2-HTTP-8082",
+    1883: "L3-MQTT-1883",
+    8554: "L3-RTSP-8554",
     9090: "L3-HTTP-9090",
+    8410: "L4-TCP-8410",
+    8420: "L4-TCP-8420",
 }
 QUERY_NAMES = (
     "url", "uri", "target", "u", "dest", "path", "host",
@@ -57,6 +61,7 @@ HTTP_REQUEST_LINE = re.compile(
 )
 HTTP_RESPONSE_LINE = re.compile(rb"HTTP/1\.[01] [0-9]{3}(?: [^\r\n]*)?\r\n")
 FLAG_MARKER = re.compile(rb"FLAG\{[^}\r\n]{1,512}\}")
+EGRESS_FLAG_MARKER = re.compile(rb"FLAG\{[0-9a-fA-F]{6,128}\}")
 MAX_CAPTURED_FRAME = 16 * 1024 * 1024
 ETHERNET_LINKTYPE = 1
 ETHERTYPE_IPV4 = 0x0800
@@ -91,6 +96,10 @@ class ReplayClock:
 @dataclass(slots=True)
 class LayerReport:
     ingress_packets: int = 0
+    egress_packets: int = 0
+    egress_flag_packets: int = 0
+    blocked_egress_flag_packets: int = 0
+    unexpected_egress_drops: int = 0
     parsed_requests: int = 0
     exploit_shape_requests: int = 0
     blocked_exploit_shape_requests: int = 0
@@ -109,7 +118,9 @@ class LayerReport:
 
     def add(self, other: "LayerReport") -> None:
         for name in (
-            "ingress_packets", "parsed_requests", "exploit_shape_requests",
+            "ingress_packets", "egress_packets", "egress_flag_packets",
+            "blocked_egress_flag_packets", "unexpected_egress_drops",
+            "parsed_requests", "exploit_shape_requests",
             "blocked_exploit_shape_requests", "missed_exploit_shape_requests",
             "other_requests", "passed_other_requests", "coalesced_other_requests",
             "unexpected_other_drops", "dropped_packets",
@@ -175,6 +186,10 @@ class ReplayReport:
                 "flag_linked_requests": (
                     "PCAP 응답에서 FLAG{...} 존재만 확인해 연결한 요청 수이며 "
                     "플래그 값은 저장하거나 출력하지 않는다."
+                ),
+                "egress_flag_packets": (
+                    "보호 서비스 응답 payload에서 FLAG{hex}를 관측한 packet 수와 "
+                    "실제 HotPolicy DROP 수다. 값은 저장하거나 출력하지 않는다."
                 ),
                 "parsed_requests": (
                     "packet-local 또는 bounded in-order stitching으로 완성된 HTTP 요청 "
@@ -434,7 +449,26 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
                     else:
                         layer.passed_other_requests += 1
 
-        elif response and parsed.payload:
+        elif response:
+            packet_id += 1
+            layer_name = PORT_LAYERS[parsed.src_port]
+            layer = layers[layer_name]
+            decision = hot_policy.decide(packet_id, parsed, received_at=clock.now)
+            if not parsed.payload:
+                if connection_flow is not None and parsed.tcp_flags & (TCP_FIN | TCP_RST):
+                    pending.pop(connection_flow, None)
+                    current_response.pop(connection_flow, None)
+                continue
+
+            layer.egress_packets += 1
+            flag_in_packet = EGRESS_FLAG_MARKER.search(parsed.payload) is not None
+            if flag_in_packet:
+                layer.egress_flag_packets += 1
+                if decision.is_drop:
+                    layer.blocked_egress_flag_packets += 1
+            elif decision.is_drop:
+                layer.unexpected_egress_drops += 1
+
             flow = _flow_key(parsed, reverse=True)
             response_starts = len(HTTP_RESPONSE_LINE.findall(parsed.payload))
             if response_starts:
@@ -544,6 +578,11 @@ def format_text(document: dict[str, object]) -> str:
         (
             f"- flag-linked requests: {total['blocked_flag_linked_requests']} / "
             f"{total['flag_linked_requests']} blocked"
+        ),
+        (
+            f"- egress flag packets: {total['blocked_egress_flag_packets']} / "
+            f"{total['egress_flag_packets']} blocked; "
+            f"{total['unexpected_egress_drops']} non-flag egress drops"
         ),
         "- note: unexpected-other rate is an offline proxy, not an official SLA false-positive rate.",
     ]

@@ -15,9 +15,9 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ## 현재 상태
 
-현재 bundle은 `defender-2026-08-21-p3-r8-harden`입니다. 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록했습니다. 증거·정상 negative·SLA fixture와 두 review가 있는 rule 31개가 `ACTIVE`이고, 일반 휴리스틱 및 아직 PCAP 승격 근거가 없는 MQTT/RTSP 후보 15개는 `SHADOW`입니다. ACTIVE 규칙은 `2026-09-01T00:00:00Z`에 만료합니다.
+현재 bundle은 `defender-2026-08-21-p3-r9-egress-lockdown`입니다. 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록했습니다. 증거·정상 negative·SLA fixture와 두 review가 있는 rule 32개가 `ACTIVE`이고, 광역 portal rule과 근거가 부족한 일반 휴리스틱·스캔·flow-score rule 13개는 `SHADOW`입니다. ACTIVE 규칙은 `2026-09-01T00:00:00Z`에 만료합니다.
 
-활성 범위는 L1 helper secret SSRF와 config-to-flag traversal, SatDiag Tail/Export 플래그 접근, `/svc/flag-*`, `service_id` query가 있는 portal feedback, L2 GraphQL `missionAudit`, `/api/rsc-action` env-ref, `/ws/mission-feed`, Base64-JSON `session` 관리자 claim 위조와 loopback secret/registry SSRF, L3 `app_meta` 대상 UNION SQLi입니다. query 없는 `/portal/feedback`과 GraphQL `systemConfig`는 포함하지 않습니다. HTTP 의미 규칙은 완성된 bounded request prefix에만 적용하고 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. SHADOW 일치가 뒤의 ACTIVE 의미 규칙을 가리지 않도록 ACTIVE→CANARY→SHADOW 순서로 평가합니다.
+활성 범위는 L1 helper secret SSRF와 config-to-flag traversal, SatDiag Tail/Export 플래그 접근, `/svc/flag-*`, 증명된 portal SSTI, L2 GraphQL `missionAudit`, `/api/rsc-action` env-ref, `/ws/mission-feed`, Base64-JSON `session` 관리자 claim 위조와 loopback secret/registry SSRF, L3 `app_meta` 대상 UNION SQLi, MQTT/RTSP 민감 경로, 보호 서비스 응답의 `FLAG{hex}` 유출입니다. 일반 `service_id` query, query 없는 `/portal/feedback`, GraphQL `systemConfig`는 포함하지 않습니다. HTTP 의미 규칙은 완성된 bounded request prefix에만 적용하고 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. SHADOW 일치가 뒤의 ACTIVE 의미 규칙을 가리지 않도록 ACTIVE→CANARY→SHADOW 순서로 평가합니다.
 
 로더는 안전 조건을 구조적으로 강제합니다. `baseline_profiles`가 비거나 rule이 만료되거나 두 review 중 하나라도 미승인이면 차단 권한을 가진 rule을 기동 시 `SHADOW`로 강등합니다(§15.6 마지막 항목).
 
@@ -42,7 +42,7 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 | `kind` | `payload_regex` / `http_json_cookie_claim` / `http_ssrf_target` / `http_sqli_source` / `http_path_traversal` / `http_graphql_field` / `http_json_base64_value` / `http_query_token_set` / `grpc_semantic` / `tcp_flags` / `flow_score` / `allow_profile` |
 | `category` | `Sig` 카테고리. `CausalMatcher`의 관측 단계 매핑에도 쓰입니다 |
 | `reason_code` | 로그에 남는 비민감 사유. payload나 rule 내용을 드러내지 않아야 합니다 |
-| `protocol`, `ports` | `ports`가 비면 해당 protocol 전체(포트 무관 matcher) |
+| `protocol`, `ports`, `source_ports` | `ports`는 목적지 포트, `source_ports`는 응답 방향의 출발 포트 제한. 둘 다 비면 해당 protocol 전체 |
 | `pattern` | `payload_regex` 전용. 아래 「정규식 제약」 참조 |
 | `ignore_case` | 같은 scope의 rule 중 하나라도 true면 그 scope의 결합 정규식 전체가 대소문자 무시로 컴파일됩니다 |
 | `http_method`, `http_path` | `http_json_cookie_claim` 전용. percent-decoding과 absolute-form 정규화 뒤 정확히 일치해야 합니다 |
