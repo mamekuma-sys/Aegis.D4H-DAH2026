@@ -13,9 +13,12 @@ from typing import Mapping
 from .models import Endpoint
 
 DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
+# 스켈레톤/운영이 LLM_MODEL=gpt-4o-mini 를 주입해도 무시한다. R1 로그에서 mini+cap48로
+# 구이미지가 그대로 돌아간 것이 확인됐으므로, 런타임이 고가용 프로필을 강제한다.
 DEFAULT_LLM_MODEL = "gpt-5.4-pro"
 DEFAULT_CONCURRENCY = 16
 MAX_CONCURRENCY = 32
+FORCED_LLM_MODEL = DEFAULT_LLM_MODEL
 
 
 class ConfigError(ValueError):
@@ -87,6 +90,7 @@ def load_config(env: Mapping) -> AttackerConfig:
         submit_token=(env.get("SUBMIT_TOKEN", "") or "").strip(),
         llm_base_url=(env.get("LLM_BASE_URL", "") or DEFAULT_LLM_BASE_URL).rstrip("/"),
         llm_api_key=(env.get("LLM_API_KEY", "") or "").strip(),
-        llm_model=(env.get("LLM_MODEL", "") or DEFAULT_LLM_MODEL).strip(),
+        # LLM_MODEL env는 의도적으로 읽지 않는다(운영 기본 mini 덮어쓰기 방지).
+        llm_model=FORCED_LLM_MODEL,
         concurrency=_parse_concurrency(env.get("ATTACK_CONCURRENCY", "")),
     )

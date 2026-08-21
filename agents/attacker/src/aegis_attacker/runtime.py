@@ -12,6 +12,7 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from . import ATTACK_PROFILE, __version__ as ATTACKER_VERSION
 from .audit import AuditLogger, Redactor
 from .config import AttackerConfig
 from .egress import EgressError, EgressGateway, build_allowlists
@@ -26,7 +27,7 @@ from .exploits import (
     uses_observed_read_only_interface,
 )
 from .flags import FlagPipeline, SubmitClient
-from .llm_advisor import LLMAdvisor, escalated_model
+from .llm_advisor import LLMAdvisor, MAX_LLM_CALLS_PER_ROUND, escalated_model
 from .models import (
     Capability,
     ExecutionPlan,
@@ -789,9 +790,17 @@ class AttackerRuntime:
             self.finish_round()
 
     def run_forever(self, max_cycles=None) -> None:
-        self.audit.log("startup", targets=len(self.config.targets),
-                       ports=len(self.config.ports), can_attack=self.config.can_attack,
-                       can_submit=self.config.can_submit, model=self.config.llm_model)
+        self.audit.log(
+            "startup",
+            targets=len(self.config.targets),
+            ports=len(self.config.ports),
+            can_attack=self.config.can_attack,
+            can_submit=self.config.can_submit,
+            model=self.config.llm_model,
+            attack_profile=ATTACK_PROFILE,
+            version=ATTACKER_VERSION,
+            llm_cap=MAX_LLM_CALLS_PER_ROUND,
+        )
         if not self.config.can_attack:
             self.audit.log("inert", reason="표적 없음 — fail-open, 공격 없음")
             return
