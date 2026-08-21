@@ -11,11 +11,15 @@ from __future__ import annotations
 import json
 
 from .audit import Redactor
+from .config import DEFAULT_LLM_FALLBACK_MODEL, DEFAULT_LLM_MODEL
 from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
 MAX_LLM_CALLS_PER_ROUND = 48  # R17의 111회/93k token 무진전 확산을 막고 대표 service solver에 집중.
 LLM_TIMEOUT = 20.0
+LLM_MAX_COMPLETION_TOKENS = 800
+LLM_REASONING_EFFORT = "low"
+_RETRYABLE_LLM_STATUSES = frozenset({0, 408, 409, 425, 429, 500, 502, 503, 504})
 # 공격 대상이 반환한 최대 1MiB 응답을 그대로 prompt로 보내지 않는다. 토큰 수는
 # tokenizer 없이 정확히 계산할 수 없으므로 UTF-8 byte를 보수적인 상한으로 사용한다.
 # 시작의 service 설명과 끝의 최신 error를 함께 남겨 관측 증거의 양쪽 경계를 보존한다.
@@ -62,16 +66,6 @@ SUPPORTED_LLM_MODELS = frozenset({
     "gpt-5.2-codex",
     "gpt-5.3-codex",
 })
-
-# 실패가 쌓이면 더 센 모델로 승급한다(cheap-first). 동점 시 토큰 비용이 적은 팀이
-# 이기므로(운영세칙 제22조) 값비싼 모델은 저비용 모델이 막혔을 때만 쓴다.
-ESCALATION_MODELS = ("gpt-4.1", "gpt-5.2")
-
-
-def escalated_model(base: str, level: int) -> str:
-    if level <= 0:
-        return base
-    return ESCALATION_MODELS[min(level - 1, len(ESCALATION_MODELS) - 1)]
 
 SYSTEM_PROMPT = (
     "You are an offensive web-security agent in an authorized CTF attack-defense match. Each target is an "
@@ -127,8 +121,6 @@ class LLMAdvisor:
         model_id = model or self._config.llm_model
         if model_id not in SUPPORTED_LLM_MODELS:
             return None
-        if not self._budget.try_reserve_llm(self._max_calls):
-            return None  # 예산 소진 → 결정론 경로로 (검사·예약 원자적, 병렬 초과 방지)
 
         # 현재 저장된 모든 비밀 원문을 프롬프트에서 제거(플러스 FLAG 정규식).
         redactor = Redactor(self._store.secrets_snapshot())
@@ -143,32 +135,64 @@ class LLMAdvisor:
             redactor.scrub("\n".join(x for x in (hint_line, observed) if x))
         )
 
-        payload = json.dumps({
+        result, retryable = self._request_model(model_id, user_content)
+        if result is not None:
+            return result
+        if (model_id == DEFAULT_LLM_MODEL and retryable
+                and DEFAULT_LLM_FALLBACK_MODEL in SUPPORTED_LLM_MODELS):
+            result, _ = self._request_model(DEFAULT_LLM_FALLBACK_MODEL, user_content)
+        return result
+
+    def _request_model(self, model_id: str, user_content: str):
+        """한 upstream 호출을 예산에 예약하고 `(계획, 재시도 가능)`을 반환한다."""
+        if not self._budget.try_reserve_llm(self._max_calls):
+            return None, False
+
+        is_gpt56 = model_id.startswith("gpt-5.6-")
+        payload_obj = {
             "model": model_id,
-            "temperature": 0,
-            "max_completion_tokens": 300,
+            "max_completion_tokens": LLM_MAX_COMPLETION_TOKENS,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "developer" if is_gpt56 else "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ],
-        })
+        }
+        if is_gpt56:
+            # GPT-5.6의 기본 medium은 20초 hot path에 불리하므로 저지연 low를 명시한다.
+            payload_obj["reasoning_effort"] = LLM_REASONING_EFFORT
+        else:
+            # 기존 비-reasoning 모델을 LLM_MODEL로 명시한 경우의 동작을 보존한다.
+            payload_obj["temperature"] = 0
+
+        payload = json.dumps(payload_obj)
         api_key = self._store.resolve(self._key_handle)  # 원문은 여기서만
-        resp = self._egress.request(
-            Capability.LLM, "POST",
-            self._config.llm_base_url + "/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            body=payload, timeout=LLM_TIMEOUT,
-        )
+        try:
+            resp = self._egress.request(
+                Capability.LLM, "POST",
+                self._config.llm_base_url + "/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                body=payload, timeout=LLM_TIMEOUT,
+            )
+        except Exception:
+            # 전송 계층 예외도 timeout/status=0과 같은 fail-open 결과로 수렴한다.
+            return None, True
         # 호출 수는 try_reserve_llm에서 이미 원자적으로 예약됨. 여기선 토큰만 가산.
         if resp.status != 200:
-            return None
+            return None, resp.status in _RETRYABLE_LLM_STATUSES
         try:
             obj = json.loads(resp.body)
-            content = obj["choices"][0]["message"]["content"]
             self._budget.add_llm(0, int(obj.get("usage", {}).get("total_tokens", 0) or 0))
+            choice = obj["choices"][0]
+            if choice.get("finish_reason") == "length":
+                return None, True
+            content = choice["message"]["content"]
         except Exception:
-            return None
-        return parse_exploit(content)
+            return None, True
+        try:
+            plan = parse_exploit(content)
+        except Exception:
+            return None, True
+        return plan, plan is None

@@ -1,8 +1,7 @@
-import unittest
 import threading
 import time
+import unittest
 
-from aegis_attacker.llm_advisor import ESCALATION_MODELS, escalated_model
 from aegis_attacker.playbook import Playbook
 
 
@@ -120,19 +119,6 @@ class TestSingleFlight(unittest.TestCase):
         # 정확히 하나만 solve, 나머지는 skip(미해결) — 동시 LLM 폭주 방지
         self.assertEqual(results.count("solve"), 1)
         self.assertEqual(results.count("skip"), 5)
-
-
-class TestModelEscalation(unittest.TestCase):
-    def test_level_0_uses_base(self):
-        self.assertEqual(escalated_model("gpt-4o-mini", 0), "gpt-4o-mini")
-
-    def test_escalates(self):
-        self.assertEqual(escalated_model("gpt-4o-mini", 1), ESCALATION_MODELS[0])
-        self.assertEqual(escalated_model("gpt-4o-mini", 2), ESCALATION_MODELS[1])
-
-    def test_caps_at_top(self):
-        self.assertEqual(escalated_model("gpt-4o-mini", 99), ESCALATION_MODELS[-1])
-
 
 if __name__ == "__main__":
     unittest.main()

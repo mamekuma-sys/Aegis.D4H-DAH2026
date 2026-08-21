@@ -26,6 +26,10 @@ class TestLoadConfig(unittest.TestCase):
         self.assertTrue(cfg.can_attack)
         self.assertTrue(cfg.can_submit)
 
+    def test_explicit_llm_model_overrides_default(self):
+        cfg = load_config({"LLM_MODEL": "gpt-4o-mini"})
+        self.assertEqual(cfg.llm_model, "gpt-4o-mini")
+
     def test_targets_x_ports_enumeration(self):
         cfg = load_config({"TARGETS": "a,b", "PORTS": "1,2,3", "LLM_API_KEY": "k"})
         eps = {e.key() for e in cfg.endpoints()}
