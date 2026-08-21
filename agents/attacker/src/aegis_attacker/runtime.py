@@ -18,10 +18,13 @@ from .config import AttackerConfig
 from .egress import EgressError, EgressGateway, build_allowlists
 from .exploits import (
     Attempt,
+    GrpcAttempt,
     auth_tamper_attempts,
     build_attempts,
     extract_internal_urls,
     observed_attempts,
+    observed_grpc_attempts,
+    observed_grpc_bootstrap,
     ssrf_pivot_attempts,
     tamper_token,
     uses_observed_read_only_interface,
@@ -365,6 +368,80 @@ class AttackerRuntime:
                 return evaded, False
         return result, False
 
+    def _execute_grpc_attempt(self, endpoint, attempt: GrpcAttempt, evidence_ref):
+        """관측된 읽기 전용 gRPC 시도를 evidence에 묶어 실행한다."""
+        if self._stop_event.is_set():
+            return None, False
+        now = self.clock()
+        plan = ExecutionPlan(
+            tool="grpc",
+            target=endpoint,
+            args={
+                "rpc": attempt.rpc,
+                "string_fields": attempt.strings(),
+                "varint_fields": attempt.varints(),
+            },
+            plan_id=f"grpc-{self._round_id}-{endpoint.endpoint_id}-{now}",
+            round_id=self._round_id,
+            endpoint_id=endpoint.endpoint_id,
+            capability=Capability.ATTACK_TARGET,
+            evidence_refs=[evidence_ref] if evidence_ref else [],
+            created_at_monotonic=now,
+            expires_at_monotonic=now + PLAN_TTL,
+            side_effect_class=SideEffectClass.READ_ONLY,
+            reason="det:" + attempt.reason,
+        )
+        try:
+            result = self._adapter.execute(plan)
+        except (PlanBindingError, EgressError):
+            return None, False
+        self._report.record_request()
+        self._remember_evidence(endpoint, result.observation.evidence_ref)
+        if self._stop_event.is_set():
+            return result, False
+        return result, self._process_flags(
+            result.body, result.observation.redacted_header_hints
+        )
+
+    def _attack_observed_grpc(self, endpoint) -> tuple:
+        """본선 9000 gRPC를 HTTP 오탐 없이 bootstrap하고 bounded 후보를 실행한다.
+
+        반환은 ``(protocol_handled, accepted_flag)``이다. gRPC가 응답하지 않으면 다른
+        protocol일 가능성을 위해 기존 HTTP→HTTPS→passive 탐색으로 회귀한다.
+        """
+        bootstrap_rpc = observed_grpc_bootstrap(endpoint.port)
+        if bootstrap_rpc is None:
+            return False, False
+        obs, resp = self._observer.observe_grpc(endpoint, bootstrap_rpc)
+        self._report.record_observation()
+        self._report.record_request()
+        self._remember_evidence(endpoint, obs.evidence_ref)
+        if resp.status == 0:
+            return False, False
+        with self._state_lock:
+            self._responsive_endpoints.add(endpoint.endpoint_id)
+        self.audit.log("protocol-observed", target=endpoint.key(), scheme="grpc-h2c")
+        captured_any = self._process_flags(resp.body, resp.headers)
+        evidence_ref = obs.evidence_ref
+        for attempt in observed_grpc_attempts(endpoint.port):
+            if self._stop_event.is_set():
+                break
+            result, captured = self._execute_grpc_attempt(
+                endpoint, attempt, evidence_ref
+            )
+            if result is not None:
+                evidence_ref = result.observation.evidence_ref
+            if captured:
+                captured_any = True
+                self.audit.log(
+                    "hit",
+                    target=endpoint.key(),
+                    path=attempt.rpc,
+                    vuln=attempt.vuln.value,
+                    reason="det:" + attempt.reason,
+                )
+        return True, captured_any
+
     @staticmethod
     def _cookie_from_headers(headers) -> tuple:
         """Set-Cookie 헤더에서 (name, value)를 뽑는다. 없으면 (None, None)."""
@@ -467,6 +544,9 @@ class AttackerRuntime:
     def attack_endpoint(self, endpoint) -> bool:
         if self._stop_event.is_set():
             return False
+        grpc_handled, grpc_captured = self._attack_observed_grpc(endpoint)
+        if grpc_handled:
+            return grpc_captured
         obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
         for _ in range(bootstrap_requests):
             self._report.record_observation()
@@ -560,6 +640,15 @@ class AttackerRuntime:
         # 확장하지 않고 완료한다.
         if captured_any:
             return True
+
+        # P1 8080은 PCAP에서 인증 포털로 확인됐고 읽기 전용 exploit route가 노출되지 않았다.
+        # 현재 validator가 반드시 거부할 LLM 계획에 호출 예산을 쓰지 않는다.
+        if endpoint.port == 8080 and observed_only:
+            self.audit.log(
+                "skip", target=endpoint.key(),
+                reason="finals-8080-no-observed-read-only-exploit",
+            )
+            return False
 
         # single-flight + 재사용: 같은 배너(같은 이미지)는 한 표적만 LLM으로 풀고, 나머지는
         # 그 성공 형태(method·path·headers·body)를 재사용한다(§7.6, 제22조). 병렬 첫 사이클에

@@ -125,6 +125,84 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         from aegis_attacker.recon import COMMON_PROBE_PATHS
         self.assertIn("/fetch", COMMON_PROBE_PATHS)
 
+    def test_finals_9000_uses_grpc_without_http_or_llm(self):
+        class FinalsGrpcArena:
+            def __init__(self):
+                self.grpc_calls = []
+                self.target_http_calls = []
+                self.llm_calls = 0
+                self.submits = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
+                    return HttpResponse(500, "unused")
+                self.target_http_calls.append((method, url))
+                return HttpResponse(0, "")
+
+            def request_grpc(self, host, port, rpc, string_fields=None,
+                             varint_fields=None, timeout=6.0):
+                fields = dict(string_fields or {})
+                self.grpc_calls.append((host, port, rpc, fields, dict(varint_fields or {})))
+                if rpc.endswith("/Health"):
+                    return HttpResponse(200, "ok")
+                if rpc.endswith("/TailDiagnosticLog") and fields.get(1) == "../../flag":
+                    return HttpResponse(200, "FLAG{finals_grpc_fixture}")
+                return HttpResponse(200, "no flag")
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(9000,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        arena = FinalsGrpcArena()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{finals_grpc_fixture}")
+        self.assertEqual(arena.target_http_calls, [])
+        self.assertEqual(arena.llm_calls, 0)
+        self.assertTrue(arena.grpc_calls[0][2].endswith("/Health"))
+        self.assertTrue(any(call[2].endswith("/ProbeEndpoint") for call in arena.grpc_calls))
+
+    def test_finals_8080_does_not_replay_legacy_fast_path_or_spend_llm(self):
+        class FinalsHttpArena:
+            def __init__(self):
+                self.target_paths = []
+                self.llm_calls = 0
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                parts = urlsplit(url)
+                if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
+                    return HttpResponse(500, "unused")
+                self.target_paths.append(parts.path)
+                if parts.path == "/":
+                    return HttpResponse(303, "", {"Location": "/login"})
+                return HttpResponse(404, "not found")
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8080,),
+            llm_base_url="http://litellm:4000", llm_api_key="sk-team1",
+            concurrency=1,
+        )
+        arena = FinalsHttpArena()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 0)
+        self.assertEqual(arena.llm_calls, 0)
+        self.assertNotIn("/fetch", arena.target_paths)
+        self.assertNotIn("/config", arena.target_paths)
+
     def test_unknown_l4_rejects_llm_invented_route(self):
         arena = FakeArena(
             "Phase 4 UGV URL gateway online",

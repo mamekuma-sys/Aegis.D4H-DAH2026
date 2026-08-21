@@ -34,9 +34,9 @@ def total_rounds() -> int:
     return sum(FINALS_PHASE_ROUNDS.values())
 
 
-# 데모 포트 → 레이어 추정(8082→L1 ... 8085→L4). 본선 포트는 운영 측 PORTS가
-# 정답이며, 이 매핑은 알려진 데모 포트의 **순회 순서**에만 사용한다.
-_DEMO_LAYER_PORTS = {8080: 1, 8082: 1, 8083: 2, 8084: 3, 8085: 4, 9000: 4}
+# 본선 P1의 8080 HTTP·9000 gRPC는 같은 L1 서비스의 두 진입점이다. 과거 데모
+# 8082~8085 매핑은 회귀 fixture 순회에만 유지한다.
+_DEMO_LAYER_PORTS = {8080: 1, 9000: 1, 8082: 1, 8083: 2, 8084: 3, 8085: 4}
 
 
 def layer_of_port(port: int) -> int:

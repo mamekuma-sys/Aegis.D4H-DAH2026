@@ -42,7 +42,7 @@ class TestLayerOfPort(unittest.TestCase):
         self.assertEqual(layer_of_port(8082), 1)
         self.assertEqual(layer_of_port(8084), 3)
         self.assertEqual(layer_of_port(8085), 4)
-        self.assertEqual(layer_of_port(9000), 4)
+        self.assertEqual(layer_of_port(9000), 1)
 
     def test_unknown_port(self):
         self.assertEqual(layer_of_port(443), 0)

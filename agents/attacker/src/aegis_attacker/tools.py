@@ -201,7 +201,7 @@ def evasion_variants(payload: str, endpoint_port: int | None = None) -> list:
 # ---- 실행 어댑터 ----
 
 class ExecutionAdapter:
-    """단일 HTTP 도구 실행기. 실행 직전 capability·binding·TTL·부작용·rate 재검증.
+    """HTTP/gRPC 실행기. 실행 직전 capability·binding·TTL·부작용·rate 재검증.
 
     범위(host·port) allowlist는 egress gateway가 강제한다(§9.10).
     """
@@ -239,19 +239,35 @@ class ExecutionAdapter:
         endpoint_id = plan.target.endpoint_id
         self._validate_binding(plan, endpoint_id)
 
-        method = str(plan.args.get("method", "GET")).upper()
-        raw_path = plan.args.get("path", "/") or "/"
-        if not raw_path.startswith("/"):
-            raw_path = "/" + raw_path
-        url = plan.target.base_url() + urllib.parse.quote(raw_path, safe=_QUOTE_SAFE)
-        headers = plan.args.get("headers") or {}
-        body = plan.args.get("body") or None
-
         self._rate.acquire_request()
         start = self._clock()
-        # egress가 host·port allowlist·capability 교차·redirect를 강제한다.
-        resp = self._egress.request(
-            Capability.ATTACK_TARGET, method, url, headers, body, plan.timeout)
+        if plan.tool == "grpc":
+            method = "GRPC"
+            raw_path = str(plan.args.get("rpc", ""))
+            if not raw_path.startswith("/"):
+                raise PlanBindingError("gRPC RPC path 형식 오류")
+            resp = self._egress.request_grpc(
+                Capability.ATTACK_TARGET,
+                plan.target.host,
+                plan.target.port,
+                raw_path,
+                plan.args.get("string_fields") or {},
+                plan.args.get("varint_fields") or {},
+                plan.timeout,
+            )
+        elif plan.tool == "http":
+            method = str(plan.args.get("method", "GET")).upper()
+            raw_path = plan.args.get("path", "/") or "/"
+            if not raw_path.startswith("/"):
+                raw_path = "/" + raw_path
+            url = plan.target.base_url() + urllib.parse.quote(raw_path, safe=_QUOTE_SAFE)
+            headers = plan.args.get("headers") or {}
+            body = plan.args.get("body") or None
+            # egress가 host·port allowlist·capability 교차·redirect를 강제한다.
+            resp = self._egress.request(
+                Capability.ATTACK_TARGET, method, url, headers, body, plan.timeout)
+        else:
+            raise PlanBindingError("허용되지 않은 실행 도구")
         latency_ms = (self._clock() - start) * 1000.0
 
         outcome = Outcome.SUCCESS if resp.status != 0 else Outcome.TIMEOUT

@@ -80,6 +80,15 @@ class UrllibHttp:
         return self._request_with(self._target_opener, method, url, headers, body, timeout)
 
     @staticmethod
+    def request_grpc(host: str, port: int, rpc: str, string_fields=None,
+                     varint_fields=None, timeout: float = 6.0) -> HttpResponse:
+        """ATTACK_TARGET의 관측된 plaintext gRPC unary 메서드를 호출한다."""
+        from .grpc_transport import grpc_unary_request
+        return grpc_unary_request(
+            host, port, rpc, string_fields, varint_fields, timeout
+        )
+
+    @staticmethod
     def _request_with(opener, method: str, url: str, headers=None, body=None,
                       timeout: float = 6.0) -> HttpResponse:
         data = body.encode() if isinstance(body, str) else body
@@ -238,6 +247,35 @@ class Observer:
             body_fingerprint=body_fp,
             latency_ms=latency_ms,
             note="no-response" if resp.status == 0 else "passive-tcp-banner",
+            round_id=self._round_id,
+            evidence_ref=self._evidence.make(endpoint, body_fp),
+        )
+        return obs, resp
+
+    def observe_grpc(self, endpoint: Endpoint, rpc: str, string_fields=None,
+                     varint_fields=None, timeout: float = 6.0):
+        """관측된 gRPC 메서드로 bootstrap하고 Round·endpoint 증거를 만든다."""
+        self._rate.acquire_request()
+        start = self._clock()
+        resp = self._egress.request_grpc(
+            Capability.ATTACK_TARGET,
+            endpoint.host,
+            endpoint.port,
+            rpc,
+            string_fields,
+            varint_fields,
+            timeout,
+        )
+        latency_ms = (self._clock() - start) * 1000.0
+        body_fp = fingerprint(resp.body)
+        obs = Observation(
+            endpoint=endpoint,
+            request_fingerprint=fingerprint(f"GRPC {rpc}"),
+            status=resp.status,
+            redacted_header_hints=notable_headers(resp.headers),
+            body_fingerprint=body_fp,
+            latency_ms=latency_ms,
+            note="no-response" if resp.status == 0 else "grpc",
             round_id=self._round_id,
             evidence_ref=self._evidence.make(endpoint, body_fp),
         )

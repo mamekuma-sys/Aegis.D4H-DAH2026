@@ -24,7 +24,7 @@ from aegis_attacker.tools import (
 )
 
 IN = Endpoint("team2.lig.internal", 8082)
-CFG = AttackerConfig(targets=("team2.lig.internal",), ports=(8082,), llm_api_key="k")
+CFG = AttackerConfig(targets=("team2.lig.internal",), ports=(8082, 9000), llm_api_key="k")
 ROUND = "r1"
 
 
@@ -46,6 +46,12 @@ class FakeTransport:
 
     def request(self, method, url, headers=None, body=None, timeout=6.0):
         self.calls.append((method, url))
+        idx = min(len(self.calls) - 1, len(self.responses) - 1)
+        return self.responses[idx]
+
+    def request_grpc(self, host, port, rpc, string_fields=None,
+                     varint_fields=None, timeout=6.0):
+        self.calls.append(("GRPC", host, port, rpc, string_fields, varint_fields))
         idx = min(len(self.calls) - 1, len(self.responses) - 1)
         return self.responses[idx]
 
@@ -95,6 +101,30 @@ class TestExecute(unittest.TestCase):
         adapter.execute(make_plan(path="admin"))
         _, url = gw._transport.calls[0]
         self.assertEqual(url, "http://team2.lig.internal:8082/admin")
+
+    def test_grpc_plan_uses_typed_egress(self):
+        adapter, gateway = make_adapter([HttpResponse(200, "FLAG{x}")])
+        grpc_endpoint = Endpoint("team2.lig.internal", 9000)
+        plan = make_plan(endpoint=grpc_endpoint)
+        plan.tool = "grpc"
+        plan.args = {
+            "rpc": "/satdiag.v1.SatDiag/ProbeEndpoint",
+            "string_fields": {1: "telemetry", 2: "/flag"},
+            "varint_fields": {},
+        }
+        result = adapter.execute(plan)
+        self.assertEqual(result.body, "FLAG{x}")
+        self.assertEqual(gateway._transport.calls[0][:4], (
+            "GRPC", "team2.lig.internal", 9000,
+            "/satdiag.v1.SatDiag/ProbeEndpoint",
+        ))
+
+    def test_unknown_tool_rejected(self):
+        adapter, _ = make_adapter([HttpResponse(200, "unused")])
+        plan = make_plan()
+        plan.tool = "shell"
+        with self.assertRaises(PlanBindingError):
+            adapter.execute(plan)
 
 
 class TestBindingValidation(unittest.TestCase):

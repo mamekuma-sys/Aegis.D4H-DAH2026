@@ -7,5 +7,5 @@
 AI 진위 증빙(운영세칙 제23조)을 단순하게 만들기 위한 선택이다.
 """
 
-__version__ = "0.2.1-sol"
-ATTACK_PROFILE = "sol-fallback"  # 기동 로그·이미지 검증용. sol 실패 시 terra 1회 fallback.
+__version__ = "0.3.0-p1ports"
+ATTACK_PROFILE = "sol-fallback+p1-grpc"  # 본선 8080 HTTP·9000 gRPC 프로필.

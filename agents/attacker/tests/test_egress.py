@@ -15,9 +15,14 @@ class RecordingTransport:
         self.calls.append((method, url))
         return self.response
 
+    def request_grpc(self, host, port, rpc, string_fields=None,
+                     varint_fields=None, timeout=6.0):
+        self.calls.append(("GRPC", host, port, rpc, string_fields, varint_fields))
+        return self.response
+
 
 CFG = AttackerConfig(
-    targets=("team2.lig.internal",), ports=(8082, 8083),
+    targets=("team2.lig.internal",), ports=(8082, 8083, 9000),
     submit_url="http://10.99.50.4:4100/submit", submit_token="tok",
     llm_base_url="http://litellm.lig.internal:4000", llm_api_key="sk",
 )
@@ -126,6 +131,42 @@ class TestEgressGateway(unittest.TestCase):
         with self.assertRaises(EgressError):
             gateway.read_passive_banner(Capability.ATTACK_TARGET, "evil.invalid", 8082)
         self.assertEqual(len(transport.calls), 1)
+
+    def test_grpc_attack_target_is_scoped_before_transport(self):
+        gw, transport = make_gateway()
+        response = gw.request_grpc(
+            Capability.ATTACK_TARGET,
+            "team2.lig.internal",
+            9000,
+            "/satdiag.v1.SatDiag/Health",
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(transport.calls[0][:4], (
+            "GRPC", "team2.lig.internal", 9000, "/satdiag.v1.SatDiag/Health"
+        ))
+        with self.assertRaises(EgressError):
+            gw.request_grpc(
+                Capability.ATTACK_TARGET,
+                "evil.invalid",
+                9000,
+                "/satdiag.v1.SatDiag/Health",
+            )
+        with self.assertRaises(EgressError):
+            gw.request_grpc(
+                Capability.LLM,
+                "team2.lig.internal",
+                9000,
+                "/satdiag.v1.SatDiag/Health",
+            )
+        self.assertEqual(len(transport.calls), 1)
+
+        with self.assertRaises(EgressError):
+            gw.request_grpc(
+                Capability.ATTACK_TARGET,
+                "team2.lig.internal",
+                9000,
+                "/satdiag.v1.SatDiag/ExportDiagnosticBundle",
+            )
 
 
 if __name__ == "__main__":

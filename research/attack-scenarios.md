@@ -50,6 +50,19 @@ Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한�
 `L4→L1→L2→L3` 순환으로 섞어 새 UGV 레이어를 초반에 시작하면서도 기존 레이어를 굶기지 않는다.
 포트 매핑이 관측되지 않으면 입력 순서를 보존한다.
 
+## 2026-08-21 본선 P1 포트 관측
+
+본선 입력 포트는 `8080,9000`이며 두 포트는 같은 P1/L1 서비스의 서로 다른 진입점이다.
+`8080`은 Open-Satellite HTTP 인증 포털이고 과거 `8082` helper SSRF/LFI 서비스가 아니므로,
+구형 `observed_attempts(8082)`를 재사용하지 않는다. `9000`은 plaintext HTTP/2 gRPC
+`satdiag.v1.SatDiag` 서비스다.
+
+- `9000`: `Health`로 protocol을 bootstrap한다.
+- 읽기 전용 자동 실행: `TailDiagnosticLog(filename, max_lines)`와
+  `ProbeEndpoint(service_id, path)`에서 PCAP으로 확인된 필드만 사용한다.
+- `ExportDiagnosticBundle`은 인터페이스가 관측됐어도 서버에 파일을 생성하므로 자동 실행하지 않는다.
+- `8080`에서 읽기 전용 exploit route가 추가 관측되기 전에는 validator가 거부할 LLM 호출을 생략한다.
+
 ### L4 증거 gate
 
 현재 L4에 대해 확정된 것은 Phase 4의 UGV 명칭과 L1~L4 누적 개방뿐이다. 테스트의 `8085`,

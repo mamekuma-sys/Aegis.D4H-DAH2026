@@ -78,3 +78,23 @@ class EgressGateway:
             from .observation import HttpResponse
             return HttpResponse(0, "", {})
         return reader(host, port, timeout, max_bytes)
+
+    def request_grpc(self, capability: Capability, host: str, port: int, rpc: str,
+                     string_fields=None, varint_fields=None, timeout: float = 6.0):
+        """Allowlisted ATTACK_TARGET의 plaintext gRPC unary 요청만 전달한다."""
+        if capability != Capability.ATTACK_TARGET:
+            raise EgressError("gRPC 요청은 ATTACK_TARGET 전용")
+        from .grpc_transport import READ_ONLY_RPCS
+        if port != 9000 or rpc not in READ_ONLY_RPCS:
+            raise EgressError("관측되지 않은 gRPC port 또는 RPC")
+        if (host, port) not in self._allow.get(capability, set()):
+            raise EgressError(
+                f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖"
+            )
+        requester = getattr(self._transport, "request_grpc", None)
+        if requester is None:
+            from .observation import HttpResponse
+            return HttpResponse(0, "", {})
+        return requester(
+            host, port, rpc, string_fields, varint_fields, timeout
+        )

@@ -3,16 +3,19 @@
 본선 공격 에이전트. 관측 → 계획 → 실행 → flag 제출의 누적 적응형 런타임.
 설계 근거: `docs/superpowers/specs/2026-08-11-attacker-runtime-design.md`
 
-TEAM1 전체 104개 PCAP에서 성공이 확인된 L1 `helper-box`·대체 IP SSRF와 config traversal,
+과거 TEAM1 자료에서 성공이 확인된 L1 `helper-box`·대체 IP SSRF와 config traversal,
 L2 관리자 session 위조·loopback secret/registry SSRF, L3 `app_meta` SQLi와 직접 노출 route는
 endpoint당 최대 20회의 zero-token fast path로 일반 정찰보다 먼저 실행합니다. Phase 4
-UGV는 구체 인터페이스가 아직 관측되지 않았으므로 경로를 하드코딩하지 않습니다. root와 읽기 전용
+본선 P1의 `8080`은 Open-Satellite HTTP 포털로 관측됐고, `9000`은 plaintext gRPC
+`satdiag.v1.SatDiag` 서비스로 관측됐습니다. 9000에서는 `Health`로 protocol을 확인한 뒤
+`TailDiagnosticLog`와 `ProbeEndpoint`의 관측된 필드만 읽기 전용으로 실행합니다. 서버에 파일을
+생성하는 `ExportDiagnosticBundle`은 자동 실행하지 않습니다. 그 밖의 미확인 서비스는 root와 읽기 전용
 probe 응답이 실제로 노출한 route·parameter만 bounded discovery text로 다음 결정론 공격에 전달합니다.
 미확인 포트의 discovery는 상태·문서용 6개 GET으로 제한하고, parameter를 광고된 정확한 route에
 결속합니다. traversal·파괴적 action route는 실행하지 않으며, 포트별 인터페이스와 flag 상태를 섞지
 않습니다.
 
-공식 `PORTS`에 여러 protocol이 올 수 있으므로 bootstrap은 평문 HTTP `GET /`을 먼저 실행하고,
+관측된 본선 `9000`은 gRPC `Health`를 먼저 실행합니다. 그 밖의 `PORTS`는 평문 HTTP `GET /`을 먼저 실행하고,
 무응답일 때만 같은 endpoint의 HTTPS `GET /`, 다시 무응답일 때만 passive TCP banner read로
 이어집니다. TCP 단계는 최대 4KiB·750ms이며 client application byte를 보내지 않습니다. 경기 대상의
 self-signed TLS는 `ATTACK_TARGET`에서만 허용하고 제출·LLM 인증서 검증에는 영향을 주지 않습니다.
@@ -42,6 +45,7 @@ src/aegis_attacker/
 ├─ models.py        # Endpoint·Observation·Profile·Hypothesis·FlagCandidate 등 타입/불변조건
 ├─ rate_limit.py    # 전역 토큰버킷(초당 10·버스트 20)·제출(분당 30)·429 backoff
 ├─ observation.py   # HTTP 관측·정규화(timeout·거부도 관측)
+├─ grpc_transport.py # 본선 9000 h2c gRPC unary·protobuf 최소 전송
 ├─ profiles.py      # ObservedServiceProfile 분류·취약 부류 우선순위 힌트
 ├─ phase_policy.py  # 누적 레이어 공정 예산 배분·스케줄러
 ├─ planner.py       # S1~S5 증거기반 가설 선택·중단(하드코딩 순서 금지)
@@ -69,7 +73,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src:. python3 -m unittest discover -s tests
 
 ```bash
 TARGETS="team2.lig.internal" \
-PORTS="8082,8083,8084,8085" \
+PORTS="8080,9000" \
 SUBMIT_URL="http://backend:4100/submit" \
 SUBMIT_TOKEN="<token>" \
 LLM_BASE_URL="http://litellm.lig.internal:4000" \
