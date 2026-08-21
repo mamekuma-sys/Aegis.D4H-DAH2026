@@ -676,7 +676,7 @@ class TestRuntimeResilience(unittest.TestCase):
         deferred = [line for line in events if line["event"] == "endpoint-deferred"]
         self.assertEqual(len(scheduled), 1)
         self.assertEqual(scheduled[0]["reason"], "no-accepted-flag")
-        self.assertEqual(scheduled[0]["cooldown_seconds"], 30.0)
+        self.assertEqual(scheduled[0]["cooldown_seconds"], 10.0)
         self.assertEqual(len(deferred), 1)
         self.assertEqual(deferred[0]["reason"], "cooldown")
         self.assertGreater(deferred[0]["remaining_seconds"], 0.0)
