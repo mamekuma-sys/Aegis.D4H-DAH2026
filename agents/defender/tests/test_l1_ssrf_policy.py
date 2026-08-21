@@ -28,12 +28,15 @@ _L1_SATDIAG_EXPORT_RULE_ID = "sig-l1-satdiag-export-flag-echo-001"
 _L2_GRAPHQL_RULE_ID = "sig-l2-graphql-mission-audit-001"
 _L1_SVC_FLAG_RULE_ID = "sig-l1-svc-flag-gateway-001"
 _L1_PORTAL_FEEDBACK_RULE_ID = "sig-l1-portal-feedback-001"
+_L2_RSC_RULE_ID = "sig-l2-rsc-action-env-ref-001"
+_L2_WS_FEED_RULE_ID = "sig-l2-ws-mission-feed-001"
 _ACTIVE_RULES = {
     _L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID,
     _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
     _L1_CONFIG_RULE_ID, _L2_REGISTRY_RULE_ID,
     _L1_SATDIAG_TAIL_RULE_ID, _L1_SATDIAG_EXPORT_RULE_ID,
     _L2_GRAPHQL_RULE_ID, _L1_SVC_FLAG_RULE_ID, _L1_PORTAL_FEEDBACK_RULE_ID,
+    _L2_RSC_RULE_ID, _L2_WS_FEED_RULE_ID,
 }
 
 _POSITIVE_PATHS = (
@@ -360,6 +363,46 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(decision.verdict, VERDICT_DROP)
         self.assertEqual(decision.rule_id, _L1_SATDIAG_EXPORT_RULE_ID)
 
+    def test_finals_p2r5_8082_rsc_action_and_ws_drop(self):
+        cases = (
+            (b"POST /api/rsc-action HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\r\n"
+             b'{"ref":"cHJvY2Vzcy5lbnYuTUMyX0lOVEVSTkFMX0FQSV9UT0tFTg==","token":"081bc56c6c874621acfc937dc543a801"}',
+             _L2_RSC_RULE_ID, "sig-l2-rsc-action-env-ref"),
+            (b"GET /ws/mission-feed HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
+             b"Upgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+             b"Sec-WebSocket-Version: 13\r\n\r\n",
+             _L2_WS_FEED_RULE_ID, "sig-l2-ws-mission-feed"),
+        )
+        for index, (payload, rule_id, reason) in enumerate(cases, start=1):
+            with self.subTest(rule_id=rule_id):
+                parsed = parse_ip(ipv4_tcp(payload, dst_port=8082))
+                decision = self.policy.decide(890 + index, parsed, 0.0)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, rule_id)
+                self.assertEqual(decision.reason_code, reason)
+
+    def test_finals_p2r5_export_checkpoint_drops(self):
+        payload = (
+            b":path*/satdiag.v1.SatDiag/ExportDiagnosticBundle\x00"
+            b"telemetry.log\x12\x0e--checkpoint=1\x1a"
+            b"2--checkpoint-action=exec=sh -c 'cat /flag'"
+        )
+        parsed = parse_ip(ipv4_tcp(payload, dst_port=9000))
+        decision = self.policy.decide(895, parsed, 0.0)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _L1_SATDIAG_EXPORT_RULE_ID)
+
+    def test_finals_p2r5_graphql_absolute_uri_drops(self):
+        payload = (
+            b"POST http://team1.lig.internal:8082/graphql HTTP/1.1\r\n"
+            b"Host: team1.lig.internal:8082\r\nContent-Type: application/json\r\n\r\n"
+            b'{"query":"{ missionAudit { lastDeployment { notes } } }"}'
+        )
+        parsed = parse_ip(ipv4_tcp(payload, dst_port=8082))
+        decision = self.policy.decide(896, parsed, 0.0)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _L2_GRAPHQL_RULE_ID)
+
     def test_finals_p2_8082_benign_graphql_accepts(self):
 
         bodies = (
@@ -396,9 +439,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p2r4-evidence-fix",
+            "defender-2026-08-21-p2r5-rsc-ws-checkpoint"
         )
-        self.assertEqual(self.report.drop_capable_rules, 14)
+        self.assertEqual(self.report.drop_capable_rules, 16)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

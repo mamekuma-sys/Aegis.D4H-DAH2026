@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-p2r4-evidence-fix",
-  "generated_at": "2026-08-21T02:57:12Z",
+  "bundle_id": "defender-2026-08-21-p2r5-rsc-ws-checkpoint",
+  "generated_at": "2026-08-21T03:15:00Z",
   "baseline_profiles": [
     "6/8080",
     "6/9000",
@@ -531,7 +531,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p1r2-l1-satdiag-tail",
-      "promoted_in_bundle": "defender-2026-08-21-p2r4-satdiag-portal",
+      "promoted_in_bundle": "defender-2026-08-21-p2r5-rsc-ws-checkpoint",
       "parser_version": 1,
       "profile_scope": [
         "6/9000"
@@ -554,13 +554,13 @@
       "ports": [
         9000
       ],
-      "pattern": "satdiag\\.v1\\.SatDiag/ExportDiagnosticBundle[\\s\\S]{0,600}(?:echo|printf|printenv|cat\\s+/flag|\\$\\{?FLAG\\}?|\"\\$FLAG\")",
+      "pattern": "satdiag\\.v1\\.SatDiag/ExportDiagnosticBundle[\\s\\S]{0,800}(?:echo|printf|printenv|cat\\s+/flag|\\$\\{?FLAG\\}?|\"\\$FLAG\"|checkpoint(?:-action)?)",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p1r2-l1-satdiag-export",
-      "promoted_in_bundle": "defender-2026-08-21-p2r4-satdiag-portal",
+      "promoted_in_bundle": "defender-2026-08-21-p2r5-rsc-ws-checkpoint",
       "parser_version": 1,
       "profile_scope": [
         "6/9000"
@@ -583,13 +583,13 @@
       "ports": [
         8082
       ],
-      "pattern": "POST /graphql[\\s\\S]{0,800}missionAudit",
+      "pattern": "POST (?:https?://[^\\s/]+)?/graphql[\\s\\S]{0,900}missionAudit",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r3-l2-graphql-mission-audit",
-      "promoted_in_bundle": "defender-2026-08-21-p2r4-satdiag-portal",
+      "promoted_in_bundle": "defender-2026-08-21-p2r5-rsc-ws-checkpoint",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -618,7 +618,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r4-l1-svc-flag-gateway",
-      "promoted_in_bundle": "defender-2026-08-21-p2r4-satdiag-portal",
+      "promoted_in_bundle": "defender-2026-08-21-p2r5-rsc-ws-checkpoint",
       "parser_version": 1,
       "profile_scope": [
         "6/8080"
@@ -647,7 +647,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r4-l1-portal-feedback",
-      "promoted_in_bundle": "defender-2026-08-21-p2r4-evidence-fix",
+      "promoted_in_bundle": "defender-2026-08-21-p2r5-rsc-ws-checkpoint",
       "parser_version": 1,
       "profile_scope": [
         "6/8080"
@@ -658,6 +658,64 @@
       "sla_fixture_id": "TEAM1-P2R4-L1-SLA-100-001",
       "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 query 없는 GET /portal/feedback fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "sig-l2-rsc-action-env-ref-001",
+      "kind": "payload_regex",
+      "category": "sensitive-path",
+      "reason_code": "sig-l2-rsc-action-env-ref",
+      "protocol": "tcp",
+      "ports": [
+        8082
+      ],
+      "pattern": "POST (?:https?://[^\\s/]+)?/api/rsc-action[\\s\\S]{0,900}\"ref\"\\s*:\\s*\"[A-Za-z0-9+/=]{12,}\"",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p2r5-l2-rsc-action-env-ref",
+      "promoted_in_bundle": "defender-2026-08-21-p2r5-rsc-ws-checkpoint",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/8082"
+      ],
+      "evidence_id": "TEAM1-PCAP-P2-R5-L2-8082-RSC-ACTION-20260821",
+      "positive_fixture_id": "TEAM1-P2R5-RSC-ACTION-ENV-REF-POS-001",
+      "negative_fixture_id": "TEAM1-P2R5-RSC-ACTION-EMPTY-NEG-001",
+      "sla_fixture_id": "TEAM1-P2R3-L2-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 /api/session 정상 fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "sig-l2-ws-mission-feed-001",
+      "kind": "payload_regex",
+      "category": "sensitive-path",
+      "reason_code": "sig-l2-ws-mission-feed",
+      "protocol": "tcp",
+      "ports": [
+        8082
+      ],
+      "pattern": "GET /ws/mission-feed[^\\r\\n]{0,120} HTTP/1\\.[01][\\s\\S]{0,600}Upgrade:\\s*websocket",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p2r5-l2-ws-mission-feed",
+      "promoted_in_bundle": "defender-2026-08-21-p2r5-rsc-ws-checkpoint",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/8082"
+      ],
+      "evidence_id": "TEAM1-PCAP-P2-R5-L2-8082-WS-MISSION-FEED-20260821",
+      "positive_fixture_id": "TEAM1-P2R5-WS-MISSION-FEED-POS-001",
+      "negative_fixture_id": "TEAM1-P2R5-WS-HEALTH-NEG-001",
+      "sla_fixture_id": "TEAM1-P2R3-L2-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 /dashboard 정상 fixture가 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
     },

