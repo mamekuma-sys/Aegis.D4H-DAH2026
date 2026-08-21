@@ -1,5 +1,16 @@
 # Aegis.0xD4H Repository Instructions
 
+## Finals urgent Git and deployment workflow
+
+This section overrides any conflicting branch or PR workflow elsewhere in this file during the finals.
+
+- Always work directly on `main`. Before editing, run `git switch main` and update it from `origin/main` with a fast-forward-only pull when the worktree permits.
+- Never create, switch to, or push a task/person branch. If the repository is on another branch, return to `main` before changing files.
+- After the relevant checks pass, stage only the intended tracked files, commit on `main`, and push `origin main` immediately.
+- After pushing, verify that local `HEAD`, local `main`, and `origin/main` are synchronized before any Docker deployment.
+- Keep `.env`, credentials, flags, logs, PCAPs, caches, and generated output untracked even when an urgent push is required.
+- Docker deployment is a separate, explicit action. Build or push an image only when the user explicitly requests deployment in the current task; never infer Docker push permission from a code-change request. When requested, deploy only after the verified `main` synchronization above, and obey any current instruction prohibiting Docker push.
+
 ## Project mission
 
 Build two independent DAH 2026 finals Docker images: one attacker and one defender. Base strategy on the Aegis.0xD4H preliminary report, but implement only behavior supported by observable finals interfaces.
@@ -43,7 +54,7 @@ When facts conflict, use this order:
 
 Docker changes require the affected agent owner and team lead to review. Docker owner must not change strategy code unilaterally. Agent owners must not finalize Dockerfiles or shared contracts alone.
 
-Use a short-lived branch for one task and delete it after merge. Never create permanent person branches or push directly to `main`.
+During the finals, use the direct-`main` workflow defined at the top of this file instead of task branches or PR branches.
 
 ## Required checks
 
