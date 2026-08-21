@@ -154,7 +154,7 @@ class TestPcapReplay(unittest.TestCase):
             ).to_dict()
 
         total = report["total"]
-        self.assertEqual(report["policy"]["drop_capable_rules"], 32)
+        self.assertEqual(report["policy"]["drop_capable_rules"], 40)
         self.assertEqual(total["parsed_requests"], 2)
         self.assertEqual(total["exploit_shape_requests"], 1)
         self.assertEqual(total["blocked_exploit_shape_requests"], 1)
@@ -211,8 +211,7 @@ class TestPcapReplay(unittest.TestCase):
 
         total = report["total"]
         self.assertEqual(total["exploit_shape_requests"], 1)
-        # service_id 단독은 SHADOW(SLA) — blocked 0, SSTI semantic만 ACTIVE DROP
-        self.assertEqual(total["blocked_exploit_shape_requests"], 0)
+        self.assertEqual(total["blocked_exploit_shape_requests"], 1)
         self.assertEqual(total["passed_other_requests"], 1)
         self.assertEqual(total["unexpected_other_drops"], 0)
 
@@ -310,6 +309,31 @@ class TestPcapReplay(unittest.TestCase):
         self.assertEqual(total["blocked_exploit_shape_requests"], 1)
         self.assertEqual(total["dropped_packets"], 1)
         self.assertEqual(total["drops_without_complete_request"], 0)
+
+    def test_early_segment_drop_is_attributed_to_completed_request(self):
+        client = b"\x0a\x01\x00\x04"
+        server = b"\x0a\x01\x01\x02"
+        first = (
+            b"GET /svc/flag-12345678-1234-1234-1234-123456789abc HTTP/1.1\r\n"
+        )
+        second = b"Host: service\r\n\r\n"
+        frames = [
+            _tcp_packet(client, server, 42000, 8080, 100, first),
+            _tcp_packet(client, server, 42000, 8080, 100 + len(first), second),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pcap = Path(temp_dir) / "early-drop.pcap"
+            _write_pcap(pcap, frames)
+            report = replay_pcaps.replay_paths(
+                [pcap], REPO_ROOT / "agents" / "defender" / "policy",
+                replay_pcaps.parse_as_of("2026-08-21T07:00:00Z"),
+            ).to_dict()
+
+        total = report["total"]
+        self.assertEqual(total["exploit_shape_requests"], 1)
+        self.assertEqual(total["blocked_exploit_shape_requests"], 1)
+        self.assertEqual(total["drops_without_complete_request"], 1)
+        self.assertEqual(total["unexpected_other_drops"], 0)
 
     def test_links_a_split_graphql_body_drop_to_its_flag_response(self):
         client = b"\x0a\x01\x00\x04"

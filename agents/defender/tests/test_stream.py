@@ -91,13 +91,43 @@ class TestHttpStreamStitcher(unittest.TestCase):
             "http-l1-portal-feedback-ssti-semantic-001",
         )
 
-    def test_gap_fails_open_and_discards_state(self):
+    def test_out_of_order_gap_is_bounded_and_completed(self):
         stitcher = HttpStreamStitcher()
-        first = parse_ip(ipv4_tcp(b"GET /admin HTTP/1.1\r\n", dst_port=8082, sequence=10))
-        gap = parse_ip(ipv4_tcp(b"Cookie: x=y\r\n\r\n", dst_port=8082, sequence=100))
+        first_payload = b"GET /admin HTTP/1.1\r\n"
+        middle_payload = b"Host: x\r\n"
+        tail_payload = b"Cookie: x=y\r\n\r\n"
+        first = parse_ip(ipv4_tcp(first_payload, dst_port=8082, sequence=10))
+        tail = parse_ip(ipv4_tcp(
+            tail_payload, dst_port=8082,
+            sequence=10 + len(first_payload) + len(middle_payload),
+        ))
+        middle = parse_ip(ipv4_tcp(
+            middle_payload, dst_port=8082, sequence=10 + len(first_payload),
+        ))
         self.assertIsNone(stitcher.feed(first, 0.0))
-        self.assertIsNone(stitcher.feed(gap, 0.1))
+        self.assertIsNone(stitcher.feed(tail, 0.1))
+        complete = stitcher.feed(middle, 0.2)
+        self.assertEqual(complete, first_payload + middle_payload + tail_payload)
         self.assertEqual(stitcher.flow_count, 0)
+
+    def test_suffix_before_prefix_admin_cookie_drops(self):
+        request = self._admin_request()
+        split = request.index(b"Cookie:")
+        prefix, suffix = request[:split], request[split:]
+        base = 4500
+        self.assertEqual(
+            self.policy.decide(
+                20,
+                parse_ip(ipv4_tcp(suffix, dst_port=8082, sequence=base + len(prefix))),
+                0.0,
+            ).verdict,
+            VERDICT_ACCEPT,
+        )
+        decision = self.policy.decide(
+            21, parse_ip(ipv4_tcp(prefix, dst_port=8082, sequence=base)), 0.0
+        )
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, "http-l2-forged-admin-session-001")
 
     def test_ttl_and_capacity_evict_without_cross_flow_stitching(self):
         stitcher = HttpStreamStitcher(max_flows=1, ttl_seconds=1.0)
@@ -117,7 +147,9 @@ class TestHttpStreamStitcher(unittest.TestCase):
             sequence=20 + len(b"GET /health HTTP/1.1\r\n"),
         ))
         self.assertIsNone(stitcher.feed(expired_tail, 2.0))
-        self.assertEqual(stitcher.flow_count, 0)
+        # The expired prefix is gone.  The textual suffix may become a new bounded
+        # candidate, but it cannot combine with the old flow state.
+        self.assertEqual(stitcher.flow_count, 1)
 
     def test_segmented_graphql_body_drops_on_the_completing_packet(self):
         body = b'{"query":"{ missionAudit { lastDeployment { notes } } }"}'
@@ -244,6 +276,48 @@ class TestEgressStreamStitcher(unittest.TestCase):
         )
         self.assertEqual(decision.verdict, VERDICT_DROP)
         self.assertEqual(decision.rule_id, "sig-flag-egress-001")
+
+    def test_multiple_out_of_order_segments_drop_when_holes_close(self):
+        pieces = (b"FLAG{f754", b"c99511e9", b"caa26226", b"bc372215084b}")
+        sequences = [9000]
+        for piece in pieces[:-1]:
+            sequences.append(sequences[-1] + len(piece))
+        order = (0, 3, 2, 1)
+        for index, piece_index in enumerate(order):
+            decision = self.policy.decide(
+                170 + index,
+                self._response(pieces[piece_index], sequences[piece_index]),
+                0.0,
+            )
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, "sig-flag-egress-001")
+
+    def test_url_and_json_escaped_flag_markers_drop_across_boundaries(self):
+        markers = (
+            b"FLAG%7Bf754c99511e9caa26226bc372215084b%7D",
+            b"FLAG\\u007bf754c99511e9caa26226bc372215084b\\u007d",
+        )
+        for marker_index, marker in enumerate(markers):
+            policy = HotPolicy(policy=self.compiled, clock=lambda: 0.0)
+            split = len(marker) // 2
+            base = 10000 + marker_index * 1000
+            self.assertEqual(
+                policy.decide(
+                    180 + marker_index * 2,
+                    self._response(marker[:split], base, dst_port=54000 + marker_index),
+                    0.0,
+                ).verdict,
+                VERDICT_ACCEPT,
+            )
+            decision = policy.decide(
+                181 + marker_index * 2,
+                self._response(
+                    marker[split:], base + split, dst_port=54000 + marker_index
+                ),
+                0.0,
+            )
+            self.assertEqual(decision.verdict, VERDICT_DROP)
+            self.assertEqual(decision.rule_id, "sig-flag-egress-001")
 
     def test_suffix_seen_before_prefix_drops_when_prefix_arrives(self):
         prefix = b"FLAG{f754c99511e9caa2"

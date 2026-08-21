@@ -46,6 +46,8 @@ TOP_K_FLOWS = 24
 REQUEST_TIMEOUT_SECONDS = 15.0
 MAX_RECENT_ADVISORIES = 128
 MAX_RECOMMENDATION_CHARS = 12000
+MAX_ADVISORY_CANDIDATES = 8
+MAX_CANDIDATE_FIELD_CHARS = 256
 ADVISORY_TTL_SECONDS = 1800.0
 ADVISORY_MAX_COMPLETION_TOKENS = 768
 ADVISORY_REASONING_EFFORT = "low"
@@ -62,9 +64,11 @@ _SYSTEM_PROMPT = (
     "L1 8080/9000 (portal,/svc/flag-*, SatDiag Export/Tail), "
     "L2 8082 (GraphQL missionAudit, /api/rsc-action, /ws/mission-feed, forged admin), "
     "L3 9090 HTTP UNION SQLi; MQTT 1883 (#/$SYS/flag topics); RTSP 8554 DESCRIBE /flag. "
+    "L4 8410/8420 uses g2dds.v1 Layer4Service Exchange plus observed ROS/mission HTTP shapes. "
     "Prefer regex/http semantic checks that miss normal SLA probes. "
-    "For each candidate: field inspected, why benign traffic should not match, "
-    "required evidence before ACTIVE enablement. Candidates begin as SHADOW only. "
+    "Return one JSON object with a candidates array (maximum eight). Every item must have "
+    "protocol, port, field, pattern_family, evidence_needed, and false_positive_risk. "
+    "Do not return executable code or raw secret values. Candidates begin as SHADOW only. "
     "You have NO runtime DROP authority - your text is Break review input only."
 )
 
@@ -82,11 +86,24 @@ class AdvisoryFeature:
 
 
 @dataclass(frozen=True, slots=True)
+class AdvisoryCandidate:
+    """검증·fixture 작성에 필요한 최소 Break 후보 schema."""
+
+    protocol: str
+    port: int
+    field: str
+    pattern_family: str
+    evidence_needed: str
+    false_positive_risk: str
+
+
+@dataclass(frozen=True, slots=True)
 class AsyncAdvisory:
     """**runtime authority 없음**(§8). 사람이 Break에서 읽는 후보일 뿐이다."""
 
     input_feature_ids: tuple[str, ...]
     recommendation: str
+    candidates: tuple[AdvisoryCandidate, ...]
     model_id: str
     prompt_tokens: int
     completion_tokens: int
@@ -111,6 +128,40 @@ def assert_no_secrets(text: str) -> None:
     """
     if contains_secret_like(text):
         raise SecretLeakError("prompt 에 비밀로 보이는 문자열이 있어 호출을 취소했습니다")
+
+
+def parse_advisory_candidates(content: str) -> tuple[AdvisoryCandidate, ...]:
+    """LLM text에서 실행 권한 없는 bounded 후보만 구조화한다."""
+    try:
+        document = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return ()
+    raw_candidates = document.get("candidates") if isinstance(document, dict) else None
+    if not isinstance(raw_candidates, list):
+        return ()
+    candidates: list[AdvisoryCandidate] = []
+    for raw in raw_candidates[:MAX_ADVISORY_CANDIDATES]:
+        if not isinstance(raw, dict):
+            continue
+        protocol = str(raw.get("protocol", "")).strip().lower()
+        try:
+            port = int(raw.get("port", 0))
+        except (TypeError, ValueError):
+            continue
+        fields = []
+        valid = protocol in {"tcp", "udp"} and 1 <= port <= 65535
+        for key in ("field", "pattern_family", "evidence_needed", "false_positive_risk"):
+            value = str(raw.get(key, "")).strip()
+            if not value or len(value) > MAX_CANDIDATE_FIELD_CHARS or "\x00" in value:
+                valid = False
+            fields.append(value[:MAX_CANDIDATE_FIELD_CHARS])
+        if not valid:
+            continue
+        candidate = AdvisoryCandidate(protocol, port, *fields)
+        if contains_secret_like(json.dumps(raw, ensure_ascii=True)):
+            continue
+        candidates.append(candidate)
+    return tuple(candidates)
 
 
 def _post_json(url: str, api_key: str, body: dict, timeout: float) -> dict:
@@ -180,6 +231,7 @@ class AdvisoryWorker:
             "failures": self.failures,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "recent_candidates": sum(len(item.candidates) for item in self.recent),
             "failure_rate": round(self.failures / self.calls, 4) if self.calls else 0.0,
         }
 
@@ -290,10 +342,12 @@ class AdvisoryWorker:
             return self._handle_failure(type(exc).__name__, moment)
 
         self._consecutive_failures = 0
+        recommendation = redact_secrets(str(content))[:MAX_RECOMMENDATION_CHARS]
         advisory = AsyncAdvisory(
             input_feature_ids=tuple(item.flow_label for item in features),
             # 사람이 읽을 조언문이므로 길이는 자체 상한까지 남기되 비밀 형태는 지운다.
-            recommendation=redact_secrets(str(content))[:MAX_RECOMMENDATION_CHARS],
+            recommendation=recommendation,
+            candidates=parse_advisory_candidates(recommendation),
             model_id=self._config.llm_model,
             prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
             completion_tokens=int(usage.get("completion_tokens", 0) or 0),
@@ -315,6 +369,7 @@ class AdvisoryWorker:
                 model_id=advisory.model_id,
                 total_tokens=advisory.total_tokens,
                 features=len(features),
+                candidates=len(advisory.candidates),
                 authority="none-shadow-candidate-only",
             )
         return advisory

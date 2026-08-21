@@ -183,6 +183,24 @@ class TestHttpRequestView(unittest.TestCase):
         ))
         self.assertFalse(view.json_base64_matches("ref", ("process.env.FLAG",)))
 
+    def test_rsc_base64_ref_accepts_only_bounded_observed_noise(self):
+        encoded = base64.b64encode(b"process.env.MC2_INTERNAL_API_TOKEN").decode("ascii")
+        for marker in (" ", ".", "*", "~"):
+            noisy = marker.join((encoded[:12], encoded[12:28], encoded[28:]))
+            view = parse_http_request(json_request(
+                "POST", "/api/rsc-action", {"ref": noisy}
+            ))
+            self.assertTrue(view.json_base64_matches(
+                "ref", ("process.env.MC2_INTERNAL_API_TOKEN",)
+            ))
+
+        invalid = parse_http_request(json_request(
+            "POST", "/api/rsc-action", {"ref": encoded[:12] + "!" + encoded[12:]}
+        ))
+        self.assertFalse(invalid.json_base64_matches(
+            "ref", ("process.env.MC2_INTERNAL_API_TOKEN",)
+        ))
+
     def test_portal_ssti_requires_full_observed_token_chain(self):
         malicious = parse_http_request(request(
             "/portal/feedback?service_id=%7B%7B%20(lipsum%7Cattr('__globals__'))"

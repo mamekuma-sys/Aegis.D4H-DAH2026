@@ -87,6 +87,26 @@ class TestMetricComputation(unittest.TestCase):
             monitor.record(dropped=True, rule_id=f"r{index}")
         self.assertLessEqual(len(monitor._rule_drops), 128)
 
+    def test_break_summary_separates_drop_and_shadow_by_rule(self):
+        monitor = AnomalyMonitor()
+        for _ in range(3):
+            monitor.record(dropped=True, rule_id="r-drop")
+        for _ in range(5):
+            monitor.record(rule_id="r-shadow", shadow_hit=True)
+        self.assertEqual(
+            monitor.rule_summary(),
+            {
+                "drops": [{"rule_id": "r-drop", "count": 3}],
+                "shadow_hits": [{"rule_id": "r-shadow", "count": 5}],
+            },
+        )
+
+    def test_shadow_tracking_is_bounded(self):
+        monitor = AnomalyMonitor()
+        for index in range(500):
+            monitor.record(rule_id=f"s{index}", shadow_hit=True)
+        self.assertLessEqual(len(monitor._rule_shadows), 128)
+
 
 class TestAlerting(unittest.TestCase):
     def test_minimum_samples_gate(self):

@@ -1,5 +1,16 @@
 # 예선 방어 개념의 본선 매핑
 
+> 2026-08-21 P4 R11 갱신: L4 `8410`·`8420`에서 h2c/gRPC
+> `g2dds.v1.Layer4Service/Exchange` wire contract와 양방향 source-port packet 관측이
+> 확보됐다. 따라서 아래의 “L4 observation-only”, “아웃바운드 미관측” 문장은 당시
+> 결정을 보존한 기록이며 현재 구현 판단에는
+> `docs/superpowers/specs/2026-08-21-r11-defender-hardening-design.md`가 우선한다.
+> 현재는 exact L4 semantic rule과 source-port scoped egress DLP만 ACTIVE이며,
+> LLM·SHADOW·anomaly는 계속 Break 보조 권한만 가진다.
+> P4-R11의 FLAG 응답 상관으로 portal `service_id`, 9090 `/mqtt`, query 기반 imagery
+> ingest를 ACTIVE에 추가했다. Reflection과 `GetCatalog`는 wire 관측만 있고 FLAG 직접
+> 상관과 공식 checker 안전성이 증명되지 않아 SHADOW로 유지한다.
+
 예선 보고서(`PRELIM-REPORT`, SHA-256 `1DD42B99…`, 54쪽)의 방어 개념을 본선 방어 런타임 관점에서 재분류한다. 페이지별 전수 검토 근거는 `docs/references/preliminary-report-defender-map.md`, 설계 본문은 `docs/superpowers/specs/2026-08-11-defender-runtime-design.md`에 있다. 세 문서는 서로 모순되지 않아야 한다.
 
 L1~L4 규칙의 현재 승격 판정과 다음 Break의 동일한 증거 gate는

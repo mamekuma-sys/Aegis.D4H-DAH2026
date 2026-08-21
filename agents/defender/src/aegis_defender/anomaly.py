@@ -50,6 +50,7 @@ ANOMALY_METRICS = (
 )
 
 MAX_TRACKED_RULES = 128
+MAX_SUMMARY_RULES = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +86,7 @@ class AnomalyMonitor:
         self.baseline_drops = 0
         self.cohort_conflicts = 0
         self._rule_drops: dict[str, int] = {}
+        self._rule_shadows: dict[str, int] = {}
         self._first_exceeded: dict[tuple[str, str], float] = {}
 
     def record(
@@ -95,6 +97,7 @@ class AnomalyMonitor:
         baseline_match: bool = False,
         rule_id: str = "",
         cohort_conflict: bool = False,
+        shadow_hit: bool = False,
     ) -> None:
         """패킷 하나의 관측 사실을 집계한다. 정수 증가 외에 하는 일이 없다."""
         self.total += 1
@@ -111,6 +114,23 @@ class AnomalyMonitor:
                     self._rule_drops[rule_id] = self._rule_drops.get(rule_id, 0) + 1
             if cohort_conflict:
                 self.cohort_conflicts += 1
+        if shadow_hit and rule_id:
+            if rule_id in self._rule_shadows or len(self._rule_shadows) < MAX_TRACKED_RULES:
+                self._rule_shadows[rule_id] = self._rule_shadows.get(rule_id, 0) + 1
+
+    def rule_summary(self, limit: int = MAX_SUMMARY_RULES) -> dict[str, list[dict[str, object]]]:
+        """Break용 rule별 비민감 집계. payload나 flow 식별자는 포함하지 않는다."""
+        size = max(0, min(MAX_SUMMARY_RULES, int(limit)))
+
+        def ranked(values: dict[str, int]) -> list[dict[str, object]]:
+            return [
+                {"rule_id": rule_id, "count": count}
+                for rule_id, count in sorted(
+                    values.items(), key=lambda item: (-item[1], item[0])
+                )[:size]
+            ]
+
+        return {"drops": ranked(self._rule_drops), "shadow_hits": ranked(self._rule_shadows)}
 
     def values(self) -> dict[str, float]:
         """현재 지표값. 표본이 없으면 0.0."""

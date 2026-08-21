@@ -333,6 +333,14 @@ class HttpRequestView:
                 continue
             try:
                 raw = value.encode("ascii")
+                if any(
+                    byte not in _BASE64_BYTES and byte not in _OBSERVED_BASE64_NOISE
+                    for byte in raw
+                ):
+                    continue
+                raw = bytes(byte for byte in raw if byte not in _OBSERVED_BASE64_NOISE)
+                if not raw:
+                    continue
                 decoded = base64.b64decode(
                     raw + b"=" * ((4 - len(raw) % 4) % 4), altchars=b"-_", validate=True
                 ).decode("utf-8")
@@ -341,6 +349,10 @@ class HttpRequestView:
             if decoded in expected_values:
                 return True
         return False
+
+    def query_value_present(self, query_names: tuple[str, ...]) -> bool:
+        expected_names = frozenset(name.lower() for name in query_names)
+        return any(name in expected_names and bool(value) for name, value in self.query_pairs)
 
     def query_token_set_matches(
         self, query_names: tuple[str, ...], match_values: tuple[str, ...]

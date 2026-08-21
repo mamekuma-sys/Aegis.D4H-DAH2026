@@ -52,10 +52,18 @@ _ACTIVE_RULES = {
     "http-l2-rsc-env-ref-semantic-001",
     "grpc-l1-tail-sensitive-file-001",
     "grpc-l1-export-flag-command-001",
+    "grpc-l4-diagnostic-map-snapshot-001",
+    "grpc-l4-calibration-pickle-code-001",
+    "grpc-l4-programming-secret-source-001",
+    "sig-l4-ros-secret-param-001",
+    "sig-l4-mission-flag-command-001",
     "http-l1-portal-feedback-ssti-semantic-001",
     "sig-l3-mqtt-wildcard-subscribe-001",
     "sig-l3-mqtt-uav-config-001",
     "sig-l3-rtsp-sensitive-describe-001",
+    _L1_PORTAL_FEEDBACK_RULE_ID,
+    "sig-l3-mqtt-bridge-001",
+    "http-l3-imagery-source-ingest-001",
 }
 
 _POSITIVE_PATHS = (
@@ -433,12 +441,12 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(decision.rule_id, _L1_SVC_FLAG_RULE_ID)
         self.assertEqual(decision.reason_code, "sig-l1-svc-flag-gateway")
 
-    def test_finals_p2r4_portal_feedback_service_id_is_shadow_only(self):
-        # 광역 service_id DROP은 SLA를 깎아 SHADOW로 내렸다. SSTI만 ACTIVE.
+    def test_finals_p4r11_portal_feedback_service_id_drops(self):
         decision = self._decide(
             "/portal/feedback?service_id=vulncheck", dst_port=8080, pkt_id=871
         )
-        self.assertEqual(decision.verdict, VERDICT_ACCEPT)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _L1_PORTAL_FEEDBACK_RULE_ID)
 
     def test_finals_p2r4_portal_feedback_view_without_service_id_accepts(self):
         cases = (
@@ -497,6 +505,41 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 self.assertEqual(decision.rule_id, rule_id)
                 self.assertEqual(decision.reason_code, reason)
 
+    def test_finals_p4r11_rsc_observed_noisy_base64_drops(self):
+        payload = (
+            b"POST /api/rsc-action HTTP/1.1\r\nHost: x\r\n"
+            b"Content-Type: application/json\r\nContent-Length: 60\r\n\r\n"
+            b'{"ref":"cHJvY2Vzcy5l bnYuTUMyX0lOVEV STkFMX0FQSV9UT0tFTg=="}'
+        )
+        decision = self.policy.decide(
+            905, parse_ip(ipv4_tcp(payload, dst_port=8082)), 0.0
+        )
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, "http-l2-rsc-env-ref-semantic-001")
+
+    def test_finals_p4r11_l3_correlated_paths_are_exact(self):
+        positive = (
+            b"GET /mqtt HTTP/1.1\r\nHost: x\r\n\r\n",
+            b"POST /api/imagery/ingest?source=external-feed HTTP/1.1\r\n"
+            b"Host: x\r\nContent-Length: 0\r\n\r\n",
+        )
+        for index, payload in enumerate(positive):
+            decision = self.policy.decide(
+                906 + index, parse_ip(ipv4_tcp(payload, dst_port=9090)), 0.0
+            )
+            self.assertEqual(decision.verdict, VERDICT_DROP)
+
+        negative = (
+            b"GET /mqtt/status HTTP/1.1\r\nHost: x\r\n\r\n",
+            b"POST /api/imagery/ingest HTTP/1.1\r\nHost: x\r\n"
+            b"Content-Length: 0\r\n\r\n",
+        )
+        for index, payload in enumerate(negative):
+            decision = self.policy.decide(
+                908 + index, parse_ip(ipv4_tcp(payload, dst_port=9090)), 0.0
+            )
+            self.assertEqual(decision.verdict, VERDICT_ACCEPT)
+
     def test_finals_p2r5_export_checkpoint_drops(self):
         payload = (
             b":path*/satdiag.v1.SatDiag/ExportDiagnosticBundle\x00"
@@ -533,6 +576,50 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 decision = self.policy.decide(910 + index, parsed, 0.0)
                 self.assertEqual(decision.verdict, VERDICT_DROP)
                 self.assertEqual(decision.rule_id, rule_id)
+
+    def test_finals_p4r11_l4_ros_and_mission_shapes_drop(self):
+        cases = (
+            (
+                b"GET /rosapi/get_param?name=%2Fdeploy_token HTTP/1.1\r\nHost: x\r\n\r\n",
+                "sig-l4-ros-secret-param-001",
+            ),
+            (
+                b"POST /api/command HTTP/1.1\r\nHost: x\r\n\r\n"
+                b'{"command":"run_mission","mission":"flag"}',
+                "sig-l4-mission-flag-command-001",
+            ),
+            (
+                b'{"action":"execute","task":"retrieve_flag"}',
+                "sig-l4-mission-flag-command-001",
+            ),
+        )
+        for port in (8410, 8420):
+            for index, (payload, rule_id) in enumerate(cases):
+                with self.subTest(port=port, rule_id=rule_id, index=index):
+                    decision = self.policy.decide(
+                        940 + index + port,
+                        parse_ip(ipv4_tcp(payload, dst_port=port, src_port=40000 + index)),
+                        0.0,
+                    )
+                    self.assertEqual(decision.verdict, VERDICT_DROP)
+                    self.assertEqual(decision.rule_id, rule_id)
+
+    def test_finals_p4r11_l4_normal_control_shapes_accept(self):
+        normal = (
+            b"GET /rosapi/get_param?name=%2Frobot_name HTTP/1.1\r\nHost: x\r\n\r\n",
+            b'{"command":"run_mission","mission":"survey"}',
+            b'{"action":"execute","task":"return_home"}',
+        )
+        for index in range(100):
+            port = 8410 if index % 2 == 0 else 8420
+            decision = self.policy.decide(
+                1000 + index,
+                parse_ip(ipv4_tcp(
+                    normal[index % len(normal)], dst_port=port, src_port=41000 + index
+                )),
+                0.0,
+            )
+            self.assertEqual(decision.verdict, VERDICT_ACCEPT)
 
     def test_config_path_traversal_encodings_drop_via_canonical_rule(self):
         cases = (
@@ -602,9 +689,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p3-r9-egress-lockdown"
+            "defender-2026-08-21-p4-r11-cross-layer-hardening"
         )
-        self.assertEqual(self.report.drop_capable_rules, 32)
+        self.assertEqual(self.report.drop_capable_rules, 40)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,
