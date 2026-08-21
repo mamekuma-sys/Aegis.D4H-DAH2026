@@ -51,8 +51,8 @@ class TestProtocolRuntime(unittest.TestCase):
 
         self.assertEqual(report.accepted_count(), 1)
         self.assertEqual(arena.mqtt_calls[0][2], ())
-        self.assertIn("#", arena.mqtt_calls[1][2])
-        self.assertIn("uav/#", arena.mqtt_calls[1][2])
+        # R8: exact config topic first; FLAG hit이면 wildcard batch는 생략한다.
+        self.assertEqual(arena.mqtt_calls[1][2], ("uav/node/config",))
         self.assertEqual(arena.http_target_calls, [])
         self.assertEqual(arena.submits[0]["flag"], "FLAG{mqtt-runtime}")
 
