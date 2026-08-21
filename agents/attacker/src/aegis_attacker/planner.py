@@ -15,7 +15,7 @@ from typing import Optional
 from .models import Endpoint, ExecutionPlan, Scenario, VulnClass
 from .profiles import suggest_vuln_classes
 
-MAX_TURNS = 8  # endpoint당 LLM 왕복. 비싼 pro를 쓰므로 결정론 실패 후 깊게 공략한다.
+MAX_TURNS = 12  # endpoint당 LLM 왕복. 비싼 pro로 결정론 실패 후 깊게 전 유형 공략.
 
 # 취약 부류 → 예선 시나리오(보고용 느슨한 대응, 실행 판단 아님).
 _VULN_TO_SCENARIO = {

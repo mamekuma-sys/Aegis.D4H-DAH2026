@@ -13,10 +13,11 @@ from typing import Mapping
 from .models import Endpoint
 
 DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
-# 스켈레톤이 mini를 주입해도 무시한다. 본선 공격은 항상 gpt-5.6-sol을 강제한다.
-DEFAULT_LLM_MODEL = "gpt-5.6-sol"
-DEFAULT_LLM_FALLBACK_MODEL = "gpt-5.6-terra"
-DEFAULT_CONCURRENCY = 8
+# 스켈레톤이 mini를 주입해도 무시한다. 본선은 가장 비싼 계열을 강제한다.
+DEFAULT_LLM_MODEL = "gpt-5.4-pro"
+DEFAULT_LLM_FALLBACK_MODEL = "gpt-5.6-sol"
+DEFAULT_LLM_FALLBACK_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra")
+DEFAULT_CONCURRENCY = 16
 MAX_CONCURRENCY = 32
 FORCED_LLM_MODEL = DEFAULT_LLM_MODEL
 
@@ -55,7 +56,7 @@ def _parse_csv(raw: str) -> list:
 
 
 def _parse_concurrency(raw: str) -> int:
-    """선택적 ATTACK_CONCURRENCY(기본 8). 공식 계약 필수 입력이 아니라 런타임 튜닝 파라미터."""
+    """선택적 ATTACK_CONCURRENCY(기본 16). 공식 계약 필수 입력이 아니라 런타임 튜닝 파라미터."""
     token = (raw or "").strip()
     if token.isdigit():
         return max(1, min(MAX_CONCURRENCY, int(token)))

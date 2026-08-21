@@ -69,7 +69,7 @@ class AttackerRuntime:
 
     def __init__(self, config: AttackerConfig, http=None, rate=None,
                  clock=time.monotonic, sleep=time.sleep, audit=None, budget=None):
-        # 어떤 경로로 config가 와도 LLM은 항상 강제 gpt-5.6-sol이다.
+        # 어떤 경로로 config가 와도 LLM은 항상 강제 gpt-5.4-pro이다(실패 시 sol→terra).
         self.config = replace(config, llm_model=FORCED_LLM_MODEL)
         self.transport = http or UrllibHttp()
         self.rate = rate or RateLimiter(clock=clock, sleep=sleep)
@@ -691,7 +691,7 @@ class AttackerRuntime:
             while (not self._stop_event.is_set()
                    and not self._planner.should_stop(state)):
                 state.turn += 1
-                # 항상 강제 sol 모델. 전송 실패 시 advisor가 terra로 한 번 fallback.
+                # 항상 강제 비싼 pro 모델. 실패 시 advisor가 sol→terra fallback.
                 plan = self._planner.plan_next(endpoint, observed_banner, feedback, state,
                                                model=self.config.llm_model)
                 if plan is None:

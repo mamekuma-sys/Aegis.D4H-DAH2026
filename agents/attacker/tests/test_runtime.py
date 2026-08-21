@@ -257,7 +257,7 @@ class TestRuntimeEndToEnd(unittest.TestCase):
 
         self.assertEqual(report.accepted_count(), 0)
         self.assertGreater(arena.llm_calls, 0)
-        self.assertTrue(all(m == "gpt-5.6-sol" for m in arena.llm_models))
+        self.assertTrue(all(m == "gpt-5.4-pro" for m in arena.llm_models))
         self.assertIn("/fetch", arena.target_paths)
         self.assertIn("/config", arena.target_paths)
         self.assertIn("/portal", arena.target_paths)
@@ -613,7 +613,7 @@ class TestRuntimeResilience(unittest.TestCase):
         rt = make_runtime(arena)
         rt.run_once()
         self.assertGreaterEqual(len(arena.llm_models), 2)
-        self.assertTrue(all(m == "gpt-5.6-sol" for m in arena.llm_models[:MAX_TURNS]))
+        self.assertTrue(all(m == "gpt-5.4-pro" for m in arena.llm_models[:MAX_TURNS]))
         self.assertEqual(len(arena.llm_models[:MAX_TURNS]), MAX_TURNS)
 
 

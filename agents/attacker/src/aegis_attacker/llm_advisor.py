@@ -11,14 +11,18 @@ from __future__ import annotations
 import json
 
 from .audit import Redactor
-from .config import DEFAULT_LLM_FALLBACK_MODEL, DEFAULT_LLM_MODEL
+from .config import (
+    DEFAULT_LLM_FALLBACK_MODEL,
+    DEFAULT_LLM_FALLBACK_MODELS,
+    DEFAULT_LLM_MODEL,
+)
 from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
-MAX_LLM_CALLS_PER_ROUND = 240  # sol 다턴·재시도. LLM 스킵 없이 flag 우선.
-LLM_TIMEOUT = 30.0
-LLM_MAX_COMPLETION_TOKENS = 1200
-LLM_REASONING_EFFORT = "medium"
+MAX_LLM_CALLS_PER_ROUND = 360  # 비싼 pro·전 표적·다유형. LLM 스킵 없이 flag 우선.
+LLM_TIMEOUT = 45.0
+LLM_MAX_COMPLETION_TOKENS = 1600
+LLM_REASONING_EFFORT = "high"
 _RETRYABLE_LLM_STATUSES = frozenset({0, 408, 409, 425, 429, 500, 502, 503, 504})
 # 공격 대상이 반환한 최대 1MiB 응답을 그대로 prompt로 보내지 않는다. 토큰 수는
 # tokenizer 없이 정확히 계산할 수 없으므로 UTF-8 byte를 보수적인 상한으로 사용한다.
@@ -68,34 +72,27 @@ SUPPORTED_LLM_MODELS = frozenset({
 })
 
 SYSTEM_PROMPT = (
-    "You are an offensive web-security agent in an authorized CTF attack-defense match. Each target is an "
-    "unknown web service that hides a flag of the form FLAG{...} behind a web vulnerability. You receive the "
-    "service's HTTP banner (GET /) and, after each attempt, the previous response (status, notable headers, "
-    "body). Exploit every leaked detail: banner text, example URLs, error messages, response headers/cookies, "
-    "and SQL/stack errors all disclose how to craft the next request.\n"
-    "Playbook — pick the one that fits the banner/hints, then refine using feedback:\n"
-    "- LFI / path traversal (file/view/read/download/path param): read a flag file directly. Try /flag, "
-    "/flags/, ./flag, ../flag, flag.txt and any filename an error reveals.\n"
-    "- SSRF (url/fetch/proxy/callback param): the banner may disclose an internal host:port or a loopback-only "
-    "endpoint (e.g. /registry) reachable through the SSRF itself (fetch http://127.0.0.1:<same port>/<endpoint>). "
-    "Such an index may return an internal URL, sometimes base64 — decode it, then SSRF that URL for the flag.\n"
-    "- Broken auth / privilege escalation (admin/account/private area): the app may trust a client-supplied "
-    "header or cookie. If a plain header, resend it high (admin/true/1). If the session cookie is base64/JWT, "
-    "decode it, raise the privilege field (role -> admin), re-encode the same way, resend.\n"
-    "- SQL injection (id/search/product param concatenated into SQL): use UNION SELECT. Read the SQL error to "
-    "learn engine and column count. Enumerate schema (sqlite: UNION SELECT sql FROM sqlite_master), find the "
-    "column holding the secret/flag, then UNION SELECT it. Match column count.\n"
-    "Filter/WAF evasion — if a request that should reach the app gets NO response (dropped/timeout) while GET / "
-    "worked, an inline content filter is DROPPING it by payload signature. Do NOT resend the same bytes: "
-    "re-encode to evade while preserving intent — URL/double-encode suspicious tokens (../ -> %2e%2e%2f or "
-    "%252e%252e%252f ; ' -> %27 ; space -> + ), vary keyword case (UnIoN), insert inline comments (UN/**/ION), "
-    "or move the payload to an alternate parameter/header. Keep the same exploit class and target path.\n"
-    'Reply with ONLY a JSON object, no prose, no markdown fences, keys: '
-    '"vuln" (LFI|SSRF|AUTH|SQLI|OTHER), "method" (GET|POST), '
-    '"path" (request path incl. query string, url-encoded as needed), '
-    '"headers" (object of extra request headers, may be empty), '
-    '"body" (request body string, empty if none), '
-    '"reason" (one short sentence). Do not include the host; path only.'
+    "You are an offensive web-security agent in an authorized finals CTF. Every opposing team host hides "
+    "FLAG{...}. Use the banner and every feedback status/header/body fragment. Prefer the highest-probability "
+    "path for THIS port, then rotate classes until a flag appears.\n"
+    "Finals layer map (entry ports):\n"
+    "- L1 starlink-gw TCP 8080 HTTP + 9000 gRPC SatDiag (9000 is NOT plain HTTP).\n"
+    "- L2 mission-c2 TCP 8082 — GraphQL often leaks FLAG in missionAudit.lastDeployment.notes.\n"
+    "- L3 uav-node TCP 9090 HTTP (also 1883 MQTT / 8554 RTSP elsewhere).\n"
+    "- L4 ugv-node TCP 8410/8420 — probe any advertised telemetry/control GET routes only.\n"
+    "Must-try classes (rotate if blocked):\n"
+    "- GraphQL OTHER: POST /graphql Content-Type application/json with bodies like "
+    '{"query":"{ missionAudit { lastDeployment { notes } } }"} or { missionAudit } or systemConfig. '
+    "Also try introspection __schema if notes are empty.\n"
+    "- LFI: /config?file=, /read?path=, /download?file= → /flag, ../flag, /proc/self/environ, flag.txt.\n"
+    "- SSRF: /fetch|/proxy url/uri/host → http://helper-box:8080/secret, helper-box.:8080/secret, "
+    "http://127.0.0.1:<same-port>/secret|/registry|/flag|/admin, decimal/hex IP forms.\n"
+    "- AUTH: /admin with Cookie session= urlsafe-base64 JSON {\"role\":\"admin\"} (padding variants).\n"
+    "- SQLI: /product?id= UNION SELECT from app_meta / sqlite_master; match column count from errors.\n"
+    "- Direct dumps: GET /flag /secret /admin /debug /rc/status /teleop/status /api/flag /graphql.\n"
+    "If a payload times out while GET / worked, mutate encoding (double-URL, case, UN/**/ION) — do not repeat.\n"
+    'Reply ONLY JSON (no fences): "vuln" LFI|SSRF|AUTH|SQLI|OTHER, "method" GET|POST, '
+    '"path", "headers" object, "body" string, "reason" short. Path only — no host.'
 )
 
 
@@ -138,10 +135,19 @@ class LLMAdvisor:
         result, retryable = self._request_model(model_id, user_content)
         if result is not None:
             return result
-        if (model_id == DEFAULT_LLM_MODEL and retryable
-                and DEFAULT_LLM_FALLBACK_MODEL in SUPPORTED_LLM_MODELS):
-            result, _ = self._request_model(DEFAULT_LLM_FALLBACK_MODEL, user_content)
-        return result
+        # 강제 primary(pro)가 재시도 가능 실패일 때만 sol→terra로 이어간다.
+        # 테스트·명시 model 호출은 fallback 없이 그 모델 결과만 본다.
+        if model_id != DEFAULT_LLM_MODEL or not retryable:
+            return None
+        for fallback in DEFAULT_LLM_FALLBACK_MODELS:
+            if fallback not in SUPPORTED_LLM_MODELS:
+                continue
+            result, retryable = self._request_model(fallback, user_content)
+            if result is not None:
+                return result
+            if not retryable:
+                return None
+        return None
 
     def _request_model(self, model_id: str, user_content: str):
         """한 upstream 호출을 예산에 예약하고 `(계획, 재시도 가능)`을 반환한다."""
