@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-p3-r9-egress-active",
+  "bundle_id": "defender-2026-08-21-p3-r8-harden",
   "generated_at": "2026-08-21T07:30:00Z",
   "baseline_profiles": [
     "6/8080",
@@ -273,7 +273,7 @@
       "ports": [],
       "pattern": "FLAG\\{[^}]{1,120}\\}",
       "ignore_case": false,
-      "promotion_state": "ACTIVE",
+      "promotion_state": "SHADOW",
       "canary_fraction": 0.0,
       "canary_seed": "l2-flag-20260815",
       "promotion_cohort": "l2-enforce-20260815",
