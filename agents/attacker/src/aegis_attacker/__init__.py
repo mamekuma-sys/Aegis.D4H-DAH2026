@@ -7,5 +7,5 @@
 AI 진위 증빙(운영세칙 제23조)을 단순하게 만들기 위한 선택이다.
 """
 
-__version__ = "0.4.3-fast-llm"
-ATTACK_PROFILE = "gpt-5.4-chat+low-effort+r8"
+__version__ = "0.4.4-r8-harden"
+ATTACK_PROFILE = "gpt-5.4+det-first+fast-fallback"

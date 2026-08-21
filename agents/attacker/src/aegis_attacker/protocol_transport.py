@@ -15,6 +15,7 @@ from .observation import HttpResponse, MAX_RESPONSE_BYTES
 MQTT_PORT = 1883
 RTSP_PORT = 8554
 MQTT_READ_TOPICS = (
+    "uav/node/config",
     "#", "$SYS/#",
     "flag/#", "flags/#", "FLAG/#",
     "uav/#", "drone/#", "mavlink/#", "telemetry/#",

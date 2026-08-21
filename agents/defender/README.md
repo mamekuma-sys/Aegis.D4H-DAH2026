@@ -85,7 +85,7 @@ p50·p95·p99·max가 남습니다.
 
 ## 현재 정책 상태
 
-현재 bundle `defender-2026-08-21-p3-r8-fast-llm`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, 분할된 `service_id` SSTI를 포함한 portal feedback, `/api/rsc-action` env-ref, `/ws/mission-feed`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi와 L4 민감 경로에 대응하는 32개 규칙이 `ACTIVE`입니다. 일반 휴리스틱과 L3 MQTT wildcard 구독·RTSP 민감 DESCRIBE 후보 15개는 `SHADOW`입니다.
+현재 bundle `defender-2026-08-21-p3-r8-harden`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, 분할된 `service_id` SSTI를 포함한 portal feedback, `/api/rsc-action` env-ref, `/ws/mission-feed`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi와 L4 민감 경로에 대응하는 31개 규칙이 `ACTIVE`입니다. 일반 휴리스틱과 L3 MQTT wildcard 구독·RTSP 민감 DESCRIBE 후보 15개는 `SHADOW`입니다.
 
 `1883`·`8554`는 공식 포트·프로토콜만 확인됐고 정상/공격 PCAP은 아직 없으므로 즉시 DROP하지 않습니다. 두 후보는 packet-local 형식을 정확히 식별해 비민감 reason code로 관측하며, 동일 프로토콜 negative·SLA fixture와 방어 담당자·팀장 review가 확보되기 전에는 ACTIVE로 올리지 않습니다.
 

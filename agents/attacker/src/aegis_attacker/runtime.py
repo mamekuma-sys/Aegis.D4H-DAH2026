@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import ATTACK_PROFILE, __version__ as ATTACKER_VERSION
 from .audit import AuditLogger, Redactor
-from .config import AttackerConfig
+from .config import AttackerConfig, FORCED_LLM_MODEL
 from .egress import EgressError, EgressGateway, build_allowlists
 from .exploits import (
     Attempt,
@@ -472,19 +472,28 @@ class AttackerRuntime:
         captured_any = self._process_flags(resp.body, resp.headers)
         if resp.status != 200 or self._stop_event.is_set():
             return True, captured_any
-        result, captured = self._execute_protocol_attempt(
-            endpoint,
-            "mqtt",
-            {"topics": list(MQTT_READ_TOPICS)},
-            obs.evidence_ref,
-            "observed:l3-mqtt-read-subscribe",
+        # exact config topic first (R7/R8 FLAG), then wildcard sweep
+        topic_batches = (
+            ("uav/node/config",),
+            tuple(t for t in MQTT_READ_TOPICS if t != "uav/node/config"),
         )
-        if captured:
-            captured_any = True
-            self.audit.log(
-                "hit", target=endpoint.key(), path="MQTT SUBSCRIBE",
-                reason="det:observed:l3-mqtt-read-subscribe",
+        for topics in topic_batches:
+            if self._stop_event.is_set():
+                break
+            result, captured = self._execute_protocol_attempt(
+                endpoint,
+                "mqtt",
+                {"topics": list(topics)},
+                obs.evidence_ref,
+                "observed:l3-mqtt-read-subscribe",
             )
+            if captured:
+                captured_any = True
+                self.audit.log(
+                    "hit", target=endpoint.key(), path="MQTT SUBSCRIBE",
+                    reason="det:observed:l3-mqtt-read-subscribe",
+                )
+                break
         return True, captured_any
 
     def _attack_observed_rtsp(self, endpoint) -> tuple[bool, bool]:
@@ -896,23 +905,6 @@ class AttackerRuntime:
             return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
-        # 확인된 저비용 경로 직후 LLM을 먼저 실행한다. 호출은 endpoint당 2턴,
-        # round당 32회로 제한하고 이후 결정론 경로도 계속 돌아 다중 flag를 수집한다.
-        self.audit.log(
-            "llm-primary", target=endpoint.key(),
-            after_confirmed_det=bool(confirmed),
-        )
-        captured_any = self._advise_llm_on_endpoint(
-            endpoint,
-            banner=banner,
-            banner_fp=banner_fp,
-            evidence_ref=current_evidence,
-            already_captured=captured_any,
-        ) or captured_any
-        if self._stop_event.is_set():
-            return captured_any
-        current_evidence = self._latest_evidence(endpoint, current_evidence)
-
         # root 배너가 취약 부류를 직접 노출하면 정찰 sweep보다 먼저 zero-token 공격한다.
         root_hints = suggest_vuln_classes(banner)
         if root_hints != [VulnClass.OTHER]:
@@ -941,11 +933,6 @@ class AttackerRuntime:
         if self._stop_event.is_set():
             return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
-
-        # 한 서비스에 flag가 여러 개일 수 있으므로 결정론·recon 경로는 모두 돈다.
-        # 이미 하나 이상 회수했다면 비용성 LLM 단계만 생략한다.
-        if captured_any:
-            return True
 
         # playbook 재사용은 LLM보다 먼저 시도한다.
         tried_reuse = False
@@ -976,6 +963,23 @@ class AttackerRuntime:
                 continue
             break
 
+        # 결정론·recon·playbook으로 이미 회수했으면 LLM을 생략한다.
+        if captured_any:
+            return True
+
+        # miss 뒤에만 짧은 chat LLM을 돌린다(endpoint당 최대 2턴).
+        self.audit.log(
+            "llm-primary", target=endpoint.key(),
+            after_confirmed_det=bool(confirmed),
+            after_deterministic_miss=True,
+        )
+        captured_any = self._advise_llm_on_endpoint(
+            endpoint,
+            banner=banner,
+            banner_fp=banner_fp,
+            evidence_ref=current_evidence,
+            already_captured=False,
+        ) or captured_any
         return captured_any
 
     def _advise_llm_on_endpoint(self, endpoint, banner: str, banner_fp: str,
@@ -1012,21 +1016,17 @@ class AttackerRuntime:
                    and state.turn < llm_turn_limit):
                 state.turn += 1
                 plan = self._planner.plan_next(endpoint, banner, feedback, state,
-                                               model=self.config.llm_model)
+                                               model=FORCED_LLM_MODEL)
                 if plan is None:
                     self.audit.log(
                         "llm-skip", target=endpoint.key(), turn=state.turn,
                         reason="advise-empty-or-failed",
-                        model=self.config.llm_model,
+                        model=FORCED_LLM_MODEL,
                     )
-                    feedback = (
-                        "Previous advice was empty or unusable. Reply only with one "
-                        "valid exploit-plan JSON object for this observed service."
-                    )
-                    continue
+                    break
                 self.audit.log(
                     "llm-plan", target=endpoint.key(), turn=state.turn,
-                    path=plan.args.get("path"), model=self.config.llm_model,
+                    path=plan.args.get("path"), model=FORCED_LLM_MODEL,
                     reason=plan.reason or "",
                 )
                 if current_evidence is None:

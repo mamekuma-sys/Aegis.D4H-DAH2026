@@ -177,7 +177,7 @@ class TestLLMAdvisor(unittest.TestCase):
         )
         first, second = (json.loads(body) for body in transport.bodies)
         self.assertEqual(first["temperature"], 0)
-        self.assertEqual(second["reasoning_effort"], LLM_REASONING_EFFORT)
+        self.assertEqual(second["temperature"], 0)
         self.assertEqual(transport.timeouts, [45.0, 45.0])
         self.assertEqual(budget.llm_calls, 2)
         self.assertEqual(budget.llm_tokens, 42)
@@ -280,7 +280,7 @@ class TestLLMAdvisor(unittest.TestCase):
             item["id"]: item for item in contract["price_schedule"]["models"]
         }
         self.assertEqual(prices[DEFAULT_LLM_MODEL]["output"], 15)
-        self.assertEqual(prices[DEFAULT_LLM_FALLBACK_MODEL]["output"], 30)
+        self.assertEqual(prices[DEFAULT_LLM_FALLBACK_MODEL]["output"], 2)
         self.assertEqual(contract["team_total_budget_usd"], 1360)
 
 

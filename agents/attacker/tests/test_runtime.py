@@ -386,13 +386,13 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(arena.submits[0]["flag"], "FLAG{recon_win}")
         self.assertEqual(arena.llm_calls, 0)  # 토큰 0
 
-    def test_llm_primary_runs_before_recon_hit_when_key_present(self):
+    def test_llm_skipped_when_recon_already_captured(self):
         arena = FakeArena("plain service", "/unused", "FLAG{recon_win}",
                           flag_when=lambda full: full.startswith("/flag"))
         rt = make_runtime(arena)
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 1)
-        self.assertEqual(arena.llm_calls, 2)
+        self.assertEqual(arena.llm_calls, 0)
 
     def test_recon_collects_multiple_flags_from_one_service(self):
         class MultiFlagArena:
@@ -717,7 +717,7 @@ class TestRuntimeResilience(unittest.TestCase):
         )
         rt = make_runtime(arena)
         rt.run_once()
-        self.assertEqual(arena.llm_models, ["gpt-4o-mini", "gpt-4o-mini"])
+        self.assertEqual(arena.llm_models, [DEFAULT_LLM_MODEL, DEFAULT_LLM_MODEL])
 
 
 class MultiPortArena:

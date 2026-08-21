@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-p3-r8-fast-llm",
-  "generated_at": "2026-08-21T07:00:00Z",
+  "bundle_id": "defender-2026-08-21-p3-r8-harden",
+  "generated_at": "2026-08-21T07:30:00Z",
   "baseline_profiles": [
     "6/8080",
     "6/9000",
@@ -644,11 +644,11 @@
       ],
       "pattern": "(?:GET|POST) /portal/feedback\\?(?:service_id|service%5[fF]id)=[^&\\r\\n ]{1,128} HTTP/1\\.[01]",
       "ignore_case": true,
-      "promotion_state": "ACTIVE",
+      "promotion_state": "SHADOW",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r4-l1-portal-feedback",
-      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-harden",
       "parser_version": 1,
       "profile_scope": [
         "6/8080"
@@ -1379,13 +1379,13 @@
       "ports": [
         1883
       ],
-      "pattern": "(?:\\x82[\\x00-\\xff]{0,200}(?:\\x00\\x01#|\\x00\\x05\\$SYS|\\x00\\x06\\$SYS/#|flag|uav/|mcs/|node/config)|uav/node/config|mcs_token)",
-      "ignore_case": true,
+      "pattern": "\\x82[\\x00-\\xff]{0,200}(?:\\x00\\x01#|\\x00\\x05\\$SYS|\\x00\\x06\\$SYS/#|\\x00\\x0fuav/node/config)",
+      "ignore_case": false,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-r7-mqtt",
-      "promoted_in_bundle": "defender-2026-08-21-p3-r8-fast-llm",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-harden",
       "parser_version": 1,
       "profile_scope": [
         "6/1883"
@@ -1408,13 +1408,13 @@
       "ports": [
         8554
       ],
-      "pattern": "(?:DESCRIBE|GET_PARAMETER) rtsp://[^\\r\\n ]{1,253}/(?:flag|secret|admin|debug)(?:[/? ]|RTSP)",
+      "pattern": "(?:DESCRIBE|SETUP|GET_PARAMETER|PLAY) (?:rtsp://[^\\r\\n ]{1,200})?/(?:flag|secret|admin|debug)(?:[/? ]|RTSP)",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-r7-rtsp",
-      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-harden",
       "parser_version": 1,
       "profile_scope": [
         "6/8554"
@@ -1437,13 +1437,13 @@
       "ports": [
         1883
       ],
-      "pattern": "uav/node/config|mcs_token|mcs_user|relay-bootstrap",
+      "pattern": "uav/node/config",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-r7-mqtt-config",
-      "promoted_in_bundle": "defender-2026-08-21-p3-r8-fast-llm",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-harden",
       "parser_version": 1,
       "profile_scope": [
         "6/1883"
@@ -1466,13 +1466,13 @@
       "ports": [
         8082
       ],
-      "pattern": "missionAudit",
+      "pattern": "(?:[\"\\']query[\"\\']\\s*:\\s*[\"\\'][^\"\\']{0,400}|GET [^\\r\\n]{0,400})missionAudit",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-r8-graphql-body",
-      "promoted_in_bundle": "defender-2026-08-21-p3-r8-fast-llm",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-harden",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"

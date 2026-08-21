@@ -95,7 +95,7 @@ class TestPcapReplay(unittest.TestCase):
             ).to_dict()
 
         total = report["total"]
-        self.assertEqual(report["policy"]["drop_capable_rules"], 32)
+        self.assertEqual(report["policy"]["drop_capable_rules"], 31)
         self.assertEqual(total["parsed_requests"], 2)
         self.assertEqual(total["exploit_shape_requests"], 1)
         self.assertEqual(total["blocked_exploit_shape_requests"], 1)
@@ -152,7 +152,8 @@ class TestPcapReplay(unittest.TestCase):
 
         total = report["total"]
         self.assertEqual(total["exploit_shape_requests"], 1)
-        self.assertEqual(total["blocked_exploit_shape_requests"], 1)
+        # service_id 단독은 SHADOW(SLA) — blocked 0, SSTI semantic만 ACTIVE DROP
+        self.assertEqual(total["blocked_exploit_shape_requests"], 0)
         self.assertEqual(total["passed_other_requests"], 1)
         self.assertEqual(total["unexpected_other_drops"], 0)
 

@@ -16,8 +16,8 @@ DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
 # chat 계열(gpt-5.4)을 강제한다. responses 티어(pro)는 high-effort에서
 # 타임아웃만 내고 조언·크레딧 소진이 모두 0이 된다.
 DEFAULT_LLM_MODEL = "gpt-5.4"
-DEFAULT_LLM_FALLBACK_MODEL = "gpt-5.6-sol"
-DEFAULT_LLM_FALLBACK_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
+DEFAULT_LLM_FALLBACK_MODEL = "gpt-5-mini"
+DEFAULT_LLM_FALLBACK_MODELS = ("gpt-5-mini",)
 DEFAULT_CONCURRENCY = 32
 MAX_CONCURRENCY = 32
 FORCED_LLM_MODEL = DEFAULT_LLM_MODEL

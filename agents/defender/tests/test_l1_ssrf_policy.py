@@ -41,7 +41,7 @@ _ACTIVE_RULES = {
     _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
     _L1_CONFIG_RULE_ID, _L2_REGISTRY_RULE_ID,
     _L1_SATDIAG_TAIL_RULE_ID, _L1_SATDIAG_EXPORT_RULE_ID,
-    _L2_GRAPHQL_RULE_ID, "sig-l2-graphql-mission-audit-body-001", _L1_SVC_FLAG_RULE_ID, _L1_PORTAL_FEEDBACK_RULE_ID,
+    _L2_GRAPHQL_RULE_ID, "sig-l2-graphql-mission-audit-body-001", _L1_SVC_FLAG_RULE_ID,
     _L2_RSC_RULE_ID, _L2_WS_FEED_RULE_ID,
     _L3_SENSITIVE_RULE_ID, _L3_UNION_BROAD_RULE_ID, _L2_SCHEMA_RULE_ID, _L4_FLAG_RULE_ID,
     _L1_CONFIG_CANON_RULE_ID, _L1_CONFIG_CANON_POST_RULE_ID,
@@ -341,20 +341,22 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 self.assertEqual(decision.rule_id, _L2_GRAPHQL_RULE_ID)
                 self.assertEqual(decision.reason_code, "sig-l2-graphql-mission-audit")
 
-    def test_finals_p2r4_8080_svc_flag_and_portal_feedback_drop(self):
-        cases = (
-            (b"GET /svc/flag-8ceb780e-e860-4078-8a1c-f5348976062f/ HTTP/1.1\r\nHost: x\r\n\r\n",
-             _L1_SVC_FLAG_RULE_ID, "sig-l1-svc-flag-gateway"),
-            (b"GET /portal/feedback?service_id=vulncheck HTTP/1.1\r\nHost: x\r\n\r\n",
-             _L1_PORTAL_FEEDBACK_RULE_ID, "sig-l1-portal-feedback"),
+    def test_finals_p2r4_8080_svc_flag_drops(self):
+        payload = (
+            b"GET /svc/flag-8ceb780e-e860-4078-8a1c-f5348976062f/ HTTP/1.1\r\nHost: x\r\n\r\n"
         )
-        for index, (payload, rule_id, reason) in enumerate(cases, start=1):
-            with self.subTest(rule_id=rule_id):
-                parsed = parse_ip(ipv4_tcp(payload, dst_port=8080))
-                decision = self.policy.decide(870 + index, parsed, 0.0)
-                self.assertEqual(decision.verdict, VERDICT_DROP)
-                self.assertEqual(decision.rule_id, rule_id)
-                self.assertEqual(decision.reason_code, reason)
+        parsed = parse_ip(ipv4_tcp(payload, dst_port=8080))
+        decision = self.policy.decide(870, parsed, 0.0)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _L1_SVC_FLAG_RULE_ID)
+        self.assertEqual(decision.reason_code, "sig-l1-svc-flag-gateway")
+
+    def test_finals_p2r4_portal_feedback_service_id_is_shadow_only(self):
+        # 광역 service_id DROP은 SLA를 깎아 SHADOW로 내렸다. SSTI만 ACTIVE.
+        decision = self._decide(
+            "/portal/feedback?service_id=vulncheck", dst_port=8080, pkt_id=871
+        )
+        self.assertEqual(decision.verdict, VERDICT_ACCEPT)
 
     def test_finals_p2r4_portal_feedback_view_without_service_id_accepts(self):
         cases = (
@@ -518,9 +520,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p3-r8-fast-llm"
+            "defender-2026-08-21-p3-r8-harden"
         )
-        self.assertEqual(self.report.drop_capable_rules, 32)
+        self.assertEqual(self.report.drop_capable_rules, 31)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,
