@@ -896,6 +896,23 @@ class AttackerRuntime:
             return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
+        # 확인된 저비용 경로 직후 LLM을 먼저 실행한다. 호출은 endpoint당 2턴,
+        # round당 32회로 제한하고 이후 결정론 경로도 계속 돌아 다중 flag를 수집한다.
+        self.audit.log(
+            "llm-primary", target=endpoint.key(),
+            after_confirmed_det=bool(confirmed),
+        )
+        captured_any = self._advise_llm_on_endpoint(
+            endpoint,
+            banner=banner,
+            banner_fp=banner_fp,
+            evidence_ref=current_evidence,
+            already_captured=captured_any,
+        ) or captured_any
+        if self._stop_event.is_set():
+            return captured_any
+        current_evidence = self._latest_evidence(endpoint, current_evidence)
+
         # root 배너가 취약 부류를 직접 노출하면 정찰 sweep보다 먼저 zero-token 공격한다.
         root_hints = suggest_vuln_classes(banner)
         if root_hints != [VulnClass.OTHER]:
@@ -959,13 +976,7 @@ class AttackerRuntime:
                 continue
             break
 
-        return self._advise_llm_on_endpoint(
-            endpoint,
-            banner=observed_banner,
-            banner_fp=banner_fp,
-            evidence_ref=current_evidence,
-            already_captured=captured_any,
-        ) or captured_any
+        return captured_any
 
     def _advise_llm_on_endpoint(self, endpoint, banner: str, banner_fp: str,
                                 evidence_ref, already_captured: bool = False) -> bool:
@@ -1008,7 +1019,11 @@ class AttackerRuntime:
                         reason="advise-empty-or-failed",
                         model=self.config.llm_model,
                     )
-                    break
+                    feedback = (
+                        "Previous advice was empty or unusable. Reply only with one "
+                        "valid exploit-plan JSON object for this observed service."
+                    )
+                    continue
                 self.audit.log(
                     "llm-plan", target=endpoint.key(), turn=state.turn,
                     path=plan.args.get("path"), model=self.config.llm_model,

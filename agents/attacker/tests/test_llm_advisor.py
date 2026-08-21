@@ -28,6 +28,7 @@ CFG = AttackerConfig(
     llm_model="gpt-4o-mini",
 )
 SOL_CFG = replace(CFG, llm_model=DEFAULT_LLM_MODEL)
+PRO_CFG = replace(CFG, llm_model="gpt-5.4-pro")
 
 
 def chat_response(content, tokens=42, status=200, finish_reason=None):
@@ -120,7 +121,7 @@ class TestLLMAdvisor(unittest.TestCase):
         self.assertEqual(payload["max_completion_tokens"], LLM_MAX_COMPLETION_TOKENS)
         self.assertNotIn("max_tokens", payload)
 
-    def test_primary_pro_uses_temperature_without_reasoning(self):
+    def test_primary_mini_uses_temperature_without_reasoning(self):
         adv, transport = make_advisor(
             chat_response('{"path":"/x"}'), config=SOL_CFG
         )
@@ -130,6 +131,15 @@ class TestLLMAdvisor(unittest.TestCase):
         self.assertEqual(payload["temperature"], 0)
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertNotIn("reasoning_effort", payload)
+
+    def test_pro_model_omits_unsupported_temperature(self):
+        adv, transport = make_advisor(
+            chat_response('{"path":"/x"}'), config=PRO_CFG
+        )
+        adv.advise_exploit("b", "", [], model="gpt-5.4-pro")
+        payload = json.loads(transport.last_body)
+        self.assertEqual(payload["model"], "gpt-5.4-pro")
+        self.assertNotIn("temperature", payload)
 
     def test_gpt56_uses_reasoning_and_developer_message(self):
         adv, transport = make_advisor(

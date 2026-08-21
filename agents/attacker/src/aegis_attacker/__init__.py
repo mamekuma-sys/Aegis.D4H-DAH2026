@@ -7,5 +7,5 @@
 AI 진위 증빙(운영세칙 제23조)을 단순하게 만들기 위한 선택이다.
 """
 
-__version__ = "0.4.0-pcap-adaptive"
-ATTACK_PROFILE = "pcap-adaptive+bounded-llm"
+__version__ = "0.4.1-llm-primary"
+ATTACK_PROFILE = "pcap-adaptive+llm-primary+bounded-llm"

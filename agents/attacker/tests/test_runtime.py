@@ -386,13 +386,13 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(arena.submits[0]["flag"], "FLAG{recon_win}")
         self.assertEqual(arena.llm_calls, 0)  # 토큰 0
 
-    def test_recon_hit_skips_llm_when_key_present(self):
+    def test_llm_primary_runs_before_recon_hit_when_key_present(self):
         arena = FakeArena("plain service", "/unused", "FLAG{recon_win}",
                           flag_when=lambda full: full.startswith("/flag"))
         rt = make_runtime(arena)
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 1)
-        self.assertEqual(arena.llm_calls, 0)
+        self.assertEqual(arena.llm_calls, 2)
 
     def test_recon_collects_multiple_flags_from_one_service(self):
         class MultiFlagArena:
