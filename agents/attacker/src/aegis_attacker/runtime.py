@@ -59,8 +59,11 @@ from .round_report import RoundReport
 from .secrets import KIND_LLM_KEY, KIND_SESSION, KIND_SUBMIT_TOKEN, RoundSecretStore
 from .tools import ExecutionAdapter, PlanBindingError, evasion_variants
 
-MAX_LLM_TURNS_PER_ENDPOINT = 2
-LOOP_SLEEP = 4.0
+# 마지막 라운드 — 제한 개방. LLM이 endpoint당 깊게 파고(12턴), 무응답(필터 DROP)이면
+# 재인코딩 변형을 넉넉히 시도하고, 미해결 endpoint를 짧은 쿨다운으로 재타격한다.
+# PER_TARGET_BUDGET=3 으로 표적당 스케줄 사이클마다 더 깊게 두드린다.
+MAX_LLM_TURNS_PER_ENDPOINT = 12
+LOOP_SLEEP = 2.0
 PER_TARGET_BUDGET = 3
 MAX_EVASION_VARIANTS = 16
 ENDPOINT_RETRY_COOLDOWN = 3.0

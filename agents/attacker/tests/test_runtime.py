@@ -10,7 +10,13 @@ from aegis_attacker.audit import AuditLogger
 from aegis_attacker.config import AttackerConfig, DEFAULT_LLM_MODEL
 from aegis_attacker.models import SubmitState
 from aegis_attacker.observation import HttpResponse
-from aegis_attacker.runtime import BOOTSTRAP_RETRY_COOLDOWN, AttackerRuntime
+from aegis_attacker.runtime import (
+    BOOTSTRAP_RETRY_COOLDOWN,
+    ENDPOINT_RETRY_COOLDOWN,
+    MAX_LLM_TURNS_PER_ENDPOINT,
+    AttackerRuntime,
+)
+from aegis_attacker.planner import MAX_TURNS
 
 
 class FakeClock:
@@ -388,7 +394,9 @@ class TestRuntimeEndToEnd(unittest.TestCase):
 
         self.assertEqual(report.accepted_count(), 0)
         self.assertGreater(arena.llm_calls, 0)
-        self.assertEqual(arena.llm_models, [DEFAULT_LLM_MODEL, DEFAULT_LLM_MODEL])
+        self.assertTrue(all(m == DEFAULT_LLM_MODEL for m in arena.llm_models))
+        self.assertEqual(len(arena.llm_models),
+                         min(MAX_TURNS, MAX_LLM_TURNS_PER_ENDPOINT))
         self.assertIn("/fetch", arena.target_paths)
         self.assertIn("/config", arena.target_paths)
         self.assertIn("/portal", arena.target_paths)
@@ -676,7 +684,7 @@ class TestRuntimeResilience(unittest.TestCase):
         deferred = [line for line in events if line["event"] == "endpoint-deferred"]
         self.assertEqual(len(scheduled), 1)
         self.assertEqual(scheduled[0]["reason"], "no-accepted-flag")
-        self.assertEqual(scheduled[0]["cooldown_seconds"], 3.0)
+        self.assertEqual(scheduled[0]["cooldown_seconds"], ENDPOINT_RETRY_COOLDOWN)
         self.assertEqual(len(deferred), 1)
         self.assertEqual(deferred[0]["reason"], "cooldown")
         self.assertGreater(deferred[0]["remaining_seconds"], 0.0)
@@ -761,7 +769,12 @@ class TestRuntimeResilience(unittest.TestCase):
         )
         rt = make_runtime(arena)
         rt.run_once()
-        self.assertEqual(arena.llm_models, [DEFAULT_LLM_MODEL, DEFAULT_LLM_MODEL])
+        # 제한 개방 모드: endpoint당 LLM 턴이 MAX_LLM_TURNS_PER_ENDPOINT 까지 깊게 돈다.
+        # 모든 호출이 강제된 기본 모델을 쓰고, 호출 수는 턴 상한과 일치한다.
+        self.assertTrue(arena.llm_models)
+        self.assertTrue(all(m == DEFAULT_LLM_MODEL for m in arena.llm_models))
+        self.assertEqual(len(arena.llm_models),
+                         min(MAX_TURNS, MAX_LLM_TURNS_PER_ENDPOINT))
 
 
 class MultiPortArena:

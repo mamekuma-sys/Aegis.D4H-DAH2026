@@ -18,6 +18,8 @@ DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
 DEFAULT_LLM_MODEL = "gpt-5.4"
 DEFAULT_LLM_FALLBACK_MODEL = "gpt-5-mini"
 DEFAULT_LLM_FALLBACK_MODELS = ("gpt-5-mini",)
+# 마지막 라운드 — 제한 개방. 동시 워커를 늘려 11표적×6포트를 더 빨리 훑는다.
+# pids_limit 512(제16조) 안에서 안전한 상한(워커 스레드 + 부수 스레드 << 512).
 DEFAULT_CONCURRENCY = 64
 MAX_CONCURRENCY = 64
 FORCED_LLM_MODEL = DEFAULT_LLM_MODEL

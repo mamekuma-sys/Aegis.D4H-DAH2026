@@ -19,6 +19,9 @@ from .config import (
 from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
+# 마지막 라운드 — 제한 개방 모드. $1360 예산을 아끼지 않고 소진해 hard 타깃을 뚫는다.
+# (제출 rate limit·표적 SLA 는 운영진 강제라 손대지 않는다.)
+# reasoning_effort 는 gpt-5.6-* 에만 적용되고 강제 모델은 gpt-5.4(chat)라 실효는 없다.
 MAX_LLM_CALLS_PER_ROUND = 800
 LLM_TIMEOUT = 60.0
 LLM_MAX_COMPLETION_TOKENS = 4096
