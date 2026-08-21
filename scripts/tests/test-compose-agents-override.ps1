@@ -101,7 +101,7 @@ if ($attackerText -notmatch 'ConfigOnly') {
 if ($attackerText -match 'LLM_MODEL\(gpt-5\.6-sol\)') {
     throw 'attacker-deploy.md still lists LLM_MODEL as an official injected contract.'
 }
-if ($attackerText -notmatch '(?s)LLM_MODEL.*무시.*gpt-5\.6-sol') {
+if ($attackerText -notmatch '(?s)LLM_MODEL.*무시.*gpt-5\.4') {
     throw 'attacker-deploy.md does not document the forced LLM model profile.'
 }
 if ($attackerText -notmatch "throw 'docker build failed'") {
