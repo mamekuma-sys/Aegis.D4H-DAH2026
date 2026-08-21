@@ -1246,7 +1246,31 @@ class AttackerRuntime:
         finally:
             self.finish_round()
 
+    # ---- 최후의 공격: 지속 재타격 워커 루프 ----
+
+    def _ready_endpoints(self, endpoints, now) -> list:
+        """쿨다운이 끝났거나 새 playbook generation이 나온 미해결 endpoint를 돌려준다."""
+        ready = []
+        generation = self._playbook.generation
+        for ep in endpoints:
+            key = ep.endpoint_id
+            with self._state_lock:
+                if key in self._completed_endpoints:
+                    continue
+                next_attempt, seen_generation = self._endpoint_retry_state.get(
+                    key, (0.0, -1))
+            if now >= next_attempt or generation > seen_generation:
+                ready.append(ep)
+        return ready
+
     def run_forever(self, max_cycles=None) -> None:
+        """최후의 공격 — 미해결 endpoint를 라운드가 끝날 때까지 지속 재타격한다.
+
+        기존 scan-cycle 모델은 쿨다운 중인 endpoint가 전체 사이클을 블로킹하고,
+        한 사이클이 끝나면 미해결 endpoint를 다음 사이클까지 미뤘다. 여기서는
+        준비된 endpoint만 골라 워커 풀이 즉시 두드리고, 전부 쿨다운이면 가장 가까운
+        재타격 시각까지만 잠든다. flag를 잡은 endpoint는 완료 처리해 재공격하지 않는다.
+        """
         self.audit.log(
             "startup",
             targets=len(self.config.targets),
@@ -1266,17 +1290,39 @@ class AttackerRuntime:
             self.audit.log("warn", reason="제출 설정 없음 — flag 획득해도 제출 불가")
         self.start_round()
         try:
+            endpoints = cumulative_endpoint_order(self.config.endpoints())
+            workers = min(self.config.concurrency, max(1, len(endpoints)))
             cycles = 0
             while ((max_cycles is None or cycles < max_cycles)
                    and self.clock() < self._round_deadline
                    and not self._stop_event.is_set()):
-                report = self.run_cycle()
-                self.audit.log("round-summary", **report.summary())
+                now = self.clock()
+                ready = self._ready_endpoints(endpoints, now)
+                if not ready:
+                    with self._state_lock:
+                        pending = len(self._endpoint_retry_state)
+                        done = len(self._completed_endpoints)
+                    if pending == 0 or done == len(endpoints):
+                        break  # 전부 해결(또는 재시도 대상 없음) — 라운드 종료까지 대기
+                    # 전부 쿨다운 — 가장 가까운 재타격 시각까지만 잠든다.
+                    with self._state_lock:
+                        wake = min(t for t, _ in self._endpoint_retry_state.values())
+                    self.sleep(min(LOOP_SLEEP, max(0.05, wake - now)))
+                    continue
+                if workers <= 1:
+                    for ep in ready:
+                        if self._stop_event.is_set():
+                            break
+                        self._attack_isolated(ep)
+                else:
+                    with ThreadPoolExecutor(max_workers=workers) as pool:
+                        futs = [pool.submit(self._attack_isolated, ep) for ep in ready
+                                if not self._stop_event.is_set()]
+                        for fut in futs:
+                            fut.result()
                 cycles += 1
-                cycles_remaining = max_cycles is None or cycles < max_cycles
-                remaining = self._round_deadline - self.clock()
-                if (cycles_remaining and remaining > 0
-                        and not self._stop_event.is_set()):
-                    self.sleep(min(LOOP_SLEEP, remaining))
+                if cycles % 20 == 0:
+                    self.audit.log("round-summary", **self._report.summary())
+            self.audit.log("round-summary", **self._report.summary())
         finally:
             self.finish_round()

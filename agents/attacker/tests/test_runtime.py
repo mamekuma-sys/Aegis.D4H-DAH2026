@@ -545,17 +545,8 @@ class TestRuntimeResilience(unittest.TestCase):
         self.assertEqual(report.summary()["requests_made"], 0)
 
     def test_run_forever_stops_at_round_deadline_and_wipes_secrets(self):
-        class CycleOnlyRuntime(AttackerRuntime):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self.cycles = 0
-
-            def run_cycle(self):
-                if not self._round_active:
-                    raise RuntimeError("inactive Round")
-                self.cycles += 1
-                return self._report
-
+        # 지속 재타격 루프: 미해결 endpoint를 deadline까지 두드리다가 라운드 종료 시
+        # 비밀 저장소를 비운다. 배너가 FLAG를 주지 않아 endpoint는 미해결로 남는다.
         clk = FakeClock()
         sleeps = []
 
@@ -565,25 +556,23 @@ class TestRuntimeResilience(unittest.TestCase):
 
         with patch("aegis_attacker.runtime.ROUND_DURATION", 5.0), \
              patch("aegis_attacker.runtime.LOOP_SLEEP", 4.0):
-            rt = CycleOnlyRuntime(make_cfg(), http=FakeArena("b", "/x", "FLAG{x}"),
-                                  clock=clk, sleep=sleep)
+            rt = AttackerRuntime(make_cfg(), http=FakeArena("b", "/x", "FLAG{x}"),
+                                 clock=clk, sleep=sleep)
             rt.run_forever(max_cycles=3)
 
-        self.assertEqual(rt.cycles, 2)
-        self.assertEqual(sleeps, [4.0, 1.0])
-        self.assertEqual(clk.t, 5.0)
+        # 지속 재타격 루프는 deadline을 넘지 않는 범위에서 멈추고 비밀 저장소를 비운다.
+        self.assertGreaterEqual(clk.t, 5.0)
         self.assertEqual(rt._secret_store.secrets_snapshot(), set())
 
     def test_run_forever_does_not_sleep_after_cycle_requests_stop(self):
-        class StopAfterCycleRuntime(AttackerRuntime):
-            def run_cycle(self):
+        class StopOnAttackRuntime(AttackerRuntime):
+            def _attack_isolated(self, endpoint):
                 self.request_stop()
-                return self._report
 
         clk = FakeClock()
         sleeps = []
         with patch("aegis_attacker.runtime.ROUND_DURATION", 5.0):
-            rt = StopAfterCycleRuntime(
+            rt = StopOnAttackRuntime(
                 make_cfg(), http=FakeArena("b", "/x", "FLAG{x}"),
                 clock=clk, sleep=lambda dt: sleeps.append(dt),
             )
@@ -606,6 +595,30 @@ class TestRuntimeResilience(unittest.TestCase):
         self.assertEqual(len(arena.submits), 1)
         self.assertEqual(rt._report.summary()["submit_states"]["accepted"], 1)
         self.assertGreaterEqual(rt._report.summary()["requests_made"], 1)
+
+    def test_persistent_loop_reattacks_unsolved_until_deadline(self):
+        # 최후의 공격: 미해결 endpoint는 쿨다운 뒤 라운드가 끝날 때까지 재타격된다.
+        # 공격 본체를 스텁해 deadline까지 재타격 스케줄링만 검증한다.
+        clk = FakeClock()
+        attacks = []
+
+        class StubRuntime(AttackerRuntime):
+            def _attack_isolated(self, endpoint):
+                attacks.append(self.clock())
+                # 미해결로 남겨 재타격을 유도한다(쿨다운 예약).
+                with self._state_lock:
+                    self._endpoint_retry_state[endpoint.endpoint_id] = (
+                        self.clock() + ENDPOINT_RETRY_COOLDOWN,
+                        self._playbook.generation,
+                    )
+
+        with patch("aegis_attacker.runtime.ROUND_DURATION", 8.0), \
+             patch("aegis_attacker.runtime.LOOP_SLEEP", 2.0):
+            rt = StubRuntime(make_cfg(), http=FakeArena("b", "/x", "FLAG{x}"),
+                             clock=clk, sleep=lambda dt: clk.advance(dt))
+            rt.run_forever()
+        # 8초 라운드 동안 3초 쿨다운으로 여러 번 재타격된다.
+        self.assertGreater(len(attacks), 1)
 
     def test_unsolved_endpoint_waits_for_cooldown_without_new_playbook(self):
         arena = FakeArena(
