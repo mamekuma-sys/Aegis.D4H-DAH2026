@@ -155,6 +155,22 @@ class TestBudget(unittest.TestCase):
         self.assertEqual(sent["max_completion_tokens"], 600)
         self.assertNotIn("max_tokens", sent)
 
+    def test_gpt56_uses_low_reasoning_and_developer_message(self):
+        clock = FakeClock()
+        sent = {}
+
+        def transport(url, key, body, timeout):
+            sent.update(body)
+            return self._ok_transport(url, key, body, timeout)
+
+        worker = self._worker(clock, transport=transport)
+        clock.advance(120.0)
+        self.assertIsNotNone(worker.run_once())
+        self.assertEqual(sent["model"], "gpt-5.6-sol")
+        self.assertEqual(sent["reasoning_effort"], "low")
+        self.assertEqual(sent["messages"][0]["role"], "developer")
+        self.assertNotIn("temperature", sent)
+
     def test_round_call_cap(self):
         clock = FakeClock()
         worker = self._worker(clock, max_calls=3)
@@ -178,7 +194,7 @@ class TestBudget(unittest.TestCase):
         clock.advance(120.0)
         worker.run_once()
         evidence = worker.usage_evidence()
-        self.assertEqual(evidence["model_id"], "gpt-4o-mini")
+        self.assertEqual(evidence["model_id"], "gpt-5.6-sol")
         self.assertEqual(evidence["calls"], 1)
         self.assertEqual(evidence["prompt_tokens"], 120)
         self.assertEqual(evidence["completion_tokens"], 40)

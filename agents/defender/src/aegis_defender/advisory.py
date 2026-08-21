@@ -212,8 +212,9 @@ class AdvisoryWorker:
         ]
         user = "Aggregated flow statistics from the current round:\n" + "\n".join(lines)
         assert_no_secrets(user)
+        is_gpt56 = self._config.llm_model.startswith("gpt-5.6-")
         return [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "developer" if is_gpt56 else "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": user},
         ]
 
@@ -259,9 +260,12 @@ class AdvisoryWorker:
         body = {
             "model": self._config.llm_model,
             "messages": messages,
-            "temperature": 0.2,
             "max_completion_tokens": 600,
         }
+        if self._config.llm_model.startswith("gpt-5.6-"):
+            body["reasoning_effort"] = "low"
+        else:
+            body["temperature"] = 0.2
         url = f"{self._config.llm_base_url}/v1/chat/completions"
 
         try:

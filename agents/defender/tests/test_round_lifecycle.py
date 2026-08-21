@@ -120,12 +120,16 @@ class TestRuntimeConfig(unittest.TestCase):
         loaded = load_config({})
         self.assertEqual(loaded.agent_socket, "/run/agent.sock")
         self.assertEqual(loaded.llm_base_url, "http://litellm.lig.internal:4000")
-        self.assertEqual(loaded.llm_model, "gpt-4o-mini")
+        self.assertEqual(loaded.llm_model, "gpt-5.6-sol")
         self.assertFalse(loaded.advisory_enabled)
 
     def test_trailing_slash_is_stripped(self):
         loaded = load_config({"LLM_BASE_URL": "http://litellm.lig.internal:4000/"})
         self.assertEqual(loaded.llm_base_url, "http://litellm.lig.internal:4000")
+
+    def test_injected_llm_model_is_ignored(self):
+        loaded = load_config({"LLM_MODEL": "gpt-4o-mini"})
+        self.assertEqual(loaded.llm_model, "gpt-5.6-sol")
 
     def test_relative_socket_path_is_rejected(self):
         # 계약은 절대 경로 mount 다(운영세칙 제16조 1항).
