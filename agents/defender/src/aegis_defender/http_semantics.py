@@ -169,6 +169,53 @@ def _decode_json_cookie(value: bytes) -> tuple[tuple[str, str], ...] | None:
     return tuple(claims)
 
 
+def _looks_like_traversal_or_abs(text: str) -> bool:
+    """상대 파일명만 있는 정상 조회와 LFI 시도를 구분한다."""
+    stripped = text.lstrip()
+    if stripped.startswith(("/", "\\")):
+        return True
+    low = stripped.lower().replace("\\", "/")
+    if ".." in low or "%2e%2e" in low or "%c0%af" in low or "%e0%80%af" in low:
+        return True
+    if "....;" in stripped or "..;" in stripped or "...." in stripped:
+        return True
+    return False
+
+
+def _collapse_local_path(raw: str) -> str | None:
+    """퍼센트 재귀 디코드 후 로컬 경로를 한 형태로 접는다.
+
+    `../`, `....//`, `..;/`, 백슬래시, 오버롱 UTF-8 슬래시(`%c0%af`) 변종을
+    같은 canonical path로 모아, 바이트 나열 시그니처 없이도 LFI를 잡는다.
+    """
+    decoded = _decode_query_component(raw)
+    if decoded is None:
+        return None
+    text = decoded
+    for overlong, slash in (
+        ("\xc0\xaf", "/"),
+        ("\xc0\x2f", "/"),
+        ("\xe0\x80\xaf", "/"),
+    ):
+        text = text.replace(overlong, slash)
+    text = text.replace("\\", "/")
+    # Tomcat-style path parameters: "..;/" → "../"
+    text = re.sub(r";[^/]*", "", text)
+    parts: list[str] = []
+    for segment in text.split("/"):
+        if segment in ("", "."):
+            continue
+        # "...." / "..." 등 점만으로 된 세그먼트는 parent 로 취급한다.
+        if segment == ".." or (len(segment) >= 2 and set(segment) == {"."}):
+            if parts:
+                parts.pop()
+            continue
+        if len(segment) > 256:
+            return None
+        parts.append(segment)
+    return "/" + "/".join(parts) if parts else "/"
+
+
 @dataclass(frozen=True, slots=True)
 class HttpRequestView:
     method: str
@@ -227,6 +274,33 @@ class HttpRequestView:
                 continue
             if union_at < select_at < from_at < source_at:
                 return True
+        return False
+
+    def path_traversal_target_matches(
+        self,
+        query_names: tuple[str, ...],
+        path_basenames: tuple[str, ...],
+    ) -> bool:
+        expected_names = frozenset(name.lower() for name in query_names)
+        expected_bases = frozenset(name.strip().lower() for name in path_basenames if name.strip())
+        if not expected_bases:
+            return False
+        for name, value in self.query_pairs:
+            if expected_names and name not in expected_names:
+                continue
+            decoded = _decode_query_component(value)
+            if decoded is None or not _looks_like_traversal_or_abs(decoded):
+                continue
+            collapsed = _collapse_local_path(value)
+            if collapsed is None:
+                continue
+            lowered = collapsed.lower()
+            base = lowered.rstrip("/").rsplit("/", 1)[-1]
+            if base in expected_bases:
+                return True
+            for marker in expected_bases:
+                if lowered == f"/{marker}" or lowered.endswith(f"/{marker}"):
+                    return True
         return False
 
 

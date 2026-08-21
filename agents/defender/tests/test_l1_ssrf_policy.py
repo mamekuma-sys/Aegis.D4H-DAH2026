@@ -34,6 +34,8 @@ _L3_SENSITIVE_RULE_ID = "sig-l3-sensitive-routes-001"
 _L3_UNION_BROAD_RULE_ID = "sig-l3-product-union-broad-001"
 _L2_SCHEMA_RULE_ID = "sig-l2-graphql-schema-001"
 _L4_FLAG_RULE_ID = "sig-l4-flag-secret-001"
+_L1_CONFIG_CANON_RULE_ID = "http-l1-config-flag-canonical-001"
+_L1_CONFIG_CANON_POST_RULE_ID = "http-l1-config-flag-canonical-post-001"
 _ACTIVE_RULES = {
     _L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID,
     _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
@@ -42,6 +44,7 @@ _ACTIVE_RULES = {
     _L2_GRAPHQL_RULE_ID, _L1_SVC_FLAG_RULE_ID, _L1_PORTAL_FEEDBACK_RULE_ID,
     _L2_RSC_RULE_ID, _L2_WS_FEED_RULE_ID,
     _L3_SENSITIVE_RULE_ID, _L3_UNION_BROAD_RULE_ID, _L2_SCHEMA_RULE_ID, _L4_FLAG_RULE_ID,
+    _L1_CONFIG_CANON_RULE_ID, _L1_CONFIG_CANON_POST_RULE_ID,
 }
 
 _POSITIVE_PATHS = (
@@ -423,7 +426,28 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 self.assertEqual(decision.verdict, VERDICT_DROP)
                 self.assertEqual(decision.rule_id, rule_id)
 
+    def test_config_path_traversal_encodings_drop_via_canonical_rule(self):
+        cases = (
+            "GET /config?file=../../../../flag HTTP/1.1\r\nHost: x\r\n\r\n",
+            "GET /config?file=....//....//flag HTTP/1.1\r\nHost: x\r\n\r\n",
+            "GET /config?file=..%c0%afflag HTTP/1.1\r\nHost: x\r\n\r\n",
+            "GET /config?file=..;/..;/flag HTTP/1.1\r\nHost: x\r\n\r\n",
+            "GET /config?file=..\\..\\flag HTTP/1.1\r\nHost: x\r\n\r\n",
+            "GET /config?file=..%5c..%5cflag HTTP/1.1\r\nHost: x\r\n\r\n",
+            "GET /config?file=..%252f..%252fflag HTTP/1.1\r\nHost: x\r\n\r\n",
+        )
+        for index, raw in enumerate(cases, start=1):
+            with self.subTest(raw=raw.splitlines()[0]):
+                parsed = parse_ip(ipv4_tcp(raw.encode("latin-1"), dst_port=8080))
+                decision = self.policy.decide(930 + index, parsed, 0.0)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertIn(
+                    decision.rule_id,
+                    {_L1_CONFIG_RULE_ID, _L1_CONFIG_CANON_RULE_ID},
+                )
+
     def test_finals_p3_graphql_schema_drops(self):
+
         payload = (
             b"POST /graphql HTTP/1.1\r\nHost: x\r\n\r\n"
             b'{"query":"{ __schema { types { name } } }"}'
@@ -470,9 +494,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p3-l3-llm-harden"
+            "defender-2026-08-21-p3-canonical-lfi"
         )
-        self.assertEqual(self.report.drop_capable_rules, 20)
+        self.assertEqual(self.report.drop_capable_rules, 22)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

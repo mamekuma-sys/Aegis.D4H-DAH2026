@@ -69,6 +69,7 @@ class MatchKind(str, Enum):
     HTTP_JSON_COOKIE_CLAIM = "http_json_cookie_claim"
     HTTP_SSRF_TARGET = "http_ssrf_target"
     HTTP_SQLI_SOURCE = "http_sqli_source"
+    HTTP_PATH_TRAVERSAL = "http_path_traversal"
     TCP_FLAGS = "tcp_flags"
     FLOW_SCORE = "flow_score"
     ALLOW_PROFILE = "allow_profile"
@@ -113,6 +114,7 @@ class Rule:
     target_ports: tuple[int, ...] = ()
     target_path: str = ""
     sql_source: str = ""
+    path_basenames: tuple[str, ...] = ()
 
     @property
     def enforces_drop(self) -> bool:
@@ -352,6 +354,7 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
     target_ports: tuple[int, ...] = ()
     target_path = ""
     sql_source = ""
+    path_basenames: tuple[str, ...] = ()
 
     if kind is MatchKind.PAYLOAD_REGEX:
         pattern_source = str(_require(raw, "pattern", context))
@@ -386,7 +389,11 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
             if value not in normalized_values:
                 normalized_values.append(value)
         claim_values = tuple(normalized_values)
-    elif kind in (MatchKind.HTTP_SSRF_TARGET, MatchKind.HTTP_SQLI_SOURCE):
+    elif kind in (
+        MatchKind.HTTP_SSRF_TARGET,
+        MatchKind.HTTP_SQLI_SOURCE,
+        MatchKind.HTTP_PATH_TRAVERSAL,
+    ):
         if protocol != IPPROTO_TCP:
             raise PolicyValidationError(f"{context}: HTTP semantic rule 의 protocol 이 tcp 가 아니다")
         if not ports:
@@ -439,10 +446,22 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
             target_path = str(_require(raw, "target_path", context))
             if not target_path.startswith("/") or len(target_path) > 256:
                 raise PolicyValidationError(f"{context}: 안전하지 않은 target_path")
-        else:
+        elif kind is MatchKind.HTTP_SQLI_SOURCE:
             sql_source = str(_require(raw, "sql_source", context)).strip().lower()
             if not re.fullmatch(r"[a-z_][a-z0-9_]{0,63}", sql_source):
                 raise PolicyValidationError(f"{context}: 안전하지 않은 sql_source")
+        else:
+            raw_bases = _require(raw, "path_basenames", context)
+            if not isinstance(raw_bases, list) or not (1 <= len(raw_bases) <= 16):
+                raise PolicyValidationError(f"{context}: path_basenames 는 1~16개 배열이어야 한다")
+            normalized_bases = []
+            for item in raw_bases:
+                value = str(item).strip().lower()
+                if not re.fullmatch(r"[a-z0-9_.-]{1,64}", value):
+                    raise PolicyValidationError(f"{context}: 안전하지 않은 path_basenames 항목")
+                if value not in normalized_bases:
+                    normalized_bases.append(value)
+            path_basenames = tuple(normalized_bases)
     elif kind is MatchKind.TCP_FLAGS:
         tcp_flags_name = str(_require(raw, "tcp_flags_name", context))
         if protocol != IPPROTO_TCP:
@@ -499,6 +518,7 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
         target_ports=target_ports,
         target_path=target_path,
         sql_source=sql_source,
+        path_basenames=path_basenames,
     )
     return rule, None
 
@@ -608,7 +628,11 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
             for port in rule.ports:
                 key = (rule.protocol, port, rule.http_method, rule.http_path)
                 http_json_buckets.setdefault(key, []).append(rule)
-        elif rule.kind in (MatchKind.HTTP_SSRF_TARGET, MatchKind.HTTP_SQLI_SOURCE):
+        elif rule.kind in (
+            MatchKind.HTTP_SSRF_TARGET,
+            MatchKind.HTTP_SQLI_SOURCE,
+            MatchKind.HTTP_PATH_TRAVERSAL,
+        ):
             for port in rule.ports:
                 for path in rule.http_paths:
                     key = (rule.protocol, port, rule.http_method, path)

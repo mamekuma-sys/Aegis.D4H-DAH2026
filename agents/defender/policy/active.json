@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-p3-l3-llm-harden",
-  "generated_at": "2026-08-21T04:10:00Z",
+  "bundle_id": "defender-2026-08-21-p3-canonical-lfi",
+  "generated_at": "2026-08-21T04:20:00Z",
   "baseline_profiles": [
     "6/8080",
     "6/9000",
@@ -412,7 +412,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-capture-l1-helper-ssrf",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8080",
@@ -471,7 +471,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-r17-l1-canonical-ssrf",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8080",
@@ -502,7 +502,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-full-corpus-l1-config-traversal",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8080",
@@ -532,7 +532,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p1r2-l1-satdiag-tail",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/9000"
@@ -561,7 +561,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p1r2-l1-satdiag-export",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/9000"
@@ -590,7 +590,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r3-l2-graphql-mission-audit",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -619,7 +619,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r4-l1-svc-flag-gateway",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8080"
@@ -648,7 +648,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r4-l1-portal-feedback",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8080"
@@ -677,7 +677,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r5-l2-rsc-action-env-ref",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -706,7 +706,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r5-l2-ws-mission-feed",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -740,7 +740,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-capture-l2-admin-session",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -769,7 +769,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-capture-l2-loopback-ssrf",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -824,7 +824,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-r17-l2-canonical-ssrf",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -878,7 +878,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-full-corpus-l2-loopback-registry",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -907,7 +907,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-capture-l3-app-meta-sqli",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/9090"
@@ -942,7 +942,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-r17-l3-canonical-sqli",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/9090"
@@ -971,7 +971,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-sig-l3-sensitive-routes",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/9090"
@@ -1000,7 +1000,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-sig-l3-product-union-broad",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/9090"
@@ -1029,7 +1029,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-sig-l2-graphql-schema",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -1059,7 +1059,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-sig-l4-flag-secret",
-      "promoted_in_bundle": "defender-2026-08-21-p3-l3-llm-harden",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
       "parser_version": 1,
       "profile_scope": [
         "6/8410",
@@ -1071,6 +1071,92 @@
       "sla_fixture_id": "TEAM1-P3-SLA-100-001",
       "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 negative fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "http-l1-config-flag-canonical-001",
+      "kind": "http_path_traversal",
+      "category": "path-traversal",
+      "reason_code": "http-l1-config-flag-canonical",
+      "protocol": "tcp",
+      "ports": [
+        8080,
+        8082
+      ],
+      "http_method": "GET",
+      "http_paths": [
+        "/config"
+      ],
+      "query_names": [
+        "file",
+        "path"
+      ],
+      "path_basenames": [
+        "flag",
+        "passwd",
+        "environ",
+        "shadow"
+      ],
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p3-canonical-lfi",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/8080",
+        "6/8082"
+      ],
+      "evidence_id": "TEAM1-CANONICAL-LFI-DESIGN-20260821",
+      "positive_fixture_id": "TEAM1-CANONICAL-LFI-POS-001",
+      "negative_fixture_id": "TEAM1-CANONICAL-LFI-NEG-001",
+      "sla_fixture_id": "TEAM1-P3-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 config fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "http-l1-config-flag-canonical-post-001",
+      "kind": "http_path_traversal",
+      "category": "path-traversal",
+      "reason_code": "http-l1-config-flag-canonical-post",
+      "protocol": "tcp",
+      "ports": [
+        8080,
+        8082
+      ],
+      "http_method": "POST",
+      "http_paths": [
+        "/config"
+      ],
+      "query_names": [
+        "file",
+        "path"
+      ],
+      "path_basenames": [
+        "flag",
+        "passwd",
+        "environ",
+        "shadow"
+      ],
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p3-canonical-lfi-post",
+      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/8080",
+        "6/8082"
+      ],
+      "evidence_id": "TEAM1-CANONICAL-LFI-DESIGN-20260821",
+      "positive_fixture_id": "TEAM1-CANONICAL-LFI-POS-001",
+      "negative_fixture_id": "TEAM1-CANONICAL-LFI-NEG-001",
+      "sla_fixture_id": "TEAM1-P3-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 config fixture가 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
     }

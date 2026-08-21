@@ -349,6 +349,11 @@ class HotPolicy:
                         )
                     elif rule.kind is MatchKind.HTTP_SQLI_SOURCE:
                         matched = request.sql_source_matches(rule.query_names, rule.sql_source)
+                    elif rule.kind is MatchKind.HTTP_PATH_TRAVERSAL:
+                        matched = request.path_traversal_target_matches(
+                            rule.query_names,
+                            rule.path_basenames,
+                        )
                     if matched:
                         if rule.promotion_state is PromotionState.SHADOW:
                             if deferred_shadow is None:

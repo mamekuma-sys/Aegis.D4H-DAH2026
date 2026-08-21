@@ -139,3 +139,29 @@ class TestHttpRequestView(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPathTraversalCanonicalization(unittest.TestCase):
+    def test_encoding_variants_collapse_to_flag(self):
+        variants = (
+            "/config?file=../../../../flag",
+            "/config?file=....//....//flag",
+            "/config?file=..%c0%afflag",
+            "/config?file=..;/..;/flag",
+            "/config?file=..\\..\\flag",
+            "/config?file=..%5c..%5cflag",
+            "/config?file=..%252f..%252fflag",
+        )
+        for target in variants:
+            with self.subTest(target=target):
+                view = parse_http_request(request(target))
+                self.assertTrue(
+                    view.path_traversal_target_matches(("file",), ("flag",)),
+                    msg=target,
+                )
+
+    def test_benign_config_query_does_not_match(self):
+        view = parse_http_request(request("/config?file=settings.json"))
+        self.assertFalse(view.path_traversal_target_matches(("file",), ("flag",)))
+        view = parse_http_request(request("/config?file=flag"))
+        self.assertFalse(view.path_traversal_target_matches(("file",), ("flag",)))

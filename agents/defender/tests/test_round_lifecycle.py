@@ -272,9 +272,9 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(startup[0]["policy_source"], "active")
         self.assertEqual(
             startup[0]["bundle_id"],
-            "defender-2026-08-21-p3-l3-llm-harden"
+            "defender-2026-08-21-p3-canonical-lfi"
         )
-        self.assertEqual(startup[0]["drop_capable_rules"], 20)
+        self.assertEqual(startup[0]["drop_capable_rules"], 22)
         self.assertEqual(startup[0]["demotions"], [])
         self.assertFalse(startup[0]["advisory_enabled"])
 

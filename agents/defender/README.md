@@ -85,7 +85,7 @@ p50·p95·p99·max가 남습니다.
 
 ## 현재 정책 상태
 
-현재 bundle `defender-2026-08-21-p3-l3-llm-harden`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, `service_id` portal feedback, `/api/rsc-action` env-ref, `/ws/mission-feed`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi에 대응하는 20개 규칙만 `ACTIVE`이고 일반 휴리스틱 13개는 `SHADOW`입니다.
+현재 bundle `defender-2026-08-21-p3-canonical-lfi`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, `service_id` portal feedback, `/api/rsc-action` env-ref, `/ws/mission-feed`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi에 대응하는 22개 규칙만 `ACTIVE`이고 일반 휴리스틱 13개는 `SHADOW`입니다.
 
 L2 cookie rule은 raw Base64 문자열을 나열하지 않고 packet-local 또는 최대 4KB in-order stitching으로 완성된 HTTP request prefix와 bounded JSON scalar claim만 해석합니다. GraphQL은 숫자 하나로 명확한 bounded `Content-Length` 본문까지 기다려 분할된 `missionAudit` 요청도 판정합니다. gap·불완전·상한 초과는 차단 사유가 아닙니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
 
@@ -169,6 +169,6 @@ correlation worker와 공유하지 않고 단일 producer만 소유하므로 loc
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
-- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-21-p3-l3-llm-harden", "drop_capable_rules":20, "demotions":[], ...}`
+- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-21-p3-canonical-lfi", "drop_capable_rules":20, "demotions":[], ...}`
 - 종료: SIGTERM에서 2초 내 정리 종료, 종료 코드 0
 - 비밀 비출력: `FLAG{...}`, API key, Bearer 토큰, raw payload가 로그에 나오지 않음을 `tests/test_advisory.py`의 `TestAuditRedaction`이 검증
