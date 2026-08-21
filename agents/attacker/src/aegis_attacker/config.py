@@ -13,13 +13,12 @@ from typing import Mapping
 from .models import Endpoint
 
 DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
-DEFAULT_LLM_MODEL = "gpt-4o-mini"
-DEFAULT_LLM_FALLBACK_MODEL = "gpt-5.6-luna"
-DEFAULT_LLM_FALLBACK_MODELS = ("gpt-5.6-luna", "gpt-5.6-terra")
+# 스켈레톤 mini 주입을 무시하고 본선 고가용 모델을 강제한다.
+DEFAULT_LLM_MODEL = "gpt-5.6-sol"
+DEFAULT_LLM_FALLBACK_MODEL = "gpt-5.4-pro"
+DEFAULT_LLM_FALLBACK_MODELS = ("gpt-5.4-pro", "gpt-5.6-terra", "gpt-5-pro")
 DEFAULT_CONCURRENCY = 32
 MAX_CONCURRENCY = 32
-# Backward-compatible name for callers that imported it; the runtime no longer
-# overwrites an explicitly configured supported model.
 FORCED_LLM_MODEL = DEFAULT_LLM_MODEL
 
 
@@ -92,6 +91,6 @@ def load_config(env: Mapping) -> AttackerConfig:
         submit_token=(env.get("SUBMIT_TOKEN", "") or "").strip(),
         llm_base_url=(env.get("LLM_BASE_URL", "") or DEFAULT_LLM_BASE_URL).rstrip("/"),
         llm_api_key=(env.get("LLM_API_KEY", "") or "").strip(),
-        llm_model=(env.get("LLM_MODEL", "") or DEFAULT_LLM_MODEL).strip(),
+        llm_model=FORCED_LLM_MODEL,
         concurrency=_parse_concurrency(env.get("ATTACK_CONCURRENCY", "")),
     )

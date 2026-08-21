@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-p3-all-semantic",
-  "generated_at": "2026-08-21T05:00:00Z",
+  "bundle_id": "defender-2026-08-21-p3-r7-lockdown",
+  "generated_at": "2026-08-21T06:30:00Z",
   "baseline_profiles": [
     "6/8080",
     "6/9000",
@@ -555,13 +555,13 @@
       "ports": [
         9000
       ],
-      "pattern": "satdiag\\.v1\\.SatDiag/ExportDiagnosticBundle[\\s\\S]{0,800}(?:echo|printf|printenv|cat\\s+/flag|\\$\\{?FLAG\\}?|\"\\$FLAG\"|checkpoint(?:-action)?)",
+      "pattern": "satdiag\\.v1\\.SatDiag/ExportDiagnosticBundle[\\s\\S]{0,1000}(?:echo|printf|printenv|env\\s|cat\\s+/flag|\\$\\{?FLAG\\}?|\"\\$FLAG\"|checkpoint(?:-action)?|/proc/self/environ)",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p1r2-l1-satdiag-export",
-      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
       "parser_version": 1,
       "profile_scope": [
         "6/9000"
@@ -584,18 +584,18 @@
       "ports": [
         8082
       ],
-      "pattern": "POST (?:https?://[^\\s/]+)?/graphql[\\s\\S]{0,900}missionAudit",
+      "pattern": "(?:GET|POST) (?:https?://[^\\s/]+)?/(?:api/)?graphql[\\s\\S]{0,1000}(?:missionAudit|%6[dD]%69%73%73%69%6[fF]%6[eE]%41%75%64%69%74)",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r3-l2-graphql-mission-audit",
-      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
       ],
-      "evidence_id": "TEAM1-PCAP-P2-R3-L2-8082-GRAPHQL-MISSION-AUDIT-20260821",
+      "evidence_id": "TEAM1-PCAP-P3-R7-L2-GRAPHQL-GET-MISSION-AUDIT-20260821",
       "positive_fixture_id": "TEAM1-P2R3-GRAPHQL-MISSION-AUDIT-POS-001",
       "negative_fixture_id": "TEAM1-P2R3-GRAPHQL-HEALTH-NEG-001",
       "sla_fixture_id": "TEAM1-P2R3-L2-SLA-100-001",
@@ -1023,13 +1023,13 @@
       "ports": [
         8082
       ],
-      "pattern": "POST (?:https?://[^\\s/]+)?/graphql[\\s\\S]{0,900}__schema",
+      "pattern": "(?:GET|POST) (?:https?://[^\\s/]+)?/(?:api/)?graphql[\\s\\S]{0,1000}__schema",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-sig-l2-graphql-schema",
-      "promoted_in_bundle": "defender-2026-08-21-p3-canonical-lfi",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -1123,19 +1123,30 @@
       "category": "sensitive-path",
       "reason_code": "http-l2-graphql-mission-audit-get",
       "protocol": "tcp",
-      "ports": [8082],
+      "ports": [
+        8082
+      ],
       "http_method": "GET",
-      "http_paths": ["/graphql"],
-      "query_names": ["query"],
+      "http_paths": [
+        "/graphql",
+        "/api/graphql"
+      ],
+      "query_names": [
+        "query"
+      ],
       "json_field": "query",
-      "match_values": ["missionAudit"],
+      "match_values": [
+        "missionAudit"
+      ],
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "p2r6-l2-graphql-get-semantic",
-      "promoted_in_bundle": "defender-2026-08-21-p2r6-semantic-stream",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
       "parser_version": 1,
-      "profile_scope": ["6/8082"],
+      "profile_scope": [
+        "6/8082"
+      ],
       "evidence_id": "P2-R6-PCAP-GRAPHQL-GET-FLAG-20260821",
       "positive_fixture_id": "P2-R6-GRAPHQL-GET-POS-001",
       "negative_fixture_id": "P2-R6-GRAPHQL-GET-NEG-001",
@@ -1194,19 +1205,28 @@
       "category": "sensitive-path",
       "reason_code": "http-l2-graphql-mission-audit-post",
       "protocol": "tcp",
-      "ports": [8082],
+      "ports": [
+        8082
+      ],
       "http_method": "POST",
-      "http_paths": ["/graphql"],
+      "http_paths": [
+        "/graphql",
+        "/api/graphql"
+      ],
       "query_names": [],
       "json_field": "query",
-      "match_values": ["missionAudit"],
+      "match_values": [
+        "missionAudit"
+      ],
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "p2r6-l2-graphql-post-semantic",
-      "promoted_in_bundle": "defender-2026-08-21-p2r6-semantic-stream",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
       "parser_version": 1,
-      "profile_scope": ["6/8082"],
+      "profile_scope": [
+        "6/8082"
+      ],
       "evidence_id": "P2-R6-PCAP-GRAPHQL-POST-FLAG-20260821",
       "positive_fixture_id": "P2-R6-GRAPHQL-POST-POS-001",
       "negative_fixture_id": "P2-R6-GRAPHQL-POST-NEG-001",
@@ -1222,19 +1242,27 @@
       "category": "sensitive-path",
       "reason_code": "http-l2-rsc-internal-token-ref",
       "protocol": "tcp",
-      "ports": [8082],
+      "ports": [
+        8082
+      ],
       "http_method": "POST",
-      "http_paths": ["/api/rsc-action"],
+      "http_paths": [
+        "/api/rsc-action"
+      ],
       "query_names": [],
       "json_field": "ref",
-      "match_values": ["process.env.MC2_INTERNAL_API_TOKEN"],
+      "match_values": [
+        "process.env.MC2_INTERNAL_API_TOKEN"
+      ],
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "p2r6-l2-rsc-semantic",
       "promoted_in_bundle": "defender-2026-08-21-p2r6-semantic-stream",
       "parser_version": 1,
-      "profile_scope": ["6/8082"],
+      "profile_scope": [
+        "6/8082"
+      ],
       "evidence_id": "P2-R5-R6-PCAP-RSC-INTERNAL-TOKEN-20260821",
       "positive_fixture_id": "P2-R6-RSC-POS-001",
       "negative_fixture_id": "P2-R6-RSC-NEG-001",
@@ -1250,7 +1278,9 @@
       "category": "file-read",
       "reason_code": "grpc-l1-tail-sensitive-file",
       "protocol": "tcp",
-      "ports": [9000],
+      "ports": [
+        9000
+      ],
       "grpc_semantic": "satdiag-tail-sensitive-file",
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
@@ -1258,7 +1288,9 @@
       "promotion_cohort": "p2r6-l1-grpc-tail-stream",
       "promoted_in_bundle": "defender-2026-08-21-p2r6-semantic-stream",
       "parser_version": 1,
-      "profile_scope": ["6/9000"],
+      "profile_scope": [
+        "6/9000"
+      ],
       "evidence_id": "P2-R6-PCAP-GRPC-ONE-BYTE-TAIL-20260821",
       "positive_fixture_id": "P2-R6-GRPC-TAIL-FRAGMENTED-POS-001",
       "negative_fixture_id": "P2-R6-GRPC-HEALTH-NEG-001",
@@ -1274,18 +1306,33 @@
       "category": "template-injection",
       "reason_code": "http-l1-portal-feedback-ssti",
       "protocol": "tcp",
-      "ports": [8080],
+      "ports": [
+        8080
+      ],
       "http_method": "GET",
-      "http_paths": ["/portal/feedback"],
-      "query_names": ["service_id"],
-      "match_values": ["lipsum", "attr", "__globals__", "__builtins__", "open", "flag"],
+      "http_paths": [
+        "/portal/feedback"
+      ],
+      "query_names": [
+        "service_id"
+      ],
+      "match_values": [
+        "lipsum",
+        "attr",
+        "__globals__",
+        "__builtins__",
+        "open",
+        "flag"
+      ],
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "p2r6-l1-portal-ssti-semantic",
       "promoted_in_bundle": "defender-2026-08-21-p3-all-semantic",
       "parser_version": 1,
-      "profile_scope": ["6/8080"],
+      "profile_scope": [
+        "6/8080"
+      ],
       "evidence_id": "P2-R6-PCAP-PORTAL-SSTI-FLAG-20260821",
       "positive_fixture_id": "P2-R6-PORTAL-SSTI-POS-001",
       "negative_fixture_id": "P2-R6-PORTAL-SSTI-NEG-001",
@@ -1301,7 +1348,9 @@
       "category": "command-injection",
       "reason_code": "grpc-l1-export-flag-command",
       "protocol": "tcp",
-      "ports": [9000],
+      "ports": [
+        9000
+      ],
       "grpc_semantic": "satdiag-export-flag-command",
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
@@ -1309,7 +1358,9 @@
       "promotion_cohort": "p2r6-l1-grpc-export-stream",
       "promoted_in_bundle": "defender-2026-08-21-p2r6-semantic-stream",
       "parser_version": 1,
-      "profile_scope": ["6/9000"],
+      "profile_scope": [
+        "6/9000"
+      ],
       "evidence_id": "P2-R6-PCAP-GRPC-ONE-BYTE-EXPORT-20260821",
       "positive_fixture_id": "P2-R6-GRPC-EXPORT-FRAGMENTED-POS-001",
       "negative_fixture_id": "P2-R6-GRPC-EXPORT-NORMAL-NEG-001",
@@ -1325,24 +1376,28 @@
       "category": "mqtt-discovery",
       "reason_code": "sig-l3-mqtt-wildcard-subscribe",
       "protocol": "tcp",
-      "ports": [1883],
-      "pattern": "\\x82[\\x00-\\xff]{1,256}(?:\\x00\\x01#|\\x00\\x06\\$SYS/#)",
-      "ignore_case": false,
-      "promotion_state": "SHADOW",
+      "ports": [
+        1883
+      ],
+      "pattern": "(?:\\x82[\\x00-\\xff]{0,200}(?:\\x00\\x01#|\\x00\\x05\\$SYS|\\x00\\x06\\$SYS/#|flag|uav/|mcs/|node/config)|uav/node/config|mcs_token)",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
-      "promotion_cohort": "p3-l3-mqtt-observation",
-      "promoted_in_bundle": "pending-l3-mqtt-evidence",
+      "promotion_cohort": "team1-p3-r7-mqtt",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
       "parser_version": 1,
-      "profile_scope": ["6/1883"],
-      "evidence_id": "PENDING-L3-MQTT-PCAP",
-      "positive_fixture_id": "L3-MQTT-WILDCARD-POS-001",
-      "negative_fixture_id": "PENDING-L3-MQTT-NORMAL",
-      "sla_fixture_id": "PENDING-L3-MQTT-SLA-100",
+      "profile_scope": [
+        "6/1883"
+      ],
+      "evidence_id": "TEAM1-PCAP-P3-R7-L3-MQTT-UAV-NODE-CONFIG-20260821",
+      "positive_fixture_id": "SIG-L3-MQTT-UAV-CONFIG-POS-001",
+      "negative_fixture_id": "SIG-L3-MQTT-WILDCARD-NEG-001",
+      "sla_fixture_id": "TEAM1-P3-SLA-100-001",
       "expires_at": "2026-09-01T00:00:00Z",
-      "rollback_condition": "실제 MQTT 정상 구독과 충돌하면 rule 제거; 실 PCAP·negative·SLA fixture와 양측 review 전 ACTIVE 금지",
-      "owner_review": "pending",
-      "lead_review": "pending"
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 MQTT CONNECT fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
     },
     {
       "rule_id": "sig-l3-rtsp-sensitive-describe-001",
@@ -1350,24 +1405,57 @@
       "category": "sensitive-path",
       "reason_code": "sig-l3-rtsp-sensitive-describe",
       "protocol": "tcp",
-      "ports": [8554],
+      "ports": [
+        8554
+      ],
       "pattern": "(?:DESCRIBE|GET_PARAMETER) rtsp://[^\\r\\n ]{1,253}/(?:flag|secret|admin|debug)(?:[/? ]|RTSP)",
       "ignore_case": true,
-      "promotion_state": "SHADOW",
+      "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
-      "promotion_cohort": "p3-l3-rtsp-observation",
-      "promoted_in_bundle": "pending-l3-rtsp-evidence",
+      "promotion_cohort": "team1-p3-r7-rtsp",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
       "parser_version": 1,
-      "profile_scope": ["6/8554"],
-      "evidence_id": "PENDING-L3-RTSP-PCAP",
-      "positive_fixture_id": "L3-RTSP-SENSITIVE-POS-001",
-      "negative_fixture_id": "PENDING-L3-RTSP-NORMAL",
-      "sla_fixture_id": "PENDING-L3-RTSP-SLA-100",
+      "profile_scope": [
+        "6/8554"
+      ],
+      "evidence_id": "TEAM1-PCAP-P3-R7-L3-RTSP-FLAG-20260821",
+      "positive_fixture_id": "SIG-L3-RTSP-FLAG-POS-001",
+      "negative_fixture_id": "SIG-L3-RTSP-FLAG-NEG-001",
+      "sla_fixture_id": "TEAM1-P3-SLA-100-001",
       "expires_at": "2026-09-01T00:00:00Z",
-      "rollback_condition": "실제 RTSP 정상 경로와 충돌하면 rule 제거; 실 PCAP·negative·SLA fixture와 양측 review 전 ACTIVE 금지",
-      "owner_review": "pending",
-      "lead_review": "pending"
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 RTSP OPTIONS fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "sig-l3-mqtt-uav-config-001",
+      "kind": "payload_regex",
+      "category": "sensitive-path",
+      "reason_code": "sig-l3-mqtt-uav-config",
+      "protocol": "tcp",
+      "ports": [
+        1883
+      ],
+      "pattern": "uav/node/config|mcs_token|mcs/tasking",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p3-r7-mqtt-config",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/1883"
+      ],
+      "evidence_id": "TEAM1-PCAP-P3-R7-L3-MQTT-CONFIG-20260821",
+      "positive_fixture_id": "SIG-L3-MQTT-UAV-CONFIG-POS-001",
+      "negative_fixture_id": "SIG-L3-MQTT-WILDCARD-NEG-001",
+      "sla_fixture_id": "TEAM1-P3-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 MQTT CONNECT fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
     }
   ],
   "alert_profiles": [

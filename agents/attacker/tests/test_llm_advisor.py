@@ -121,16 +121,16 @@ class TestLLMAdvisor(unittest.TestCase):
         self.assertEqual(payload["max_completion_tokens"], LLM_MAX_COMPLETION_TOKENS)
         self.assertNotIn("max_tokens", payload)
 
-    def test_primary_mini_uses_temperature_without_reasoning(self):
+    def test_primary_sol_uses_reasoning_and_developer_message(self):
         adv, transport = make_advisor(
             chat_response('{"path":"/x"}'), config=SOL_CFG
         )
         adv.advise_exploit("b", "", [])
         payload = json.loads(transport.last_body)
         self.assertEqual(payload["model"], DEFAULT_LLM_MODEL)
-        self.assertEqual(payload["temperature"], 0)
-        self.assertEqual(payload["messages"][0]["role"], "system")
-        self.assertNotIn("reasoning_effort", payload)
+        self.assertEqual(payload["reasoning_effort"], LLM_REASONING_EFFORT)
+        self.assertEqual(payload["messages"][0]["role"], "developer")
+        self.assertNotIn("temperature", payload)
 
     def test_pro_model_omits_unsupported_temperature(self):
         adv, transport = make_advisor(
@@ -145,9 +145,9 @@ class TestLLMAdvisor(unittest.TestCase):
         adv, transport = make_advisor(
             chat_response('{"path":"/x"}'), config=SOL_CFG
         )
-        adv.advise_exploit("b", "", [], model="gpt-5.6-sol")
+        adv.advise_exploit("b", "", [], model="gpt-5.6-terra")
         payload = json.loads(transport.last_body)
-        self.assertEqual(payload["model"], "gpt-5.6-sol")
+        self.assertEqual(payload["model"], "gpt-5.6-terra")
         self.assertEqual(payload["reasoning_effort"], LLM_REASONING_EFFORT)
         self.assertEqual(payload["messages"][0]["role"], "developer")
         self.assertNotIn("temperature", payload)
@@ -160,7 +160,7 @@ class TestLLMAdvisor(unittest.TestCase):
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertNotIn("reasoning_effort", payload)
 
-    def test_sol_transport_failure_falls_back_to_terra(self):
+    def test_sol_transport_failure_falls_back_to_pro(self):
         budget = RoundBudget()
         adv, transport = make_advisor(
             [TimeoutError("upstream timeout"), chat_response('{"path":"/fallback"}')],
@@ -176,8 +176,8 @@ class TestLLMAdvisor(unittest.TestCase):
             [DEFAULT_LLM_MODEL, DEFAULT_LLM_FALLBACK_MODEL],
         )
         first, second = (json.loads(body) for body in transport.bodies)
-        self.assertNotIn("reasoning_effort", first)
-        self.assertEqual(second["reasoning_effort"], LLM_REASONING_EFFORT)
+        self.assertEqual(first["reasoning_effort"], LLM_REASONING_EFFORT)
+        self.assertNotIn("temperature", second)
         self.assertEqual(transport.timeouts, [30.0, 30.0])
         self.assertEqual(budget.llm_calls, 2)
         self.assertEqual(budget.llm_tokens, 42)
@@ -279,8 +279,8 @@ class TestLLMAdvisor(unittest.TestCase):
         prices = {
             item["id"]: item for item in contract["price_schedule"]["models"]
         }
-        self.assertEqual(prices[DEFAULT_LLM_MODEL]["output"], 0.66)
-        self.assertEqual(prices[DEFAULT_LLM_FALLBACK_MODEL]["output"], 1.2)
+        self.assertEqual(prices[DEFAULT_LLM_MODEL]["output"], 30)
+        self.assertEqual(prices[DEFAULT_LLM_FALLBACK_MODEL]["output"], 180)
         self.assertEqual(contract["team_total_budget_usd"], 1360)
 
 

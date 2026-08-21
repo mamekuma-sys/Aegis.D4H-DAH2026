@@ -309,8 +309,8 @@ class TestLoadOrder(unittest.TestCase):
     def test_shipped_bundle_activates_only_reviewed_observed_rules(self):
         compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-all-semantic")
-        self.assertEqual(report.drop_capable_rules, 28)
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-r7-lockdown")
+        self.assertEqual(report.drop_capable_rules, 31)
         self.assertEqual(report.demotions, ())
         self.assertEqual(
             compiled.baseline_profiles,
@@ -345,6 +345,9 @@ class TestLoadOrder(unittest.TestCase):
             "grpc-l1-tail-sensitive-file-001",
             "grpc-l1-export-flag-command-001",
             "http-l1-portal-feedback-ssti-semantic-001",
+            "sig-l3-mqtt-wildcard-subscribe-001",
+            "sig-l3-mqtt-uav-config-001",
+            "sig-l3-rtsp-sensitive-describe-001",
         }
         for rule_id, rule in compiled.rules_by_id.items():
             expected = PromotionState.ACTIVE if rule_id in active_ids else PromotionState.SHADOW
@@ -352,8 +355,8 @@ class TestLoadOrder(unittest.TestCase):
 
     def test_shipped_bundle_keeps_reviewed_rules_active_during_finals_week(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1787356800.0)
-        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-all-semantic")
-        self.assertEqual(report.drop_capable_rules, 28)
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p3-r7-lockdown")
+        self.assertEqual(report.drop_capable_rules, 31)
         self.assertEqual(report.demotions, ())
 
     def test_shipped_active_rules_are_evidence_scoped_by_observed_layer(self):
@@ -379,13 +382,13 @@ class TestLoadOrder(unittest.TestCase):
         # 같은 evidence gate를 통과시킨 뒤 이 기대값과 bundle을 함께 갱신한다.
         self.assertEqual(
             {port: len(rule_ids) for port, rule_ids in active_by_port.items()},
-            {8080: 8, 8082: 16, 9000: 4, 9090: 5, 8410: 1, 8420: 1},
+            {8080: 8, 8082: 16, 9000: 4, 9090: 5, 8410: 1, 8420: 1, 1883: 2, 8554: 1},
         )
 
     def test_shipped_bundle_expires_after_finals_validity_window(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1788220800.0)
         self.assertEqual(report.drop_capable_rules, 0)
-        self.assertEqual(len(report.demotions), 28)
+        self.assertEqual(len(report.demotions), 31)
         self.assertTrue(all(entry.endswith(":expired") for entry in report.demotions))
 
     def test_shipped_fallback_is_valid(self):

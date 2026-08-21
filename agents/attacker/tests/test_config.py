@@ -65,13 +65,13 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(cfg.llm_base_url, DEFAULT_LLM_BASE_URL)
         self.assertEqual(cfg.llm_model, DEFAULT_LLM_MODEL)
 
-    def test_respects_injected_llm_model_env(self):
+    def test_ignores_skeleton_mini_and_forces_frontier_model(self):
         cfg = load_config({
             "TARGETS": "a", "PORTS": "8080", "LLM_API_KEY": "k",
             "LLM_MODEL": "gpt-4o-mini",
         })
         self.assertEqual(cfg.llm_model, DEFAULT_LLM_MODEL)
-        self.assertEqual(cfg.llm_model, "gpt-4o-mini")
+        self.assertEqual(cfg.llm_model, "gpt-5.6-sol")
 
     def test_concurrency_optional_with_default(self):
         self.assertEqual(load_config({}).concurrency, 32)

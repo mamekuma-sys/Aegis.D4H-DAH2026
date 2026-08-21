@@ -51,6 +51,9 @@ _ACTIVE_RULES = {
     "grpc-l1-tail-sensitive-file-001",
     "grpc-l1-export-flag-command-001",
     "http-l1-portal-feedback-ssti-semantic-001",
+    "sig-l3-mqtt-wildcard-subscribe-001",
+    "sig-l3-mqtt-uav-config-001",
+    "sig-l3-rtsp-sensitive-describe-001",
 }
 
 _POSITIVE_PATHS = (
@@ -515,9 +518,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p3-all-semantic"
+            "defender-2026-08-21-p3-r7-lockdown"
         )
-        self.assertEqual(self.report.drop_capable_rules, 28)
+        self.assertEqual(self.report.drop_capable_rules, 31)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

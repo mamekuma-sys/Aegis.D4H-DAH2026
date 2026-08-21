@@ -181,7 +181,7 @@ class TestBudget(unittest.TestCase):
         self.assertEqual(sent["messages"][0]["role"], "developer")
         self.assertNotIn("temperature", sent)
 
-    def test_primary_pro_omits_temperature(self):
+    def test_primary_sol_uses_reasoning(self):
         clock = FakeClock()
         sent = {}
 
@@ -192,9 +192,10 @@ class TestBudget(unittest.TestCase):
         worker = self._worker(clock, transport=transport)
         clock.advance(120.0)
         self.assertIsNotNone(worker.run_once())
-        self.assertEqual(sent["model"], "gpt-5.4-pro")
+        self.assertEqual(sent["model"], "gpt-5.6-sol")
+        self.assertEqual(sent["reasoning_effort"], "high")
+        self.assertEqual(sent["messages"][0]["role"], "developer")
         self.assertNotIn("temperature", sent)
-        self.assertNotIn("reasoning_effort", sent)
 
     def test_round_call_cap(self):
         clock = FakeClock()
@@ -219,7 +220,7 @@ class TestBudget(unittest.TestCase):
         clock.advance(120.0)
         worker.run_once()
         evidence = worker.usage_evidence()
-        self.assertEqual(evidence["model_id"], "gpt-5.4-pro")
+        self.assertEqual(evidence["model_id"], "gpt-5.6-sol")
         self.assertEqual(evidence["calls"], 1)
         self.assertEqual(evidence["prompt_tokens"], 120)
         self.assertEqual(evidence["completion_tokens"], 40)
