@@ -1,5 +1,4 @@
 import threading
-import time
 import unittest
 
 from aegis_attacker.playbook import Playbook
@@ -57,43 +56,15 @@ class TestPlaybook(unittest.TestCase):
         self.assertEqual(pb.generation, 0)
 
 
-class TestSingleFlight(unittest.TestCase):
-    def test_stop_event_wakes_waiter_without_mutating_playbook_from_signal_path(self):
+class TestBudgetBurnClaims(unittest.TestCase):
+    """$1360 한도 소진을 위해 claim_or_wait는 항상 solve를 반환한다."""
+
+    def test_every_claim_is_solve(self):
         pb = Playbook()
         self.assertEqual(pb.claim_or_wait("fp"), "solve")
-        results = []
-        stop = threading.Event()
-
-        waiter = threading.Thread(
-            target=lambda: results.append(
-                pb.claim_or_wait("fp", wait_timeout=5.0, stop_event=stop)
-            )
-        )
-        waiter.start()
-        time.sleep(0.02)
-        stop.set()
-        waiter.join(0.5)
-
-        self.assertFalse(waiter.is_alive())
-        self.assertEqual(results, ["skip"])
-
-    def test_first_caller_solves_others_wait_then_reuse(self):
-        pb = Playbook()
-        # 첫 표적: solve 권한 획득
-        self.assertEqual(pb.claim_or_wait("fp"), "solve")
-        # 두 번째 표적: solver 진행 중 — 짧은 대기 후 아직 미해결이면 skip
-        self.assertEqual(pb.claim_or_wait("fp", wait_timeout=0.01), "skip")
-        # solver가 성공 기록 후 종료
+        self.assertEqual(pb.claim_or_wait("fp", wait_timeout=0.01), "solve")
         pb.record("fp", {"method": "GET", "path": "/admin"})
         pb.finish_llm("fp")
-        # 이후 표적: playbook 재사용
-        self.assertEqual(pb.claim_or_wait("fp"), "reuse")
-
-    def test_failed_solver_lets_next_become_solver(self):
-        pb = Playbook()
-        self.assertEqual(pb.claim_or_wait("fp"), "solve")
-        pb.finish_llm("fp")  # 성공 없이 종료(기록 없음)
-        # 답이 없으므로 다음 표적이 새 solver가 된다
         self.assertEqual(pb.claim_or_wait("fp"), "solve")
 
     def test_empty_fingerprint_always_solves(self):
@@ -101,7 +72,7 @@ class TestSingleFlight(unittest.TestCase):
         self.assertEqual(pb.claim_or_wait(""), "solve")
         pb.finish_llm("")  # 안전(무동작)
 
-    def test_concurrent_claims_single_solver(self):
+    def test_concurrent_claims_all_solve(self):
         pb = Playbook()
         results = []
         lock = threading.Lock()
@@ -116,9 +87,9 @@ class TestSingleFlight(unittest.TestCase):
             t.start()
         for t in threads:
             t.join()
-        # 정확히 하나만 solve, 나머지는 skip(미해결) — 동시 LLM 폭주 방지
-        self.assertEqual(results.count("solve"), 1)
-        self.assertEqual(results.count("skip"), 5)
+        self.assertEqual(results.count("solve"), 6)
+        self.assertEqual(results.count("skip"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

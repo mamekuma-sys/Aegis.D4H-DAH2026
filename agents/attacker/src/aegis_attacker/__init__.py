@@ -7,5 +7,5 @@
 AI 진위 증빙(운영세칙 제23조)을 단순하게 만들기 위한 선택이다.
 """
 
-__version__ = "0.3.10-force-llm"
-ATTACK_PROFILE = "gpt-5.4-pro+force-llm"
+__version__ = "0.3.11-burn-budget"
+ATTACK_PROFILE = "gpt-5.4-pro+burn-1360"

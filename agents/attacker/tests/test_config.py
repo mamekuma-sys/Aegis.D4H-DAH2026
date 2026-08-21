@@ -75,11 +75,11 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(cfg.llm_model, "gpt-5.4-pro")
 
     def test_concurrency_optional_with_default(self):
-        self.assertEqual(load_config({}).concurrency, 16)  # 기본 16
+        self.assertEqual(load_config({}).concurrency, 32)  # 기본 32 ($1360 소진)
         self.assertEqual(load_config({"ATTACK_CONCURRENCY": "4"}).concurrency, 4)
         self.assertEqual(load_config({"ATTACK_CONCURRENCY": "0"}).concurrency, 1)  # 최소 1
         self.assertEqual(load_config({"ATTACK_CONCURRENCY": "9999"}).concurrency, 32)  # 상한
-        self.assertEqual(load_config({"ATTACK_CONCURRENCY": "abc"}).concurrency, 16)  # 무효→기본
+        self.assertEqual(load_config({"ATTACK_CONCURRENCY": "abc"}).concurrency, 32)  # 무효→기본
 
 
 if __name__ == "__main__":

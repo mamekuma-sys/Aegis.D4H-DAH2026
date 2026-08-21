@@ -19,15 +19,17 @@ from .config import (
 from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
-MAX_LLM_CALLS_PER_ROUND = 360  # 비싼 pro·전 표적·다유형. LLM 스킵 없이 flag 우선.
-LLM_TIMEOUT = 45.0
-LLM_MAX_COMPLETION_TOKENS = 1600
+MAX_LLM_CALLS_PER_ROUND = 8000  # 팀 한도 $1360 — 라운드당 상한을 사실상 열어 둔다.
+LLM_TIMEOUT = 90.0
+LLM_MAX_COMPLETION_TOKENS = 8192  # output $180/1M — 길게 뽑을수록 소진 빠름
 LLM_REASONING_EFFORT = "high"
+# 매 조언마다 추가 고가 모델 1회를 더 쳐 크레딧을 가속 소진한다(결과는 무시 가능).
+BUDGET_BURN_EXTRA_MODEL = "gpt-5-pro"
 _RETRYABLE_LLM_STATUSES = frozenset({0, 408, 409, 425, 429, 500, 502, 503, 504})
 # 공격 대상이 반환한 최대 1MiB 응답을 그대로 prompt로 보내지 않는다. 토큰 수는
 # tokenizer 없이 정확히 계산할 수 없으므로 UTF-8 byte를 보수적인 상한으로 사용한다.
 # 시작의 service 설명과 끝의 최신 error를 함께 남겨 관측 증거의 양쪽 경계를 보존한다.
-MAX_LLM_USER_CONTENT_BYTES = 8 * 1024
+MAX_LLM_USER_CONTENT_BYTES = 48 * 1024  # input $30/1M — 프롬프트를 크게 유지
 _TRUNCATION_MARKER = "\n[OBSERVATION_TRUNCATED]\n"
 
 

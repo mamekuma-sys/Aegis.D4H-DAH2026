@@ -168,7 +168,7 @@ class TestLLMAdvisor(unittest.TestCase):
         first, second = (json.loads(body) for body in transport.bodies)
         self.assertNotIn("reasoning_effort", first)
         self.assertEqual(second["reasoning_effort"], LLM_REASONING_EFFORT)
-        self.assertEqual(transport.timeouts, [45.0, 45.0])
+        self.assertEqual(transport.timeouts, [90.0, 90.0])
         self.assertEqual(budget.llm_calls, 2)
         self.assertEqual(budget.llm_tokens, 42)
 

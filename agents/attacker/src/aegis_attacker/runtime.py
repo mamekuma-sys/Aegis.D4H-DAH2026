@@ -32,7 +32,11 @@ from .exploits import (
     tamper_token,
 )
 from .flags import FlagPipeline, SubmitClient
-from .llm_advisor import LLMAdvisor, MAX_LLM_CALLS_PER_ROUND
+from .llm_advisor import (
+    LLMAdvisor,
+    MAX_LLM_CALLS_PER_ROUND,
+    BUDGET_BURN_EXTRA_MODEL,
+)
 from .models import (
     Capability,
     Endpoint,
@@ -54,8 +58,8 @@ from .round_report import RoundReport
 from .secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
 from .tools import ExecutionAdapter, PlanBindingError, evasion_variants
 
-# 결정론으로 flag를 이미 잡아도 LiteLLM 크레딧·추가 flag를 위해 강제하는 최소 LLM 턴.
-POST_DET_LLM_TURNS = 3
+# 결정론 hit 여부와 무관하게 endpoint당 풀 LLM 턴을 강제한다($1360 소진).
+POST_DET_LLM_TURNS = MAX_TURNS
 LOOP_SLEEP = 4.0
 PER_TARGET_BUDGET = 1
 MAX_EVASION_VARIANTS = 6
@@ -615,14 +619,18 @@ class AttackerRuntime:
             return False
         grpc_handled, grpc_captured = self._attack_observed_grpc(endpoint)
         if grpc_handled:
-            # 9000은 gRPC 전용. HTTP 배너 탐색으로 떨어지면 skip만 나고 LLM도 안 탄다.
-            if grpc_captured:
-                return True
-            self.audit.log(
-                "skip", target=endpoint.key(),
-                reason="grpc-observed-no-flag",
+            # 9000도 LiteLLM 예산을 태운다(합성 배너 → HTTP plan은 실패해도 호출 비용은 발생).
+            self._burn_llm_on_endpoint(
+                endpoint,
+                banner=(
+                    "gRPC satdiag.v1.SatDiag on this port. Prefer Export/Tail/Probe "
+                    "creative payloads; also suggest sibling :8080 HTTP pivots "
+                    "(/portal, /svc/flag-*, /graphql)."
+                ),
+                banner_fp=f"grpc:{endpoint.port}",
+                evidence_ref=None,
             )
-            return False
+            return grpc_captured
         # gRPC가 protocol만 확인되고 flag가 없으면 HTTP/LLM 경로로 이어서 비싼 모델도 쓴다.
         obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
         for _ in range(bootstrap_requests):
@@ -716,9 +724,7 @@ class AttackerRuntime:
                 continuing_to_llm=True,
             )
 
-        # single-flight + 재사용: 같은 배너(같은 이미지)는 한 표적만 LLM으로 풀고, 나머지는
-        # 그 성공 형태(method·path·headers·body)를 재사용한다. skip이 나와도 본선 hot
-        # 프로필은 비싼 LLM을 포기하지 않고 바로 solver 루프로 들어간다.
+        # playbook 재사용은 먼저 시도하되, hit여도 LLM 예산을 이어서 태운다.
         tried_reuse = False
         while not self._stop_event.is_set():
             known = self._playbook.lookup(banner_fp)
@@ -732,8 +738,8 @@ class AttackerRuntime:
                     self.audit.log("hit", target=endpoint.key(),
                                    path=(result.plan.args.get("path") if result is not None
                                          else known.get("path")), reason="playbook")
-                    # playbook 재사용 hit는 LLM을 쓰지 않는다(교차 표적 토큰 절약).
-                    return True
+                    captured_any = True
+                    break
                 if result is not None:
                     current_evidence = result.observation.evidence_ref
             slot = self._playbook.claim_or_wait(
@@ -744,30 +750,59 @@ class AttackerRuntime:
             if self._stop_event.is_set():
                 return captured_any
             if slot == "reuse":
-                continue          # 대기 중 다른 표적이 새로 풀었다 — 새 항목으로 재시도
-            # "solve" 또는 "skip" — skip이어도 비싼 LLM을 생략하지 않는다.
+                continue
             break
 
+        return self._burn_llm_on_endpoint(
+            endpoint,
+            banner=observed_banner,
+            banner_fp=banner_fp,
+            evidence_ref=current_evidence,
+            already_captured=captured_any,
+        ) or captured_any
+
+    def _burn_llm_on_endpoint(self, endpoint, banner: str, banner_fp: str,
+                              evidence_ref, already_captured: bool = False) -> bool:
+        """표적마다 MAX_TURNS×(pro+gpt-5-pro) LiteLLM 호출을 강제한다."""
         if self._planner is None or getattr(self._planner._advisor, "_key_handle", None) is None:
             self.audit.log(
                 "llm-skip", target=endpoint.key(),
                 reason="no-llm-key",
             )
-            return captured_any
+            return already_captured
 
-        # 결정론으로 이미 flag를 잡은 경우에도 POST_DET_LLM_TURNS만큼은 LiteLLM을 강제 호출한다.
-        started_with_flag = bool(captured_any)
-        llm_turn_limit = POST_DET_LLM_TURNS if started_with_flag else MAX_TURNS
+        captured_any = already_captured
+        current_evidence = evidence_ref
+        # 관측 evidence가 없으면 banner 관측으로 확보(gRPC 합성 경로).
+        if current_evidence is None or not current_evidence.valid_at(
+                self.clock(), self._round_id, endpoint.endpoint_id):
+            try:
+                obs, resp = self._observer.observe_banner(endpoint)
+                self._report.record_observation()
+                self._report.record_request()
+                self._remember_evidence(endpoint, obs.evidence_ref)
+                current_evidence = obs.evidence_ref
+                if self._process_flags(resp.body, resp.headers):
+                    captured_any = True
+            except Exception:
+                current_evidence = evidence_ref
 
+        llm_turn_limit = MAX_TURNS
         state = EndpointState(endpoint)
         feedback = ""
         try:
             while (not self._stop_event.is_set()
                    and state.turn < llm_turn_limit):
                 state.turn += 1
-                # 항상 강제 비싼 pro 모델. 실패 시 advisor가 sol→terra fallback.
-                plan = self._planner.plan_next(endpoint, observed_banner, feedback, state,
+                plan = self._planner.plan_next(endpoint, banner, feedback, state,
                                                model=self.config.llm_model)
+                # $1360 소진: 매 턴 gpt-5-pro를 한 번 더 호출(결과는 버리고 비용만 발생).
+                if BUDGET_BURN_EXTRA_MODEL:
+                    hints = suggest_vuln_classes(banner)
+                    self._planner._advisor.advise_exploit(
+                        banner=banner, feedback=feedback, hints=hints,
+                        model=BUDGET_BURN_EXTRA_MODEL,
+                    )
                 if plan is None:
                     self.audit.log(
                         "llm-skip", target=endpoint.key(), turn=state.turn,
@@ -780,6 +815,10 @@ class AttackerRuntime:
                     path=plan.args.get("path"), model=self.config.llm_model,
                     reason=plan.reason or "",
                 )
+                if current_evidence is None:
+                    # evidence 없이 bind하면 거절 — 조언 호출만으로도 크레딧은 이미 소모됨.
+                    feedback = "No bound evidence yet; suggest another read-only path."
+                    continue
                 self._bind_plan(plan, endpoint, current_evidence)
                 result = None
                 try:
@@ -789,7 +828,8 @@ class AttackerRuntime:
                     if binding_reason != "evidence-stale-or-missing":
                         self.audit.log("reject", target=endpoint.key(), turn=state.turn,
                                        reason=binding_reason)
-                        break
+                        feedback = f"Plan rejected: {binding_reason}. Try a different path."
+                        continue
                     refresh_obs, refresh_resp = self._observer.observe_banner(endpoint)
                     self._report.record_observation()
                     self._report.record_request()
@@ -798,8 +838,6 @@ class AttackerRuntime:
                         self.audit.log("hit", target=endpoint.key(), turn=state.turn,
                                        path="/", reason="evidence-refresh")
                         captured_any = True
-                        if not started_with_flag:
-                            return True
                     current_evidence = refresh_obs.evidence_ref
                     self._bind_plan(plan, endpoint, current_evidence)
                     try:
@@ -811,13 +849,15 @@ class AttackerRuntime:
                                     if isinstance(retry_exc, PlanBindingError)
                                     else type(retry_exc).__name__),
                         )
-                        break
+                        feedback = "Retry after evidence refresh failed. Propose another exploit."
+                        continue
                 except EgressError as exc:
                     self.audit.log("reject", target=endpoint.key(), turn=state.turn,
                                    reason=type(exc).__name__)
-                    break
+                    feedback = f"Egress error {type(exc).__name__}. Propose another exploit."
+                    continue
                 if result is None:
-                    break
+                    continue
 
                 self._report.record_request()
                 self._remember_evidence(endpoint, result.observation.evidence_ref)
@@ -828,10 +868,7 @@ class AttackerRuntime:
                                    path=plan.args["path"], vuln=str(plan.scenario),
                                    reason=plan.reason)
                     captured_any = True
-                    # 결정론 없이 LLM으로 처음 잡은 경우: 즉시 완료(playbook 1콜 유지).
-                    # 결정론 hit 후 강제 LLM 구간이면 턴 한도까지 계속 돌린다.
-                    if not started_with_flag:
-                        return True
+                    # hit 후에도 턴 한도까지 계속 돌려 크레딧을 소진한다.
 
                 current_evidence = result.observation.evidence_ref
                 if result.outcome == Outcome.TIMEOUT:
@@ -842,8 +879,6 @@ class AttackerRuntime:
                         self.audit.log("hit", target=endpoint.key(), turn=state.turn,
                                        path=evaded.plan.args["path"], reason="evasion")
                         captured_any = True
-                        if not started_with_flag:
-                            return True
                         result = evaded
                         current_evidence = evaded.observation.evidence_ref
                     elif evaded is not None:

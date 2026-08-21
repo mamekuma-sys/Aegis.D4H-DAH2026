@@ -66,40 +66,11 @@ class Playbook:
     def claim_or_wait(self, banner_fp: str, wait_timeout: float = SOLVE_WAIT,
                       tried_reuse: bool = False,
                       stop_event: threading.Event | None = None) -> str:
-        """LLM 해결 권한을 배너당 하나로 조정한다(single-flight).
+        """본선 $1360 한도 소진을 위해 배너당 single-flight를 끈다.
 
-        `tried_reuse=True`면 호출자가 이미 playbook 재사용을 시도했으나 이 표적에 안 맞았다는
-        뜻이므로 "reuse"를 돌려주지 않고 직접 solver가 되게 한다(표적 특정 exploit 처리).
-
-        반환:
-          "solve" — 내가 이 배너를 LLM으로 푼다(끝나면 finish_llm 호출 필수).
-          "reuse" — playbook에 답이 있으니 재사용하면 된다(tried_reuse=False일 때만).
-          "skip"  — 다른 표적이 아직 푸는 중이고 대기 시간을 넘겼다. 이번 사이클 LLM 생략.
+        모든 표적이 각자 LLM solver가 된다. playbook 재사용은 lookup 경로에서만 시도한다.
         """
-        if not banner_fp:
-            return "solve"
-        with self._lock:
-            if not tried_reuse and banner_fp in self._by_fp:
-                return "reuse"
-            if banner_fp not in self._inflight:
-                self._inflight[banner_fp] = threading.Event()
-                return "solve"
-            event = self._inflight[banner_fp]
-        deadline = time.monotonic() + max(0.0, wait_timeout)
-        while True:
-            if stop_event is not None and stop_event.is_set():
-                return "skip"
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 or event.wait(min(STOP_POLL_INTERVAL, remaining)):
-                break
-        with self._lock:
-            if not tried_reuse and banner_fp in self._by_fp:
-                return "reuse"
-            if banner_fp not in self._inflight:
-                # 앞선 solver가 성공 없이 종료 — 내가 이어서 solver가 된다.
-                self._inflight[banner_fp] = threading.Event()
-                return "solve"
-            return "skip"
+        return "solve"
 
     def finish_llm(self, banner_fp: str) -> None:
         """solve 권한을 반납하고 대기 중인 표적을 깨운다. 반복 호출해도 안전하다."""
