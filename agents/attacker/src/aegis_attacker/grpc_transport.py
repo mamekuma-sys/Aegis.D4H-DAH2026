@@ -1,6 +1,6 @@
-"""본선 9000/tcp plaintext gRPC unary 전송.
+"""본선 plaintext gRPC unary 전송.
 
-외부 패키지 없이 PCAP에서 관측된 ``satdiag.v1.SatDiag`` 메서드만 호출한다.
+외부 패키지 없이 PCAP에서 관측된 SatDiag·G2DDS 메서드만 호출한다.
 HTTP/2·HPACK·protobuf 전체 구현이 아니라 unary 요청에 필요한 최소 부분만 bounded하게
 구현하며, 응답 원문은 로그로 남기지 않고 상위 flag 파이프라인에만 전달한다.
 """
@@ -24,12 +24,22 @@ ALLOWED_DELIVERY_MODES = frozenset({
 })
 
 # Health/Probe/Tail은 읽기 전용. Export는 P1-R2에서 flag echo에 쓰인 관측 RPC다.
-ALLOWED_GRPC_RPCS = frozenset({
+SATDIAG_GRPC_RPCS = frozenset({
     "/satdiag.v1.SatDiag/Health",
     "/satdiag.v1.SatDiag/ProbeEndpoint",
     "/satdiag.v1.SatDiag/TailDiagnosticLog",
     "/satdiag.v1.SatDiag/ExportDiagnosticBundle",
 })
+G2DDS_GRPC_RPCS = frozenset({
+    "/g2dds.v1.Layer4Service/GetCatalog",
+    "/g2dds.v1.Layer4Service/Exchange",
+})
+ALLOWED_GRPC_RPCS_BY_PORT = {
+    9000: SATDIAG_GRPC_RPCS,
+    8410: G2DDS_GRPC_RPCS,
+    8420: G2DDS_GRPC_RPCS,
+}
+ALLOWED_GRPC_RPCS = frozenset().union(*ALLOWED_GRPC_RPCS_BY_PORT.values())
 # 하위 호환 별칭 — 기존 테스트·호출부가 READ_ONLY_RPCS를 참조한다.
 READ_ONLY_RPCS = ALLOWED_GRPC_RPCS
 
@@ -169,8 +179,9 @@ def _decode_grpc_messages(data: bytes) -> str:
 def grpc_unary_request(host: str, port: int, rpc: str, string_fields=None,
                        varint_fields=None, timeout: float = 6.0,
                        delivery: str = DELIVERY_STANDARD) -> HttpResponse:
-    """관측된 SatDiag RPC 하나를 h2c unary 요청으로 실행한다."""
-    if rpc not in ALLOWED_GRPC_RPCS or delivery not in ALLOWED_DELIVERY_MODES:
+    """관측된 port·RPC 쌍 하나를 h2c unary 요청으로 실행한다."""
+    if (rpc not in ALLOWED_GRPC_RPCS_BY_PORT.get(port, frozenset())
+            or delivery not in ALLOWED_DELIVERY_MODES):
         return HttpResponse(0, "", {})
     try:
         message = encode_protobuf(string_fields, varint_fields)

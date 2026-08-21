@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from aegis_attacker.grpc_transport import (
+    ALLOWED_GRPC_RPCS_BY_PORT,
     CLIENT_PREFACE,
     READ_ONLY_RPCS,
     _frame,
@@ -14,6 +15,8 @@ HEALTH = "/satdiag.v1.SatDiag/Health"
 PROBE = "/satdiag.v1.SatDiag/ProbeEndpoint"
 EXPORT = "/satdiag.v1.SatDiag/ExportDiagnosticBundle"
 TAIL = "/satdiag.v1.SatDiag/TailDiagnosticLog"
+G2DDS_CATALOG = "/g2dds.v1.Layer4Service/GetCatalog"
+G2DDS_EXCHANGE = "/g2dds.v1.Layer4Service/Exchange"
 
 
 class FakeSocket:
@@ -95,6 +98,18 @@ class TestGrpcUnaryRequest(unittest.TestCase):
         self.assertEqual(response.status, 0)
         connect.assert_not_called()
 
+    def test_rpc_is_bound_to_observed_port(self):
+        with patch(
+            "aegis_attacker.grpc_transport.socket.create_connection"
+        ) as connect:
+            self.assertEqual(
+                grpc_unary_request("team2.lig.internal", 8410, HEALTH).status, 0
+            )
+            self.assertEqual(
+                grpc_unary_request("team2.lig.internal", 9000, G2DDS_CATALOG).status, 0
+            )
+        connect.assert_not_called()
+
     def test_fragmented_huffman_delivery_hides_path_and_splits_envelope(self):
         incoming = b"".join((
             _frame(4, 0, 0),
@@ -124,11 +139,14 @@ class TestGrpcUnaryRequest(unittest.TestCase):
         message = encode_protobuf({1: "/flag"}, {2: 1})
         self.assertEqual(data_lengths, [1] * (5 + len(message)))
 
-    def test_catalog_contains_observed_satdiag_methods(self):
+    def test_catalog_contains_only_observed_port_rpc_pairs(self):
         self.assertEqual(
             READ_ONLY_RPCS,
-            frozenset({HEALTH, PROBE, TAIL, EXPORT}),
+            frozenset({HEALTH, PROBE, TAIL, EXPORT, G2DDS_CATALOG, G2DDS_EXCHANGE}),
         )
+        self.assertEqual(ALLOWED_GRPC_RPCS_BY_PORT[9000], {HEALTH, PROBE, TAIL, EXPORT})
+        self.assertEqual(ALLOWED_GRPC_RPCS_BY_PORT[8410], {G2DDS_CATALOG, G2DDS_EXCHANGE})
+        self.assertEqual(ALLOWED_GRPC_RPCS_BY_PORT[8420], {G2DDS_CATALOG, G2DDS_EXCHANGE})
 
 
 if __name__ == "__main__":

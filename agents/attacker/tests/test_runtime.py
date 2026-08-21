@@ -1422,44 +1422,41 @@ class TestUgvObservedDiscovery(unittest.TestCase):
         self.assertLessEqual(arena.banner_calls[0][3], 4096)
         self.assertEqual(arena.llm_calls, 0)
 
-    def test_r11_l4_ports_run_existing_probes_after_silent_bootstrap(self):
-        class SilentBootstrapL4Arena:
+    def test_r13_l4_ports_use_g2dds_without_http_or_llm(self):
+        class G2ddsL4Arena:
             def __init__(self, flag):
                 self.flag = flag
                 self.submits = []
-                self.target_calls = []
-                self.passive_calls = []
-                self.http_root_calls = 0
+                self.grpc_calls = []
+                self.http_calls = []
+                self.llm_calls = 0
 
             def request(self, method, url, headers=None, body=None, timeout=6.0):
                 if url.endswith("/submit"):
                     self.submits.append(json.loads(body))
                     return HttpResponse(200, json.dumps({"status": "accepted"}))
                 if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
                     return HttpResponse(500, "unused")
-                parts = urlsplit(url)
-                self.target_calls.append((parts.scheme, method, parts.path))
-                if parts.scheme == "https":
-                    return HttpResponse(0, "", {})
-                if parts.path == "/":
-                    self.http_root_calls += 1
-                    if self.http_root_calls == 1:
-                        return HttpResponse(0, "", {})
-                if parts.path == "/telemetry":
-                    return HttpResponse(200, self.flag, {})
-                return HttpResponse(404, "not found", {})
-
-            def read_passive_banner(self, host, port, timeout, max_bytes):
-                self.passive_calls.append((host, port, timeout, max_bytes))
+                self.http_calls.append((method, url))
                 return HttpResponse(0, "", {})
+
+            def request_grpc(self, host, port, rpc, string_fields=None,
+                             varint_fields=None, timeout=6.0, delivery="standard"):
+                self.grpc_calls.append((port, rpc, string_fields or {}, varint_fields or {}))
+                if rpc.endswith("/GetCatalog"):
+                    return HttpResponse(200, "g2dds catalog", {})
+                if (rpc.endswith("/Exchange") and (varint_fields or {}).get(3) in (1, 2)):
+                    return HttpResponse(200, self.flag, {})
+                return HttpResponse(200, "", {})
 
         for port in (8410, 8420):
             with self.subTest(port=port):
-                arena = SilentBootstrapL4Arena(f"FLAG{{r11_l4_{port}}}")
+                arena = G2ddsL4Arena(f"FLAG{{r13_g2dds_{port}}}")
                 cfg = AttackerConfig(
                     targets=("t2.lig.internal",), ports=(port,),
                     submit_url="http://backend:4100/submit", submit_token="tok-team1",
-                    llm_api_key="", concurrency=1,
+                    llm_api_key="sk", concurrency=1,
                 )
                 clk = FakeClock()
                 audit_lines = []
@@ -1473,108 +1470,67 @@ class TestUgvObservedDiscovery(unittest.TestCase):
 
                 self.assertEqual(report.accepted_count(), 1)
                 self.assertEqual(len(arena.submits), 1)
-                self.assertEqual(len(arena.passive_calls), 1)
-                self.assertEqual(arena.target_calls[0], ("http", "GET", "/"))
-                self.assertEqual(arena.target_calls[1], ("https", "GET", "/"))
-                forced_calls = arena.target_calls[2:]
-                self.assertTrue(forced_calls)
-                self.assertTrue(all(call[0] == "http" for call in forced_calls))
-                self.assertIn(("http", "GET", "/telemetry"), forced_calls)
-                self.assertIn(("http", "GET", "/flag"), forced_calls)
+                self.assertEqual(arena.http_calls, [])
+                self.assertEqual(arena.llm_calls, 0)
+                self.assertEqual(len(arena.grpc_calls), 3)
+                self.assertTrue(arena.grpc_calls[0][1].endswith("/GetCatalog"))
+                self.assertTrue(all(call[1].endswith("/Exchange") for call in arena.grpc_calls[1:]))
+                self.assertEqual({call[3][3] for call in arena.grpc_calls[1:]}, {1, 2})
                 events = [json.loads(line) for line in audit_lines]
                 self.assertTrue(any(
-                    item["event"] == "prebanner-probes-forced" for item in events
+                    item["event"] == "protocol-observed"
+                    and item.get("scheme") == "grpc-h2c" for item in events
                 ))
                 self.assertFalse(any(
-                    item["event"] == "skip"
-                    and item.get("reason") == "no-http-https-or-passive-banner"
+                    item["event"] in {"prebanner-probes-forced", "llm-primary"}
                     for item in events
                 ))
 
-    def test_r12_l4_silent_bootstrap_hits_api_flag_and_diag_traversal(self):
-        # P4-R12: 배너가 없어도 /api/flag·/diag component traversal 로 flag를 잡는다.
-        class SilentL4R12Arena:
+    def test_r13_l4_no_grpc_response_never_falls_back_to_http_or_llm(self):
+        class SilentG2ddsArena:
             def __init__(self):
                 self.submits = []
-                self.calls = []
+                self.http_calls = []
+                self.grpc_calls = []
+                self.llm_calls = 0
 
             def request(self, method, url, headers=None, body=None, timeout=6.0):
                 if url.endswith("/submit"):
                     self.submits.append(json.loads(body))
                     return HttpResponse(200, json.dumps({"status": "accepted"}))
                 if "/v1/chat/completions" in url:
+                    self.llm_calls += 1
                     return HttpResponse(500, "unused")
-                parts = urlsplit(url)
-                self.calls.append((parts.scheme, method, parts.path, body))
-                if parts.scheme == "https":
-                    return HttpResponse(0, "", {})
-                if parts.path == "/":
-                    return HttpResponse(0, "", {})  # silent bootstrap
-                if parts.path == "/api/flag":
-                    return HttpResponse(200, "FLAG{r12_api_flag}", {})
-                if parts.path == "/diag" and body and "../../../../flag" in body:
-                    return HttpResponse(200, "FLAG{r12_diag_component}", {})
-                return HttpResponse(404, "not found", {})
-
-            def read_passive_banner(self, host, port, timeout, max_bytes):
+                self.http_calls.append((method, url))
                 return HttpResponse(0, "", {})
 
-        arena = SilentL4R12Arena()
+            def request_grpc(self, host, port, rpc, string_fields=None,
+                             varint_fields=None, timeout=6.0, delivery="standard"):
+                self.grpc_calls.append((port, rpc))
+                return HttpResponse(0, "", {})
+
+        arena = SilentG2ddsArena()
         cfg = AttackerConfig(
             targets=("t2.lig.internal",), ports=(8410,),
             submit_url="http://backend:4100/submit", submit_token="tok-team1",
-            llm_api_key="", concurrency=1,
+            llm_api_key="sk", concurrency=1,
         )
         clk = FakeClock()
+        audit_lines = []
         report = AttackerRuntime(
-            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt),
+            audit=AuditLogger(sink=audit_lines.append, clock=clk),
         ).run_once()
 
-        self.assertEqual(report.accepted_count(), 2)
-        flags = {s["flag"] for s in arena.submits}
-        self.assertIn("FLAG{r12_api_flag}", flags)
-        self.assertIn("FLAG{r12_diag_component}", flags)
-
-    def test_r13_l4_hits_uds_and_rosapi_on_silent_bootstrap(self):
-        class SilentL4UgvArena:
-            def __init__(self):
-                self.submits = []
-                self.calls = []
-
-            def request(self, method, url, headers=None, body=None, timeout=6.0):
-                if url.endswith("/submit"):
-                    self.submits.append(json.loads(body))
-                    return HttpResponse(200, json.dumps({"status": "accepted"}))
-                if "/v1/chat/completions" in url:
-                    return HttpResponse(500, "unused")
-                parts = urlsplit(url)
-                self.calls.append((parts.scheme, method, parts.path, body or ""))
-                if parts.scheme == "https" or parts.path == "/":
-                    return HttpResponse(0, "", {})
-                if parts.path == "/uds" and body and "22F187" in body:
-                    return HttpResponse(200, "VIN FLAG{r13_uds_did}", {})
-                if parts.path == "/rosapi/get_param" and body and "/flag" in body:
-                    return HttpResponse(200, "FLAG{r13_rosapi}", {})
-                return HttpResponse(404, "not found", {})
-
-            def read_passive_banner(self, host, port, timeout, max_bytes):
-                return HttpResponse(0, "", {})
-
-        arena = SilentL4UgvArena()
-        cfg = AttackerConfig(
-            targets=("t2.lig.internal",), ports=(8420,),
-            submit_url="http://backend:4100/submit", submit_token="tok-team1",
-            llm_api_key="", concurrency=1,
-        )
-        clk = FakeClock()
-        report = AttackerRuntime(
-            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
-        ).run_once()
-        self.assertEqual(report.accepted_count(), 2)
-        flags = {s["flag"] for s in arena.submits}
-        self.assertIn("FLAG{r13_uds_did}", flags)
-        self.assertIn("FLAG{r13_rosapi}", flags)
-
+        self.assertEqual(report.accepted_count(), 0)
+        self.assertEqual(arena.submits, [])
+        self.assertEqual(arena.http_calls, [])
+        self.assertEqual(arena.llm_calls, 0)
+        self.assertEqual(arena.grpc_calls, [(8410, "/g2dds.v1.Layer4Service/GetCatalog")])
+        events = [json.loads(line) for line in audit_lines]
+        self.assertTrue(any(item["event"] == "protocol-native-no-response" for item in events))
+        self.assertFalse(any(item["event"] in {"prebanner-probes-forced", "llm-primary"}
+                             for item in events))
 
 class TestRuntimeInert(unittest.TestCase):
     def test_inert_without_targets_returns(self):

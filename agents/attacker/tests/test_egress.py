@@ -22,7 +22,7 @@ class RecordingTransport:
 
 
 CFG = AttackerConfig(
-    targets=("team2.lig.internal",), ports=(8082, 8083, 9000),
+    targets=("team2.lig.internal",), ports=(8082, 8083, 9000, 8410, 8420),
     submit_url="http://10.99.50.4:4100/submit", submit_token="tok",
     llm_base_url="http://litellm.lig.internal:4000", llm_api_key="sk",
 )
@@ -176,6 +176,30 @@ class TestEgressGateway(unittest.TestCase):
             {1: "telemetry.log;echo x${FLAG}x", 2: "capture", 3: "gzip"},
         )
         self.assertEqual(transport.calls[-1][3], "/satdiag.v1.SatDiag/ExportDiagnosticBundle")
+
+        gw.request_grpc(
+            Capability.ATTACK_TARGET,
+            "team2.lig.internal",
+            8410,
+            "/g2dds.v1.Layer4Service/GetCatalog",
+        )
+        self.assertEqual(transport.calls[-1][2:4], (
+            8410, "/g2dds.v1.Layer4Service/GetCatalog"
+        ))
+        with self.assertRaises(EgressError):
+            gw.request_grpc(
+                Capability.ATTACK_TARGET,
+                "team2.lig.internal",
+                8410,
+                "/satdiag.v1.SatDiag/Health",
+            )
+        with self.assertRaises(EgressError):
+            gw.request_grpc(
+                Capability.ATTACK_TARGET,
+                "team2.lig.internal",
+                9000,
+                "/g2dds.v1.Layer4Service/GetCatalog",
+            )
 
 
 if __name__ == "__main__":

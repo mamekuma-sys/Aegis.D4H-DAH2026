@@ -21,12 +21,13 @@ from .config import AttackerConfig, FORCED_LLM_MODEL
 from .egress import EgressError, EgressGateway, build_allowlists
 from .exploits import (
     Attempt,
+    G2DDS_PORTS,
     GrpcAttempt,
+    SATDIAG_PORT,
     auth_tamper_attempts,
     build_attempts,
     extract_internal_urls,
     extract_svc_flag_paths,
-    l4_prebanner_attempts,
     observed_attempts,
     observed_grpc_attempts,
     observed_grpc_bootstrap,
@@ -69,19 +70,12 @@ MAX_EVASION_VARIANTS = 16
 ENDPOINT_RETRY_COOLDOWN = 1.0
 BOOTSTRAP_RETRY_COOLDOWN = 0.5
 PREBANNER_TIMEOUT = 1.5
-# MQTT/RTSP/SatDiag 는 HTTP fallback 금지. R13에서 team6/12 프로토콜 포트에
-# GraphQL×12턴을 낭비해 L4 재타격이 굶었다.
-PROTOCOL_ONLY_PORTS = frozenset({1883, 8554, 9000})
 PLAN_TTL = 30.0
 EVIDENCE_TTL = 90.0
 ROUND_DURATION = 20 * 60.0  # Round 20분 → 제출 재시도 경계
 MAX_DISCOVERY_TEXT = 4096
 MAX_DISCOVERY_BODY = 512
-# 최후의 공격 — "무조건 찾는다". 배너가 없어도(HTTP/HTTPS/passive 전부 무응답)
-# 어떤 포트든 결정론 프로브를 돌린다. P4-R12에서 team6/team12처럼 배너를 숨긴
-# hardened 타깃이 8080/8082/9090/9000까지 skip되는 것을 막는다. observed_attempts가
-# 있는 포트는 그대로 두고, 없는 포트도 범용 프로브로 route를 강제 노출시킨다.
-FORCED_PREBANNER_PROBE_PORTS = frozenset({8410, 8420})
+NATIVE_PROTOCOL_PORTS = frozenset({MQTT_PORT, RTSP_PORT, SATDIAG_PORT}) | G2DDS_PORTS
 
 
 class AttackerRuntime:
@@ -550,10 +544,10 @@ class AttackerRuntime:
         return True, captured_any
 
     def _attack_observed_grpc(self, endpoint) -> tuple:
-        """본선 9000 gRPC를 HTTP 오탐 없이 bootstrap하고 bounded 후보를 실행한다.
+        """본선 SatDiag/G2DDS gRPC를 bootstrap하고 bounded 후보를 실행한다.
 
-        반환은 ``(protocol_handled, accepted_flag)``이다. gRPC가 응답하지 않으면 다른
-        protocol일 가능성을 위해 기존 HTTP→HTTPS→passive 탐색으로 회귀한다.
+        반환은 ``(protocol_handled, accepted_flag)``이다. gRPC 고정 포트가 응답하지 않으면
+        호출자가 HTTP로 오인하지 않고 다음 retry wave까지 기다린다.
         """
         bootstrap_rpc = observed_grpc_bootstrap(endpoint.port)
         if bootstrap_rpc is None:
@@ -870,13 +864,17 @@ class AttackerRuntime:
         grpc_handled, grpc_captured = self._attack_observed_grpc(endpoint)
         if grpc_handled:
             return grpc_captured
-        # MQTT/RTSP/SatDiag 포트는 프로토콜이 안 열려도 HTTP GraphQL+LLM 으로
-        # 빠지지 않는다. R13에서 team6:1883/8554/9000 에 GraphQL×12턴을 낭비했다.
-        if endpoint.port in PROTOCOL_ONLY_PORTS:
+        if endpoint.port in NATIVE_PROTOCOL_PORTS:
+            expected = (
+                "mqtt" if endpoint.port == MQTT_PORT else
+                "rtsp" if endpoint.port == RTSP_PORT else
+                "grpc-h2c"
+            )
             self.audit.log(
-                "protocol-silent",
+                "protocol-native-no-response",
                 target=endpoint.key(),
-                reason="no-native-protocol-skip-http",
+                scheme=expected,
+                reason="native-protocol-locked",
             )
             return False
         obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
@@ -940,13 +938,8 @@ class AttackerRuntime:
 
         attempted_keys = set()
 
-        # TEAM1 PCAP에서 성공이 확인된 L1~L4 형태를 일반 정찰보다 먼저 실행한다.
-        # R13: silent L4 는 전체 UGV 세트를 쏟지 않고 우선 파만 친다. 응답이 오면
-        # 아래에서 전체 세트로 확장하고, 무응답이면 L1/L2/L3 예산을 남긴다.
-        if force_prebanner_probes and endpoint.port in (8410, 8420):
-            confirmed = l4_prebanner_attempts()
-        else:
-            confirmed = observed_attempts(endpoint.port)
+        # TEAM1 PCAP에서 성공이 확인된 HTTP 형태를 일반 정찰보다 먼저 실행한다.
+        confirmed = observed_attempts(endpoint.port)
         observed_only = not bool(confirmed)
         if force_prebanner_probes and not confirmed:
             # 배너가 없고 이 포트의 observed 형태도 없으면, 범용 읽기 전용 프로브로
@@ -980,14 +973,6 @@ class AttackerRuntime:
                     reason="no-http-response-after-observed",
                 )
                 return captured_any
-            # silent가 아니면 R13에서 놓친 나머지 UGV 제어면을 이어서 친다.
-            if endpoint.port in (8410, 8420):
-                captured_any = self._deterministic_exploit(
-                    endpoint, banner, banner_fp, resp.headers, current_evidence,
-                    attempts=observed_attempts(endpoint.port),
-                    attempted_keys=attempted_keys,
-                    include_cookie_tamper=False) or captured_any
-                current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         # root 배너가 취약 부류를 직접 노출하면 정찰 sweep보다 먼저 zero-token 공격한다.
         root_hints = suggest_vuln_classes(banner)

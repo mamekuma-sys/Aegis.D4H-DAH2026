@@ -20,9 +20,13 @@ probe 응답이 실제로 노출한 route·parameter만 bounded discovery text�
 결속합니다. traversal·파괴적 action route는 실행하지 않으며, 포트별 인터페이스와 flag 상태를 섞지
 않습니다.
 
-관측된 본선 `9000`은 gRPC `Health`를 먼저 실행합니다. L3의 `1883`은 MQTT CONNECT 뒤 `#`·`$SYS/#`
-읽기 전용 구독으로 retained/telemetry 응답을 수집하고, `8554`는 RTSP OPTIONS 뒤 제한된
-DESCRIBE 경로만 조회합니다. publish·PLAY·제어 명령은 전송하지 않습니다. 그 밖의 `PORTS`는
+관측된 본선 `9000`은 gRPC `Health`를 먼저 실행합니다. L4 `8410`·`8420`은 R11 PCAP에서 확인된
+h2c/gRPC G2DDS `GetCatalog`로 시작한 뒤 diagnostic `MAP_SNAPSHOT`을 base64-protobuf와
+JSON-protobuf 두 읽기 전용 encoding으로만 조회합니다. calibration apply와 programming
+STORE/RUN은 생성하지 않습니다. L3의 `1883`은 MQTT CONNECT 뒤 `#`·`$SYS/#` 읽기 전용 구독으로
+retained/telemetry 응답을 수집하고, `8554`는 RTSP OPTIONS 뒤 제한된 DESCRIBE 경로만 조회합니다.
+publish·PLAY·제어 명령은 전송하지 않습니다. `9000`·`1883`·`8554`·`8410`·`8420`은 native
+protocol 전송 후 HTTP/GraphQL LLM으로 fallback하지 않습니다. 그 밖의 `PORTS`는
 평문 HTTP `GET /`을 먼저 실행하고, 무응답일 때만 같은 endpoint의 HTTPS `GET /`, 다시 무응답일
 때만 passive TCP banner read로
 이어집니다. TCP 단계는 최대 4KiB·750ms이며 client application byte를 보내지 않습니다. 경기 대상의
@@ -37,10 +41,10 @@ R17 이후에는 응답 본문 전체 hash가 아니라 status 계열·route·fo
 만든 구조 fingerprint를 사용해 같은 서비스 구현을 팀 간 공유합니다. 성공 playbook은 고정된 최초
 요청이 아니라 실제 flag를 회수한 최신 delivery로 교체됩니다. stale evidence는 root 재관측 후 한 번
 재결속하고, 실패 endpoint는 30초 cooldown 또는 새 playbook generation 전에는 반복 소모하지 않습니다.
-LLM은 대표 서비스 solver에 집중하도록 Round 48회·endpoint 4 turn으로 제한하며, 완전 target encoding,
+마지막 라운드 프로파일은 미해결 HTTP 서비스에만 endpoint당 최대 20 turn, Round 2,000회 상한을 적용하며, 완전 target encoding,
 중첩 SSRF, SQL 주석·제어 공백·bracket identifier 등 R17 관측 우회는 최대 6개 bounded 후보로 실행합니다.
 팀 총 LLM budget은 운영진 공지의 `$1360`을 따릅니다. 공식 가격표가 없는 상태에서 USD 비용을
-추정하지 않으며, 호출당 비신뢰 관측 입력을 UTF-8 8KiB로 제한하고 호출·토큰 사용량을 기록합니다.
+추정하지 않으며, 호출당 비신뢰 관측 입력을 UTF-8 4KiB로 제한하고 호출·토큰 사용량을 기록합니다.
 관측 fast path 역시 `TARGETS`를 그대로 순회하므로 특정 팀 주소를 코드에 고정하지 않습니다.
 
 표준 라이브러리만 사용한다(런타임 외부 의존성 없음).
@@ -53,7 +57,7 @@ src/aegis_attacker/
 ├─ models.py        # Endpoint·Observation·Profile·Hypothesis·FlagCandidate 등 타입/불변조건
 ├─ rate_limit.py    # 전역 토큰버킷(초당 10·버스트 20)·제출(분당 30)·429 backoff
 ├─ observation.py   # HTTP 관측·정규화(timeout·거부도 관측)
-├─ grpc_transport.py # 본선 9000 h2c gRPC unary·protobuf 최소 전송
+├─ grpc_transport.py # 본선 9000·8410·8420 h2c gRPC unary·protobuf 최소 전송
 ├─ protocol_transport.py # 본선 1883 MQTT·8554 RTSP bounded read-only 전송
 ├─ profiles.py      # ObservedServiceProfile 분류·취약 부류 우선순위 힌트
 ├─ phase_policy.py  # 누적 레이어 공정 예산 배분·스케줄러

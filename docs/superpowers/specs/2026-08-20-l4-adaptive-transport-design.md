@@ -56,3 +56,20 @@ L4 트래픽은 존재했다. 따라서 이 두 port에 한해서만 기존 `no-
 
 이 delta는 신규 경로나 신규 protocol payload를 추가하지 않고, 이미 있던 L4 시도가 조기 gate 뒤에서
 실제로 실행되게 하는 데만 한정한다.
+
+## 2026-08-21 R13 G2DDS 전용 전송 승인 delta
+
+R13 공격 로그에서 위 HTTP 예외는 `8410`·`8420` accepted를 만들지 못했고, LLM도 두 port에
+HTTP GraphQL 계획을 반복했다. 반면 R11 L4 PCAP은 두 port가 h2c/gRPC
+`g2dds.v1.Layer4Service/{GetCatalog,Exchange}`임을 증명했다. 이 최신 wire 근거가 바로 위
+무배너 HTTP delta를 대체한다.
+
+- 관측: 두 port는 빈 `GetCatalog` unary 요청으로 protocol을 bootstrap한다.
+- 계획: 응답이 있을 때만 R11에서 관측한 diagnostic topic/type과 `MAP_SNAPSHOT` action을
+  base64-protobuf·JSON-protobuf 두 encoding으로 구성한다.
+- 실행: 두 시도는 읽기 전용이며 고정된 port·RPC allowlist, endpoint evidence, TTL, rate limit을
+  모두 통과한다. calibration apply, programming STORE/RUN, 임의 raw payload는 만들지 않는다.
+- 격리: `9000`·`1883`·`8554`·`8410`·`8420`은 native protocol 전송 뒤 HTTP/GraphQL LLM으로
+  fallback하지 않는다. 무응답은 audit 후 다음 bounded retry wave로 넘긴다.
+- 성공 조건: 각 L4 port에서 `GetCatalog → Exchange` 순서를 지키고, HTTP·LLM 호출 0으로
+  응답 flag를 기존 제출 파이프라인에 전달한다. RPC와 port의 교차 사용은 전송 전에 거부한다.

@@ -44,7 +44,7 @@ SHA-256 및 분석 방법을 공동 근거로 사용한다. 공격 런타임에�
 | L1 / 8082 | `helper-box:8080/secret`, Docker IP의 IPv4·정수·16진수·IPv4-mapped IPv6 표현, `/config?file=../../../../flag` | 관측된 SSRF target 표현과 exact config traversal을 먼저 실행 |
 | L2 / 8083 | Base64-JSON `session`의 `role=admin`, loopback `/secret`·`/registry` SSRF | 비민감 claim 구조와 관측된 느슨한 padding 한 종을 재생성; `127.0.0.1`·`127.1` exact target 실행 |
 | L3 / 8084 | `/product?id=... UNION SELECT ... FROM app_meta`, `/rc/status`·`/teleop/status`·`/debug`·`/admin` 직접 노출 | SQLi projection 뒤에 네 route를 읽기 전용으로 확인하고 flag가 있을 때만 제출 |
-| L4 / UGV | Phase 4 도메인과 L1~L4 누적 개방만 공식 확인, 취약 route 미관측 | 사전 확인되지 않은 포트에서는 범용 exploit 경로를 생성하지 않음. 실제 root·probe 응답이 명시한 `GET` path와 query parameter, 또는 OpenAPI의 `get` operation만 공격 후보로 승격 |
+| L4 / UGV | R11 PCAP에서 `8410`·`8420` h2c/gRPC G2DDS와 GetCatalog·Exchange wire contract 관측 | GetCatalog bootstrap 뒤 diagnostic MAP_SNAPSHOT을 관측된 base64·JSON protobuf encoding으로만 읽기 실행; HTTP·GraphQL fallback 금지 |
 
 Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한다. 알려진 데모 포트는
 `L4→L1→L2→L3` 순환으로 섞어 새 UGV 레이어를 초반에 시작하면서도 기존 레이어를 굶기지 않는다.
@@ -69,11 +69,15 @@ Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한�
 
 ### L4 증거 gate
 
-현재 L4에 대해 확정된 것은 Phase 4의 UGV 명칭과 L1~L4 누적 개방뿐이다. 테스트의 `8085`,
+R11 이전에는 L4에 대해 Phase 4의 UGV 명칭과 누적 개방만 확정됐으나, R11 PCAP에서
+`8410`·`8420`의 h2c/gRPC G2DDS 계약이 확인됐다. 테스트의 `8085`,
 `9001`, `/telemetry`, `source`는 **관측-계획-실행 결속을 검증하는 합성 fixture**이며 본선 port·route
 사실이 아니다. 따라서 다음 경계를 런타임 회귀 조건으로 둔다.
 
-- PCAP 또는 실제 HTTP 응답이 없는 포트에는 `observed_attempts`를 만들지 않는다.
+- `8410`·`8420`에는 HTTP `observed_attempts`를 만들지 않고 G2DDS RPC만 사용한다.
+- `GetCatalog`가 응답한 endpoint에만 R11 diagnostic topic/type의 읽기 전용 Exchange를 실행한다.
+- L4 Exchange는 base64-protobuf·JSON-protobuf 두 관측 encoding만 허용하고, calibration apply와
+  programming STORE/RUN은 생성하지 않는다.
 - 미확인 포트의 배너가 단순히 UGV·URL·telemetry 같은 단어만 포함하면 공격 요청을 만들지 않는다.
 - root 뒤에는 `/status`, `/health`, `/robots.txt`, `/api`, `/openapi.json`, `/swagger.json`의 여섯
   discovery probe만 사용하며, 미확인 포트에 `/flag`, `/admin`, `/.git/config` 같은 범용 경로를
@@ -83,13 +87,17 @@ Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한�
   순서 차이는 정규화하되, traversal·파괴적 action route와 쓰기 method는 무시한다.
 - 같은 레이어의 여러 서비스·포트는 독립 endpoint로 관측한다. 구조 fingerprint가 같아도 한 포트의
   route·parameter를 다른 포트로 옮기지 않으며, 응답마다 여러 flag 후보를 모두 제출 파이프라인으로 보낸다.
-- 미지 protocol은 평문 HTTP → HTTPS → passive TCP banner 순서로만 식별한다. 앞 단계가 무응답일 때만
+- 아직 port mapping이 없는 미지 protocol은 평문 HTTP → HTTPS → passive TCP banner 순서로 식별한다. 앞 단계가 무응답일 때만
   다음 단계를 한 번 실행하고, passive TCP는 서버 bytes 최대 4KiB만 읽으며 client application payload를
   보내지 않는다. UDP 및 protocol별 로봇 command는 생성하지 않는다.
 - 다른 endpoint의 성공 playbook은 구조 fingerprint가 같더라도 현 endpoint의 정찰과 evidence 갱신 뒤에만
   실행한다.
 - 새 L4 PCAP이 들어오면 protocol·port·route·method·parameter를 먼저 inventory하고, positive와 정상
   negative fixture가 함께 생기기 전에는 port별 fast path를 추가하지 않는다.
+
+R13 로그에서는 L4 HTTP/LLM 계획의 accepted 기여가 0이었으므로 native protocol port는 해당 전송이
+무응답이어도 HTTP·GraphQL로 추측 전환하지 않는다. 이는 스킵이 아니라 port별 최소 native probe 후
+bounded retry로 수렴하는 protocol lock이다.
 
 ### 2026-08-21 공식 L3 진입 프로토콜 반영
 

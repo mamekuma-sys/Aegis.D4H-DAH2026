@@ -85,8 +85,8 @@ class EgressGateway:
         """Allowlisted ATTACK_TARGET의 plaintext gRPC unary 요청만 전달한다."""
         if capability != Capability.ATTACK_TARGET:
             raise EgressError("gRPC 요청은 ATTACK_TARGET 전용")
-        from .grpc_transport import ALLOWED_DELIVERY_MODES, ALLOWED_GRPC_RPCS
-        if (port != 9000 or rpc not in ALLOWED_GRPC_RPCS
+        from .grpc_transport import ALLOWED_DELIVERY_MODES, ALLOWED_GRPC_RPCS_BY_PORT
+        if (rpc not in ALLOWED_GRPC_RPCS_BY_PORT.get(port, frozenset())
                 or delivery not in ALLOWED_DELIVERY_MODES):
             raise EgressError("관측되지 않은 gRPC port 또는 RPC")
         if (host, port) not in self._allow.get(capability, set()):
