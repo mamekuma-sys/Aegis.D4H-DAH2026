@@ -161,6 +161,13 @@ class LLMAdvisor:
             return None, False
 
         is_gpt56 = model_id.startswith("gpt-5.6-")
+        is_pro_family = (
+            model_id.endswith("-pro")
+            or model_id in {"o3", "o4-mini"}
+            or model_id.endswith("-codex")
+            or model_id.endswith("-codex-max")
+            or model_id.endswith("-codex-mini")
+        )
         payload_obj = {
             "model": model_id,
             "max_completion_tokens": LLM_MAX_COMPLETION_TOKENS,
@@ -171,7 +178,8 @@ class LLMAdvisor:
         }
         if is_gpt56:
             payload_obj["reasoning_effort"] = LLM_REASONING_EFFORT
-        else:
+        elif not is_pro_family:
+            # gpt-5.4-pro / o-series 등은 temperature를 거부해 400 → advise-empty 가 된다.
             payload_obj["temperature"] = 0
 
         payload = json.dumps(payload_obj)
@@ -196,13 +204,27 @@ class LLMAdvisor:
             obj = json.loads(resp.body)
             self._budget.add_llm(0, int(obj.get("usage", {}).get("total_tokens", 0) or 0))
             choice = obj["choices"][0]
-            if choice.get("finish_reason") == "length":
-                return None, True
-            content = choice["message"]["content"]
+            message = choice.get("message") or {}
+            content = message.get("content")
+            finish_reason = choice.get("finish_reason")
+            # 일부 모델은 content를 list(part)로 준다.
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") in (None, "text"):
+                        parts.append(str(part.get("text") or ""))
+                    elif isinstance(part, str):
+                        parts.append(part)
+                content = "".join(parts)
+            if not isinstance(content, str):
+                content = ""
         except Exception:
             return None, True
         try:
             plan = parse_exploit(content)
         except Exception:
+            return None, True
+        # finish_reason=length 는 잘린 응답으로 보고 fallback/재시도한다.
+        if finish_reason == "length":
             return None, True
         return plan, plan is None

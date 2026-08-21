@@ -120,14 +120,14 @@ class TestLLMAdvisor(unittest.TestCase):
         self.assertEqual(payload["max_completion_tokens"], LLM_MAX_COMPLETION_TOKENS)
         self.assertNotIn("max_tokens", payload)
 
-    def test_primary_pro_uses_temperature_without_reasoning(self):
+    def test_primary_pro_omits_temperature(self):
         adv, transport = make_advisor(
             chat_response('{"path":"/x"}'), config=SOL_CFG
         )
         adv.advise_exploit("b", "", [])
         payload = json.loads(transport.last_body)
         self.assertEqual(payload["model"], DEFAULT_LLM_MODEL)
-        self.assertEqual(payload["temperature"], 0)
+        self.assertNotIn("temperature", payload)
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertNotIn("reasoning_effort", payload)
 

@@ -39,14 +39,14 @@ from .state import CorrelationSnapshotRef
 
 # 호출 예산(§12.1). 팀 LiteLLM $1360 한도를 방어 조언에도 적극 사용한다.
 # (판정 핫패스에는 들어가지 않으며 SHADOW 후보·Break 입력만 생성한다.)
-MIN_CALL_INTERVAL_SECONDS = 3.0
-MAX_CALLS_PER_ROUND = 2000
-TOP_K_FLOWS = 16
-REQUEST_TIMEOUT_SECONDS = 45.0
-MAX_RECENT_ADVISORIES = 64
-MAX_RECOMMENDATION_CHARS = 8000
+MIN_CALL_INTERVAL_SECONDS = 1.0
+MAX_CALLS_PER_ROUND = 4000
+TOP_K_FLOWS = 24
+REQUEST_TIMEOUT_SECONDS = 60.0
+MAX_RECENT_ADVISORIES = 128
+MAX_RECOMMENDATION_CHARS = 12000
 ADVISORY_TTL_SECONDS = 1800.0
-ADVISORY_MAX_COMPLETION_TOKENS = 2048
+ADVISORY_MAX_COMPLETION_TOKENS = 4096
 
 # 실패가 이어지면 잠시 물러나되, 예산 소진을 위해 백오프는 짧게 둔다.
 FAILURE_BACKOFF_SECONDS = 30.0
@@ -55,13 +55,14 @@ MAX_CONSECUTIVE_FAILURES = 8
 _SYSTEM_PROMPT = (
     "You are assisting Team1 finals defense (Aegis). You receive only aggregated, "
     "redacted flow statistics - never payloads, flags, tokens, or secrets. "
-    "Propose up to five precise DROP-candidate signatures for the open layers: "
+    "Propose up to eight precise DROP-candidate signatures for the open layers: "
     "L1 8080/9000 (portal,/svc/flag-*, SatDiag Export/Tail), "
     "L2 8082 (GraphQL missionAudit, /api/rsc-action, /ws/mission-feed, forged admin), "
-    "L3 9090 (UNION SQLi on /product, /flag,/rc/status,/teleop/status). "
+    "L3 9090 HTTP UNION SQLi; MQTT 1883 (#/$SYS/flag topics); RTSP 8554 DESCRIBE /flag. "
     "Prefer regex/http semantic checks that miss normal SLA probes. "
     "For each candidate: field inspected, why benign traffic should not match, "
-    "required evidence before ACTIVE enablement. Candidates begin as SHADOW only."
+    "required evidence before ACTIVE enablement. Candidates begin as SHADOW only. "
+    "You have NO runtime DROP authority - your text is Break review input only."
 )
 
 

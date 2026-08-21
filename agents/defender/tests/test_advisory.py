@@ -152,7 +152,7 @@ class TestBudget(unittest.TestCase):
         worker = self._worker(clock, transport=transport)
         clock.advance(120.0)
         self.assertIsNotNone(worker.run_once())
-        self.assertEqual(sent["max_completion_tokens"], 2048)
+        self.assertEqual(sent["max_completion_tokens"], 4096)
         self.assertNotIn("max_tokens", sent)
 
     def test_gpt56_uses_low_reasoning_and_developer_message(self):

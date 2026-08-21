@@ -756,7 +756,7 @@ class AttackerRuntime:
         grpc_handled, grpc_captured = self._attack_observed_grpc(endpoint)
         if grpc_handled:
             # 9000도 LiteLLM 예산을 태운다(합성 배너 → HTTP plan은 실패해도 호출 비용은 발생).
-            self._burn_llm_on_endpoint(
+            return self._burn_llm_on_endpoint(
                 endpoint,
                 banner=(
                     "gRPC satdiag.v1.SatDiag on this port. Prefer Export/Tail/Probe "
@@ -765,32 +765,34 @@ class AttackerRuntime:
                 ),
                 banner_fp=f"grpc:{endpoint.port}",
                 evidence_ref=None,
+                already_captured=grpc_captured,
             )
-            return grpc_captured
         mqtt_handled, mqtt_captured = self._attack_observed_mqtt(endpoint)
         if mqtt_handled:
-            self._burn_llm_on_endpoint(
+            return self._burn_llm_on_endpoint(
                 endpoint,
                 banner=(
                     "MQTT broker on this port. Prefer topic wildcards, $SYS, "
-                    "uav/drone/telemetry/flag topics; look for FLAG in PUBLISH payloads."
+                    "uav/drone/telemetry/flag topics; look for FLAG in PUBLISH payloads. "
+                    "HTTP paths may also be suggested for sibling ports."
                 ),
                 banner_fp=f"mqtt:{endpoint.port}",
                 evidence_ref=None,
+                already_captured=mqtt_captured,
             )
-            return mqtt_captured
         rtsp_handled, rtsp_captured = self._attack_observed_rtsp(endpoint)
         if rtsp_handled:
-            self._burn_llm_on_endpoint(
+            return self._burn_llm_on_endpoint(
                 endpoint,
                 banner=(
                     "RTSP media server on this port. Prefer DESCRIBE paths "
-                    "/stream /live /uav /flag and SDP bodies for FLAG."
+                    "/stream /live /uav /flag and SDP bodies for FLAG. "
+                    "HTTP paths may also be suggested for sibling ports."
                 ),
                 banner_fp=f"rtsp:{endpoint.port}",
                 evidence_ref=None,
+                already_captured=rtsp_captured,
             )
-            return rtsp_captured
         # protocol 전용 포트가 아니면 HTTP/LLM 경로로 이어간다.
         obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
         for _ in range(bootstrap_requests):
@@ -841,7 +843,7 @@ class AttackerRuntime:
 
         attempted_keys = set()
 
-        # TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 일반 정찰보다 먼저 실행한다.
+        # TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 얇게 먼저 친 뒤, LLM을 본체로 돌린다.
         confirmed = observed_attempts(endpoint.port)
         observed_only = not bool(confirmed)
         if confirmed:
@@ -849,6 +851,22 @@ class AttackerRuntime:
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
                 attempts=confirmed, attempted_keys=attempted_keys,
                 include_cookie_tamper=False) or captured_any
+        if self._stop_event.is_set():
+            return captured_any
+        current_evidence = self._latest_evidence(endpoint, current_evidence)
+
+        # LLM-first: 결정론 전체 소진 전에 frontier 조언을 실행·제출한다.
+        self.audit.log(
+            "llm-primary", target=endpoint.key(),
+            after_confirmed_det=bool(confirmed),
+        )
+        captured_any = self._burn_llm_on_endpoint(
+            endpoint,
+            banner=banner,
+            banner_fp=banner_fp,
+            evidence_ref=current_evidence,
+            already_captured=captured_any,
+        ) or captured_any
         if self._stop_event.is_set():
             return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
@@ -873,7 +891,7 @@ class AttackerRuntime:
             return captured_any
         observed_banner = "\n".join(part for part in (banner, discovery) if part)
 
-        # 결정론적 exploit 엔진 — 관측된 route·parameter를 우선해 LLM 전에 실행한다.
+        # 결정론 백업 — LLM이 놓친 관측 경로를 이어서 친다.
         captured_any = self._deterministic_exploit(
             endpoint, observed_banner, banner_fp, resp.headers, current_evidence,
             attempted_keys=attempted_keys,
@@ -882,14 +900,13 @@ class AttackerRuntime:
             return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
-        # 결정론 hit이 있어도 LLM을 생략하지 않는다. (예전: captured_any면 return → 크레딧 0)
         if captured_any:
             self.audit.log(
                 "det-complete", target=endpoint.key(),
                 continuing_to_llm=True,
             )
 
-        # playbook 재사용은 먼저 시도하되, hit여도 LLM 예산을 이어서 태운다.
+        # playbook 재사용 후 LLM을 한 번 더 태워 예산을 소진한다.
         tried_reuse = False
         while not self._stop_event.is_set():
             known = self._playbook.lookup(banner_fp)
@@ -974,7 +991,12 @@ class AttackerRuntime:
                         reason="advise-empty-or-failed",
                         model=self.config.llm_model,
                     )
-                    break
+                    # 한 턴 실패로 전체 LLM 루프를 끊지 않는다 — 다음 턴·fallback 계속.
+                    feedback = (
+                        "Previous advice empty or unusable. Reply ONLY valid JSON with "
+                        "vuln, method, path, headers, body, reason for this port."
+                    )
+                    continue
                 self.audit.log(
                     "llm-plan", target=endpoint.key(), turn=state.turn,
                     path=plan.args.get("path"), model=self.config.llm_model,

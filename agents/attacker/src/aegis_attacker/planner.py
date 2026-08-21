@@ -30,11 +30,27 @@ def parse_exploit(content: str) -> Optional[dict]:
     """LLM 응답에서 exploit JSON을 추출·검증한다."""
     if not content:
         return None
-    m = re.search(r"\{.*\}", content, re.DOTALL)
-    if not m:
+    text = str(content).strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    end = -1
+    for index, char in enumerate(text[start:], start=start):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                end = index + 1
+                break
+    if end < 0:
         return None
     try:
-        obj = json.loads(m.group(0))
+        obj = json.loads(text[start:end])
     except Exception:
         return None
     if not isinstance(obj, dict) or "path" not in obj:
@@ -50,6 +66,12 @@ def parse_exploit(content: str) -> Optional[dict]:
     obj["method"] = method if method in ("GET", "POST") else "GET"
     vuln = str(obj["vuln"]).upper()
     obj["vuln"] = vuln if vuln in ("LFI", "SSRF", "AUTH", "SQLI", "OTHER") else "OTHER"
+    path = str(obj.get("path") or "").strip()
+    if not path:
+        return None
+    if not path.startswith("/") and path != "*":
+        path = "/" + path
+    obj["path"] = path
     return obj
 
 
