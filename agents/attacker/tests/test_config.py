@@ -71,7 +71,7 @@ class TestLoadConfig(unittest.TestCase):
             "LLM_MODEL": "gpt-4o-mini",
         })
         self.assertEqual(cfg.llm_model, DEFAULT_LLM_MODEL)
-        self.assertEqual(cfg.llm_model, "gpt-5.6-sol")
+        self.assertEqual(cfg.llm_model, "gpt-5.4")
 
     def test_concurrency_optional_with_default(self):
         self.assertEqual(load_config({}).concurrency, 32)

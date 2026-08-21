@@ -42,11 +42,12 @@ from .state import CorrelationSnapshotRef
 MIN_CALL_INTERVAL_SECONDS = 1.0
 MAX_CALLS_PER_ROUND = 4000
 TOP_K_FLOWS = 24
-REQUEST_TIMEOUT_SECONDS = 60.0
+REQUEST_TIMEOUT_SECONDS = 45.0
 MAX_RECENT_ADVISORIES = 128
 MAX_RECOMMENDATION_CHARS = 12000
 ADVISORY_TTL_SECONDS = 1800.0
-ADVISORY_MAX_COMPLETION_TOKENS = 4096
+ADVISORY_MAX_COMPLETION_TOKENS = 2048
+ADVISORY_REASONING_EFFORT = "low"
 
 # 실패가 이어지면 잠시 물러나되, 예산 소진을 위해 백오프는 짧게 둔다.
 FAILURE_BACKOFF_SECONDS = 30.0
@@ -270,7 +271,7 @@ class AdvisoryWorker:
         }
         model_id = self._config.llm_model
         if model_id.startswith("gpt-5.6-"):
-            body["reasoning_effort"] = "high"
+            body["reasoning_effort"] = ADVISORY_REASONING_EFFORT
         elif model_id.endswith("-pro") or model_id in {"o3", "o4-mini"}:
             # Responses 계열 — temperature 미지원에 가깝게 취급한다.
             pass

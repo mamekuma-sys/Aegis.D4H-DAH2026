@@ -41,7 +41,7 @@ _ACTIVE_RULES = {
     _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
     _L1_CONFIG_RULE_ID, _L2_REGISTRY_RULE_ID,
     _L1_SATDIAG_TAIL_RULE_ID, _L1_SATDIAG_EXPORT_RULE_ID,
-    _L2_GRAPHQL_RULE_ID, _L1_SVC_FLAG_RULE_ID, _L1_PORTAL_FEEDBACK_RULE_ID,
+    _L2_GRAPHQL_RULE_ID, "sig-l2-graphql-mission-audit-body-001", _L1_SVC_FLAG_RULE_ID, _L1_PORTAL_FEEDBACK_RULE_ID,
     _L2_RSC_RULE_ID, _L2_WS_FEED_RULE_ID,
     _L3_SENSITIVE_RULE_ID, _L3_UNION_BROAD_RULE_ID, _L2_SCHEMA_RULE_ID, _L4_FLAG_RULE_ID,
     _L1_CONFIG_CANON_RULE_ID, _L1_CONFIG_CANON_POST_RULE_ID,
@@ -518,9 +518,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p3-r7-lockdown"
+            "defender-2026-08-21-p3-r8-fast-llm"
         )
-        self.assertEqual(self.report.drop_capable_rules, 31)
+        self.assertEqual(self.report.drop_capable_rules, 32)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

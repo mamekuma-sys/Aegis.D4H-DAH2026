@@ -152,7 +152,7 @@ class TestBudget(unittest.TestCase):
         worker = self._worker(clock, transport=transport)
         clock.advance(120.0)
         self.assertIsNotNone(worker.run_once())
-        self.assertEqual(sent["max_completion_tokens"], 4096)
+        self.assertEqual(sent["max_completion_tokens"], 2048)
         self.assertNotIn("max_tokens", sent)
 
     def test_gpt56_uses_low_reasoning_and_developer_message(self):
@@ -163,7 +163,7 @@ class TestBudget(unittest.TestCase):
             sent.update(body)
             return self._ok_transport(url, key, body, timeout)
 
-        # 기본은 gpt-5.4-pro — 이 케이스는 5.6 계약을 별도 config로 검증한다.
+        # 기본은 gpt-5.6-sol — low effort로 60초 내 완료되게 한다.
         from aegis_defender.config import RuntimeConfig
         cfg = RuntimeConfig(
             agent_socket="/run/agent.sock",
@@ -177,7 +177,7 @@ class TestBudget(unittest.TestCase):
         clock.advance(120.0)
         self.assertIsNotNone(worker.run_once())
         self.assertEqual(sent["model"], "gpt-5.6-sol")
-        self.assertEqual(sent["reasoning_effort"], "high")
+        self.assertEqual(sent["reasoning_effort"], "low")
         self.assertEqual(sent["messages"][0]["role"], "developer")
         self.assertNotIn("temperature", sent)
 
@@ -193,7 +193,7 @@ class TestBudget(unittest.TestCase):
         clock.advance(120.0)
         self.assertIsNotNone(worker.run_once())
         self.assertEqual(sent["model"], "gpt-5.6-sol")
-        self.assertEqual(sent["reasoning_effort"], "high")
+        self.assertEqual(sent["reasoning_effort"], "low")
         self.assertEqual(sent["messages"][0]["role"], "developer")
         self.assertNotIn("temperature", sent)
 

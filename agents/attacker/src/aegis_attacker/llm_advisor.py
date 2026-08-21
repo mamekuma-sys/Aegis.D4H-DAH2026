@@ -20,8 +20,8 @@ from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
 MAX_LLM_CALLS_PER_ROUND = 32
-LLM_TIMEOUT = 30.0
-LLM_MAX_COMPLETION_TOKENS = 1024
+LLM_TIMEOUT = 45.0
+LLM_MAX_COMPLETION_TOKENS = 2048
 LLM_REASONING_EFFORT = "low"
 _RETRYABLE_LLM_STATUSES = frozenset({0, 408, 409, 425, 429, 500, 502, 503, 504})
 # 공격 대상이 반환한 최대 1MiB 응답을 그대로 prompt로 보내지 않는다. 토큰 수는

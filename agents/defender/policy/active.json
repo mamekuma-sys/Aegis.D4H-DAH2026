@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-p3-r7-lockdown",
-  "generated_at": "2026-08-21T06:30:00Z",
+  "bundle_id": "defender-2026-08-21-p3-r8-fast-llm",
+  "generated_at": "2026-08-21T07:00:00Z",
   "baseline_profiles": [
     "6/8080",
     "6/9000",
@@ -584,18 +584,18 @@
       "ports": [
         8082
       ],
-      "pattern": "(?:GET|POST) (?:https?://[^\\s/]+)?/(?:api/)?graphql[\\s\\S]{0,1000}(?:missionAudit|%6[dD]%69%73%73%69%6[fF]%6[eE]%41%75%64%69%74)",
+      "pattern": "(?:GET|POST) (?:https?://[^\\s]+?)?/(?:api/)?graphql[\\s\\S]{0,1000}(?:missionAudit|%6[dD]%69%73%73%69%6[fF]%6[eE]%41%75%64%69%74)",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r3-l2-graphql-mission-audit",
-      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-fast-llm",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
       ],
-      "evidence_id": "TEAM1-PCAP-P3-R7-L2-GRAPHQL-GET-MISSION-AUDIT-20260821",
+      "evidence_id": "TEAM1-PCAP-P3-R8-L2-GRAPHQL-ABS-URL-20260821",
       "positive_fixture_id": "TEAM1-P2R3-GRAPHQL-MISSION-AUDIT-POS-001",
       "negative_fixture_id": "TEAM1-P2R3-GRAPHQL-HEALTH-NEG-001",
       "sla_fixture_id": "TEAM1-P2R3-L2-SLA-100-001",
@@ -1142,7 +1142,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "p2r6-l2-graphql-get-semantic",
-      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-fast-llm",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -1222,7 +1222,7 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "p2r6-l2-graphql-post-semantic",
-      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-fast-llm",
       "parser_version": 1,
       "profile_scope": [
         "6/8082"
@@ -1385,12 +1385,12 @@
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-r7-mqtt",
-      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-fast-llm",
       "parser_version": 1,
       "profile_scope": [
         "6/1883"
       ],
-      "evidence_id": "TEAM1-PCAP-P3-R7-L3-MQTT-UAV-NODE-CONFIG-20260821",
+      "evidence_id": "TEAM1-PCAP-P3-R8-L3-MQTT-UAV-CONFIG-20260821",
       "positive_fixture_id": "SIG-L3-MQTT-UAV-CONFIG-POS-001",
       "negative_fixture_id": "SIG-L3-MQTT-WILDCARD-NEG-001",
       "sla_fixture_id": "TEAM1-P3-SLA-100-001",
@@ -1437,13 +1437,13 @@
       "ports": [
         1883
       ],
-      "pattern": "uav/node/config|mcs_token|mcs/tasking",
+      "pattern": "uav/node/config|mcs_token|mcs_user|relay-bootstrap",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p3-r7-mqtt-config",
-      "promoted_in_bundle": "defender-2026-08-21-p3-r7-lockdown",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-fast-llm",
       "parser_version": 1,
       "profile_scope": [
         "6/1883"
@@ -1454,6 +1454,35 @@
       "sla_fixture_id": "TEAM1-P3-SLA-100-001",
       "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 MQTT CONNECT fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "sig-l2-graphql-mission-audit-body-001",
+      "kind": "payload_regex",
+      "category": "sensitive-path",
+      "reason_code": "sig-l2-graphql-mission-audit-body",
+      "protocol": "tcp",
+      "ports": [
+        8082
+      ],
+      "pattern": "missionAudit",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p3-r8-graphql-body",
+      "promoted_in_bundle": "defender-2026-08-21-p3-r8-fast-llm",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/8082"
+      ],
+      "evidence_id": "TEAM1-PCAP-P3-R8-L2-GRAPHQL-MISSION-AUDIT-BODY-20260821",
+      "positive_fixture_id": "TEAM1-P3R8-GRAPHQL-BODY-POS-001",
+      "negative_fixture_id": "TEAM1-P2R3-GRAPHQL-HEALTH-NEG-001",
+      "sla_fixture_id": "TEAM1-P3-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA 하락 또는 missionAudit 없는 정상 GraphQL fixture 실패 시 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
     }
