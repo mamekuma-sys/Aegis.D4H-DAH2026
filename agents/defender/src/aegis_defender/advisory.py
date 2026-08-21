@@ -37,26 +37,31 @@ from .logging import AuditLogger, contains_secret_like, redact_secrets
 from .metrics import M_ADVISORY_CALL, M_ADVISORY_FAILURE, M_ADVISORY_TOKENS, Metrics
 from .state import CorrelationSnapshotRef
 
-# 호출 예산(§12.1). Round 20분 기준으로 넉넉하되 상한이 있는 값이다.
-MIN_CALL_INTERVAL_SECONDS = 60.0
-MAX_CALLS_PER_ROUND = 20
-TOP_K_FLOWS = 5
-REQUEST_TIMEOUT_SECONDS = 20.0
-MAX_RECENT_ADVISORIES = 16
-MAX_RECOMMENDATION_CHARS = 4000
+# 호출 예산(§12.1). 팀 LiteLLM $1360 한도를 방어 조언에도 적극 사용한다.
+# (판정 핫패스에는 들어가지 않으며 SHADOW 후보·Break 입력만 생성한다.)
+MIN_CALL_INTERVAL_SECONDS = 3.0
+MAX_CALLS_PER_ROUND = 2000
+TOP_K_FLOWS = 16
+REQUEST_TIMEOUT_SECONDS = 45.0
+MAX_RECENT_ADVISORIES = 64
+MAX_RECOMMENDATION_CHARS = 8000
 ADVISORY_TTL_SECONDS = 1800.0
+ADVISORY_MAX_COMPLETION_TOKENS = 2048
 
-# 실패가 이어지면 예산을 태우지 않고 물러난다.
-FAILURE_BACKOFF_SECONDS = 120.0
-MAX_CONSECUTIVE_FAILURES = 3
+# 실패가 이어지면 잠시 물러나되, 예산 소진을 위해 백오프는 짧게 둔다.
+FAILURE_BACKOFF_SECONDS = 30.0
+MAX_CONSECUTIVE_FAILURES = 8
 
 _SYSTEM_PROMPT = (
-    "You are assisting a defensive network team during an authorized security exercise. "
-    "You receive only aggregated, redacted flow statistics - never packet payloads. "
-    "Propose at most three candidate detection signatures. "
-    "For each candidate state: the observable field it inspects, why normal traffic would "
-    "not match it, and what evidence must be collected before it may be enabled. "
-    "Every candidate you propose starts in SHADOW mode and requires human approval."
+    "You are assisting Team1 finals defense (Aegis). You receive only aggregated, "
+    "redacted flow statistics - never payloads, flags, tokens, or secrets. "
+    "Propose up to five precise DROP-candidate signatures for the open layers: "
+    "L1 8080/9000 (portal,/svc/flag-*, SatDiag Export/Tail), "
+    "L2 8082 (GraphQL missionAudit, /api/rsc-action, /ws/mission-feed, forged admin), "
+    "L3 9090 (UNION SQLi on /product, /flag,/rc/status,/teleop/status). "
+    "Prefer regex/http semantic checks that miss normal SLA probes. "
+    "For each candidate: field inspected, why benign traffic should not match, "
+    "required evidence before ACTIVE enablement. Candidates begin as SHADOW only."
 )
 
 
@@ -260,10 +265,14 @@ class AdvisoryWorker:
         body = {
             "model": self._config.llm_model,
             "messages": messages,
-            "max_completion_tokens": 600,
+            "max_completion_tokens": ADVISORY_MAX_COMPLETION_TOKENS,
         }
-        if self._config.llm_model.startswith("gpt-5.6-"):
-            body["reasoning_effort"] = "low"
+        model_id = self._config.llm_model
+        if model_id.startswith("gpt-5.6-"):
+            body["reasoning_effort"] = "high"
+        elif model_id.endswith("-pro") or model_id in {"o3", "o4-mini"}:
+            # Responses 계열 — temperature 미지원에 가깝게 취급한다.
+            pass
         else:
             body["temperature"] = 0.2
         url = f"{self._config.llm_base_url}/v1/chat/completions"

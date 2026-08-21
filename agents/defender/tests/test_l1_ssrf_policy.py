@@ -30,6 +30,10 @@ _L1_SVC_FLAG_RULE_ID = "sig-l1-svc-flag-gateway-001"
 _L1_PORTAL_FEEDBACK_RULE_ID = "sig-l1-portal-feedback-001"
 _L2_RSC_RULE_ID = "sig-l2-rsc-action-env-ref-001"
 _L2_WS_FEED_RULE_ID = "sig-l2-ws-mission-feed-001"
+_L3_SENSITIVE_RULE_ID = "sig-l3-sensitive-routes-001"
+_L3_UNION_BROAD_RULE_ID = "sig-l3-product-union-broad-001"
+_L2_SCHEMA_RULE_ID = "sig-l2-graphql-schema-001"
+_L4_FLAG_RULE_ID = "sig-l4-flag-secret-001"
 _ACTIVE_RULES = {
     _L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID,
     _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
@@ -37,6 +41,7 @@ _ACTIVE_RULES = {
     _L1_SATDIAG_TAIL_RULE_ID, _L1_SATDIAG_EXPORT_RULE_ID,
     _L2_GRAPHQL_RULE_ID, _L1_SVC_FLAG_RULE_ID, _L1_PORTAL_FEEDBACK_RULE_ID,
     _L2_RSC_RULE_ID, _L2_WS_FEED_RULE_ID,
+    _L3_SENSITIVE_RULE_ID, _L3_UNION_BROAD_RULE_ID, _L2_SCHEMA_RULE_ID, _L4_FLAG_RULE_ID,
 }
 
 _POSITIVE_PATHS = (
@@ -403,7 +408,33 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(decision.verdict, VERDICT_DROP)
         self.assertEqual(decision.rule_id, _L2_GRAPHQL_RULE_ID)
 
+    def test_finals_p3_l3_sensitive_and_union_drop(self):
+        cases = (
+            (b"GET /flag HTTP/1.1\r\nHost: x\r\n\r\n", 9090, _L3_SENSITIVE_RULE_ID),
+            (b"GET /rc/status HTTP/1.1\r\nHost: x\r\n\r\n", 9090, _L3_SENSITIVE_RULE_ID),
+            (b"GET /product?id=-1+UNION+SELECT+1%2C2%2C3 HTTP/1.1\r\nHost: x\r\n\r\n",
+             9090, _L3_UNION_BROAD_RULE_ID),
+            (b"GET /flag HTTP/1.1\r\nHost: x\r\n\r\n", 8410, _L4_FLAG_RULE_ID),
+        )
+        for index, (payload, port, rule_id) in enumerate(cases, start=1):
+            with self.subTest(rule_id=rule_id, port=port):
+                parsed = parse_ip(ipv4_tcp(payload, dst_port=port))
+                decision = self.policy.decide(910 + index, parsed, 0.0)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, rule_id)
+
+    def test_finals_p3_graphql_schema_drops(self):
+        payload = (
+            b"POST /graphql HTTP/1.1\r\nHost: x\r\n\r\n"
+            b'{"query":"{ __schema { types { name } } }"}'
+        )
+        parsed = parse_ip(ipv4_tcp(payload, dst_port=8082))
+        decision = self.policy.decide(920, parsed, 0.0)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _L2_SCHEMA_RULE_ID)
+
     def test_finals_p2_8082_benign_graphql_accepts(self):
+
 
         bodies = (
             b'{"query":"{ __typename }"}',
@@ -439,9 +470,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p2r5-rsc-ws-checkpoint"
+            "defender-2026-08-21-p3-l3-llm-harden"
         )
-        self.assertEqual(self.report.drop_capable_rules, 16)
+        self.assertEqual(self.report.drop_capable_rules, 20)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

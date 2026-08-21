@@ -152,7 +152,7 @@ class TestBudget(unittest.TestCase):
         worker = self._worker(clock, transport=transport)
         clock.advance(120.0)
         self.assertIsNotNone(worker.run_once())
-        self.assertEqual(sent["max_completion_tokens"], 600)
+        self.assertEqual(sent["max_completion_tokens"], 2048)
         self.assertNotIn("max_tokens", sent)
 
     def test_gpt56_uses_low_reasoning_and_developer_message(self):
@@ -163,13 +163,38 @@ class TestBudget(unittest.TestCase):
             sent.update(body)
             return self._ok_transport(url, key, body, timeout)
 
-        worker = self._worker(clock, transport=transport)
+        # 기본은 gpt-5.4-pro — 이 케이스는 5.6 계약을 별도 config로 검증한다.
+        from aegis_defender.config import RuntimeConfig
+        cfg = RuntimeConfig(
+            agent_socket="/run/agent.sock",
+            llm_base_url="http://litellm.lig.internal:4000",
+            llm_api_key="test-key-value",
+            llm_model="gpt-5.6-sol",
+        )
+        worker = AdvisoryWorker(
+            cfg, published_ref(clock), clock=clock, transport=transport,
+        )
         clock.advance(120.0)
         self.assertIsNotNone(worker.run_once())
         self.assertEqual(sent["model"], "gpt-5.6-sol")
-        self.assertEqual(sent["reasoning_effort"], "low")
+        self.assertEqual(sent["reasoning_effort"], "high")
         self.assertEqual(sent["messages"][0]["role"], "developer")
         self.assertNotIn("temperature", sent)
+
+    def test_primary_pro_omits_temperature(self):
+        clock = FakeClock()
+        sent = {}
+
+        def transport(url, key, body, timeout):
+            sent.update(body)
+            return self._ok_transport(url, key, body, timeout)
+
+        worker = self._worker(clock, transport=transport)
+        clock.advance(120.0)
+        self.assertIsNotNone(worker.run_once())
+        self.assertEqual(sent["model"], "gpt-5.4-pro")
+        self.assertNotIn("temperature", sent)
+        self.assertNotIn("reasoning_effort", sent)
 
     def test_round_call_cap(self):
         clock = FakeClock()
@@ -194,7 +219,7 @@ class TestBudget(unittest.TestCase):
         clock.advance(120.0)
         worker.run_once()
         evidence = worker.usage_evidence()
-        self.assertEqual(evidence["model_id"], "gpt-5.6-sol")
+        self.assertEqual(evidence["model_id"], "gpt-5.4-pro")
         self.assertEqual(evidence["calls"], 1)
         self.assertEqual(evidence["prompt_tokens"], 120)
         self.assertEqual(evidence["completion_tokens"], 40)
@@ -249,13 +274,13 @@ class TestFailureIsolation(unittest.TestCase):
             raise TimeoutError("slow")
 
         worker = AdvisoryWorker(ENABLED, published_ref(clock), clock=clock, transport=transport)
-        for _ in range(3):
+        for _ in range(8):
             clock.advance(120.0)
             worker.run_once()
-        self.assertEqual(worker.failures, 3)
-        clock.advance(61.0)
+        self.assertEqual(worker.failures, 8)
+        clock.advance(15.0)
         self.assertFalse(worker.should_call(clock.now))
-        clock.advance(200.0)
+        clock.advance(20.0)
         self.assertTrue(worker.should_call(clock.now))
 
     def test_no_snapshot_means_no_call(self):

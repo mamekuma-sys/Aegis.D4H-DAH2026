@@ -24,7 +24,8 @@ DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
 # §12.1 — 공격자와 같은 frontier profile을 강제해 운영 환경의 구형 mini 기본값으로
 # 되돌아가지 않는다. 방어 LLM은 비동기 조언 경로에서만 최대 20회 호출되므로 packet
 # verdict의 300ms hot path에는 영향을 주지 않는다.
-DEFAULT_LLM_MODEL = "gpt-5.6-sol"
+# 방어 비동기 조언도 고가용 모델을 쓴다(핫패스 DROP은 ACTIVE 규칙만).
+DEFAULT_LLM_MODEL = "gpt-5.4-pro"
 
 # 공식 계약에 없어 런타임이 요구해서는 안 되는 환경변수(§16.1). 테스트가 이 목록을
 # 사용해 "설정이 이 값들에 의존하지 않는다"를 회귀 검증한다.
