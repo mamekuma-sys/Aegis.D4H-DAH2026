@@ -255,6 +255,30 @@ class ExecutionAdapter:
                 plan.args.get("varint_fields") or {},
                 plan.timeout,
             )
+        elif plan.tool == "mqtt":
+            method = "MQTT"
+            topics = list(plan.args.get("topics") or ("#",))
+            raw_path = "SUBSCRIBE " + ",".join(topics[:4])
+            resp = self._egress.request_mqtt(
+                Capability.ATTACK_TARGET,
+                plan.target.host,
+                plan.target.port,
+                topics,
+                plan.timeout,
+            )
+        elif plan.tool == "rtsp":
+            method = str(plan.args.get("method", "DESCRIBE")).upper()
+            raw_path = plan.args.get("path", "/") or "/"
+            resp = self._egress.request_rtsp(
+                Capability.ATTACK_TARGET,
+                plan.target.host,
+                plan.target.port,
+                method,
+                raw_path,
+                int(plan.args.get("cseq") or 1),
+                plan.args.get("headers") or {},
+                plan.timeout,
+            )
         elif plan.tool == "http":
             method = str(plan.args.get("method", "GET")).upper()
             raw_path = plan.args.get("path", "/") or "/"

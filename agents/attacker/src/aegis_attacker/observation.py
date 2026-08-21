@@ -89,6 +89,20 @@ class UrllibHttp:
         )
 
     @staticmethod
+    def request_mqtt(host: str, port: int, topics, timeout: float = 4.0) -> HttpResponse:
+        from .mqtt_transport import mqtt_subscribe_collect
+        return mqtt_subscribe_collect(host, port, list(topics or ()), timeout=timeout)
+
+    @staticmethod
+    def request_rtsp(host: str, port: int, method: str, path: str, cseq: int = 1,
+                     extra_headers=None, timeout: float = 4.0) -> HttpResponse:
+        from .rtsp_transport import rtsp_exchange
+        return rtsp_exchange(
+            host, port, method, path, cseq=cseq, timeout=timeout,
+            extra_headers=dict(extra_headers or {}),
+        )
+
+    @staticmethod
     def _request_with(opener, method: str, url: str, headers=None, body=None,
                       timeout: float = 6.0) -> HttpResponse:
         data = body.encode() if isinstance(body, str) else body
@@ -276,6 +290,51 @@ class Observer:
             body_fingerprint=body_fp,
             latency_ms=latency_ms,
             note="no-response" if resp.status == 0 else "grpc",
+            round_id=self._round_id,
+            evidence_ref=self._evidence.make(endpoint, body_fp),
+        )
+        return obs, resp
+
+    def observe_mqtt(self, endpoint: Endpoint, topics, timeout: float = 4.0):
+        self._rate.acquire_request()
+        start = self._clock()
+        resp = self._egress.request_mqtt(
+            Capability.ATTACK_TARGET, endpoint.host, endpoint.port, topics, timeout,
+        )
+        latency_ms = (self._clock() - start) * 1000.0
+        body_fp = fingerprint(resp.body)
+        topic_label = ",".join(topics[:3]) if topics else "#"
+        obs = Observation(
+            endpoint=endpoint,
+            request_fingerprint=fingerprint(f"MQTT SUB {topic_label}"),
+            status=resp.status,
+            redacted_header_hints=notable_headers(resp.headers),
+            body_fingerprint=body_fp,
+            latency_ms=latency_ms,
+            note="no-response" if resp.status == 0 else "mqtt",
+            round_id=self._round_id,
+            evidence_ref=self._evidence.make(endpoint, body_fp),
+        )
+        return obs, resp
+
+    def observe_rtsp(self, endpoint: Endpoint, method: str, path: str,
+                     extra_headers=None, timeout: float = 4.0):
+        self._rate.acquire_request()
+        start = self._clock()
+        resp = self._egress.request_rtsp(
+            Capability.ATTACK_TARGET, endpoint.host, endpoint.port,
+            method, path, 1, extra_headers, timeout,
+        )
+        latency_ms = (self._clock() - start) * 1000.0
+        body_fp = fingerprint(resp.body)
+        obs = Observation(
+            endpoint=endpoint,
+            request_fingerprint=fingerprint(f"RTSP {method} {path}"),
+            status=resp.status,
+            redacted_header_hints=notable_headers(resp.headers),
+            body_fingerprint=body_fp,
+            latency_ms=latency_ms,
+            note="no-response" if resp.status == 0 else "rtsp",
             round_id=self._round_id,
             evidence_ref=self._evidence.make(endpoint, body_fp),
         )

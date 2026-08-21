@@ -21,6 +21,8 @@ from .egress import EgressError, EgressGateway, build_allowlists
 from .exploits import (
     Attempt,
     GrpcAttempt,
+    MqttAttempt,
+    RtspAttempt,
     auth_tamper_attempts,
     build_attempts,
     extract_internal_urls,
@@ -28,6 +30,10 @@ from .exploits import (
     observed_attempts,
     observed_grpc_attempts,
     observed_grpc_bootstrap,
+    observed_mqtt_attempts,
+    observed_mqtt_bootstrap,
+    observed_rtsp_attempts,
+    observed_rtsp_bootstrap,
     ssrf_pivot_attempts,
     tamper_token,
 )
@@ -612,6 +618,136 @@ class AttackerRuntime:
                 run(attempt)
         return captured_any
 
+    def _execute_mqtt_attempt(self, endpoint, attempt: MqttAttempt, evidence_ref):
+        if self._stop_event.is_set():
+            return None, False
+        now = self.clock()
+        plan = ExecutionPlan(
+            tool="mqtt",
+            target=endpoint,
+            args={"topics": list(attempt.topics)},
+            plan_id=f"mqtt-{self._round_id}-{endpoint.endpoint_id}-{now}",
+            round_id=self._round_id,
+            endpoint_id=endpoint.endpoint_id,
+            capability=Capability.ATTACK_TARGET,
+            evidence_refs=[evidence_ref] if evidence_ref else [],
+            created_at_monotonic=now,
+            expires_at_monotonic=now + PLAN_TTL,
+            side_effect_class=SideEffectClass.READ_ONLY,
+            reason="det:" + attempt.reason,
+        )
+        try:
+            result = self._adapter.execute(plan)
+        except (PlanBindingError, EgressError):
+            return None, False
+        self._report.record_request()
+        self._remember_evidence(endpoint, result.observation.evidence_ref)
+        if self._stop_event.is_set():
+            return result, False
+        return result, self._process_flags(
+            result.body, result.observation.redacted_header_hints
+        )
+
+    def _attack_observed_mqtt(self, endpoint) -> tuple:
+        if not observed_mqtt_bootstrap(endpoint.port):
+            return False, False
+        obs, resp = self._observer.observe_mqtt(endpoint, ("#",))
+        self._report.record_observation()
+        self._report.record_request()
+        self._remember_evidence(endpoint, obs.evidence_ref)
+        if resp.status == 0:
+            return False, False
+        with self._state_lock:
+            self._responsive_endpoints.add(endpoint.endpoint_id)
+        self.audit.log("protocol-observed", target=endpoint.key(), scheme="mqtt")
+        captured_any = self._process_flags(resp.body, resp.headers)
+        evidence_ref = obs.evidence_ref
+        for attempt in observed_mqtt_attempts(endpoint.port):
+            if self._stop_event.is_set():
+                break
+            result, captured = self._execute_mqtt_attempt(
+                endpoint, attempt, evidence_ref
+            )
+            if result is not None:
+                evidence_ref = result.observation.evidence_ref
+            if captured:
+                captured_any = True
+                self.audit.log(
+                    "hit",
+                    target=endpoint.key(),
+                    path=",".join(attempt.topics[:3]),
+                    vuln=attempt.vuln.value,
+                    reason="det:" + attempt.reason,
+                )
+        return True, captured_any
+
+    def _execute_rtsp_attempt(self, endpoint, attempt: RtspAttempt, evidence_ref):
+        if self._stop_event.is_set():
+            return None, False
+        now = self.clock()
+        plan = ExecutionPlan(
+            tool="rtsp",
+            target=endpoint,
+            args={
+                "method": attempt.method,
+                "path": attempt.path,
+                "headers": dict(attempt.extra_headers),
+            },
+            plan_id=f"rtsp-{self._round_id}-{endpoint.endpoint_id}-{now}",
+            round_id=self._round_id,
+            endpoint_id=endpoint.endpoint_id,
+            capability=Capability.ATTACK_TARGET,
+            evidence_refs=[evidence_ref] if evidence_ref else [],
+            created_at_monotonic=now,
+            expires_at_monotonic=now + PLAN_TTL,
+            side_effect_class=SideEffectClass.READ_ONLY,
+            reason="det:" + attempt.reason,
+        )
+        try:
+            result = self._adapter.execute(plan)
+        except (PlanBindingError, EgressError):
+            return None, False
+        self._report.record_request()
+        self._remember_evidence(endpoint, result.observation.evidence_ref)
+        if self._stop_event.is_set():
+            return result, False
+        return result, self._process_flags(
+            result.body, result.observation.redacted_header_hints
+        )
+
+    def _attack_observed_rtsp(self, endpoint) -> tuple:
+        if not observed_rtsp_bootstrap(endpoint.port):
+            return False, False
+        obs, resp = self._observer.observe_rtsp(endpoint, "OPTIONS", "*")
+        self._report.record_observation()
+        self._report.record_request()
+        self._remember_evidence(endpoint, obs.evidence_ref)
+        if resp.status == 0:
+            return False, False
+        with self._state_lock:
+            self._responsive_endpoints.add(endpoint.endpoint_id)
+        self.audit.log("protocol-observed", target=endpoint.key(), scheme="rtsp")
+        captured_any = self._process_flags(resp.body, resp.headers)
+        evidence_ref = obs.evidence_ref
+        for attempt in observed_rtsp_attempts(endpoint.port):
+            if self._stop_event.is_set():
+                break
+            result, captured = self._execute_rtsp_attempt(
+                endpoint, attempt, evidence_ref
+            )
+            if result is not None:
+                evidence_ref = result.observation.evidence_ref
+            if captured:
+                captured_any = True
+                self.audit.log(
+                    "hit",
+                    target=endpoint.key(),
+                    path=f"{attempt.method} {attempt.path}",
+                    vuln=attempt.vuln.value,
+                    reason="det:" + attempt.reason,
+                )
+        return True, captured_any
+
     # ---- 단일 표적 공격 ----
 
     def attack_endpoint(self, endpoint) -> bool:
@@ -631,7 +767,31 @@ class AttackerRuntime:
                 evidence_ref=None,
             )
             return grpc_captured
-        # gRPC가 protocol만 확인되고 flag가 없으면 HTTP/LLM 경로로 이어서 비싼 모델도 쓴다.
+        mqtt_handled, mqtt_captured = self._attack_observed_mqtt(endpoint)
+        if mqtt_handled:
+            self._burn_llm_on_endpoint(
+                endpoint,
+                banner=(
+                    "MQTT broker on this port. Prefer topic wildcards, $SYS, "
+                    "uav/drone/telemetry/flag topics; look for FLAG in PUBLISH payloads."
+                ),
+                banner_fp=f"mqtt:{endpoint.port}",
+                evidence_ref=None,
+            )
+            return mqtt_captured
+        rtsp_handled, rtsp_captured = self._attack_observed_rtsp(endpoint)
+        if rtsp_handled:
+            self._burn_llm_on_endpoint(
+                endpoint,
+                banner=(
+                    "RTSP media server on this port. Prefer DESCRIBE paths "
+                    "/stream /live /uav /flag and SDP bodies for FLAG."
+                ),
+                banner_fp=f"rtsp:{endpoint.port}",
+                evidence_ref=None,
+            )
+            return rtsp_captured
+        # protocol 전용 포트가 아니면 HTTP/LLM 경로로 이어간다.
         obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
         for _ in range(bootstrap_requests):
             self._report.record_observation()

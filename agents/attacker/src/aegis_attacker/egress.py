@@ -98,3 +98,43 @@ class EgressGateway:
         return requester(
             host, port, rpc, string_fields, varint_fields, timeout
         )
+
+    def request_mqtt(self, capability: Capability, host: str, port: int, topics,
+                     timeout: float = 4.0):
+        """Allowlisted ATTACK_TARGET의 MQTT CONNECT+SUBSCRIBE 수집."""
+        if capability != Capability.ATTACK_TARGET:
+            raise EgressError("MQTT 요청은 ATTACK_TARGET 전용")
+        if port != 1883:
+            raise EgressError("관측되지 않은 MQTT port")
+        if (host, port) not in self._allow.get(capability, set()):
+            raise EgressError(
+                f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖"
+            )
+        requester = getattr(self._transport, "request_mqtt", None)
+        if requester is not None:
+            return requester(host, port, list(topics or ()), timeout)
+        from .mqtt_transport import mqtt_subscribe_collect
+        return mqtt_subscribe_collect(host, port, list(topics or ()), timeout=timeout)
+
+    def request_rtsp(self, capability: Capability, host: str, port: int,
+                     method: str, path: str, cseq: int = 1,
+                     extra_headers=None, timeout: float = 4.0):
+        """Allowlisted ATTACK_TARGET의 RTSP OPTIONS/DESCRIBE."""
+        if capability != Capability.ATTACK_TARGET:
+            raise EgressError("RTSP 요청은 ATTACK_TARGET 전용")
+        if port != 8554:
+            raise EgressError("관측되지 않은 RTSP port")
+        if (host, port) not in self._allow.get(capability, set()):
+            raise EgressError(
+                f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖"
+            )
+        requester = getattr(self._transport, "request_rtsp", None)
+        if requester is not None:
+            return requester(
+                host, port, method, path, cseq, extra_headers, timeout,
+            )
+        from .rtsp_transport import rtsp_exchange
+        return rtsp_exchange(
+            host, port, method, path, cseq=cseq, timeout=timeout,
+            extra_headers=dict(extra_headers or {}),
+        )

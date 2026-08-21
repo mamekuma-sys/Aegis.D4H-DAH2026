@@ -494,9 +494,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p3-canonical-lfi"
+            "defender-2026-08-21-p3-mqtt-rtsp"
         )
-        self.assertEqual(self.report.drop_capable_rules, 22)
+        self.assertEqual(self.report.drop_capable_rules, 24)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

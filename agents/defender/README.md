@@ -85,7 +85,7 @@ p50·p95·p99·max가 남습니다.
 
 ## 현재 정책 상태
 
-현재 bundle `defender-2026-08-21-p3-canonical-lfi`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, `service_id` portal feedback, `/api/rsc-action` env-ref, `/ws/mission-feed`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi에 대응하는 22개 규칙만 `ACTIVE`이고 일반 휴리스틱 13개는 `SHADOW`입니다.
+현재 bundle `defender-2026-08-21-p3-mqtt-rtsp`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, `service_id` portal feedback, `/api/rsc-action` env-ref, `/ws/mission-feed`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi, L3 MQTT wildcard/flag 토픽, L3 RTSP `/flag` DESCRIBE에 대응하는 24개 규칙만 `ACTIVE`이고 일반 휴리스틱 13개는 `SHADOW`입니다.
 
 L2 cookie rule은 raw Base64 문자열을 나열하지 않고 packet-local 또는 최대 4KB in-order stitching으로 완성된 HTTP request prefix와 bounded JSON scalar claim만 해석합니다. GraphQL은 숫자 하나로 명확한 bounded `Content-Length` 본문까지 기다려 분할된 `missionAudit` 요청도 판정합니다. gap·불완전·상한 초과는 차단 사유가 아닙니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
 

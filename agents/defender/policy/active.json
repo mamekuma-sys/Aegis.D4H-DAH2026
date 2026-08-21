@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-p3-canonical-lfi",
-  "generated_at": "2026-08-21T04:20:00Z",
+  "bundle_id": "defender-2026-08-21-p3-mqtt-rtsp",
+  "generated_at": "2026-08-21T05:00:00Z",
   "baseline_profiles": [
     "6/8080",
     "6/9000",
@@ -1157,6 +1157,64 @@
       "sla_fixture_id": "TEAM1-P3-SLA-100-001",
       "expires_at": "2026-09-01T00:00:00Z",
       "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 config fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "sig-l3-mqtt-wildcard-flag-001",
+      "kind": "payload_regex",
+      "category": "sensitive-path",
+      "reason_code": "sig-l3-mqtt-wildcard-flag",
+      "protocol": "tcp",
+      "ports": [
+        1883
+      ],
+      "pattern": "\\x82[\\x00-\\xff]{0,96}(?:\\x00\\x01#|\\x00\\x05\\$SYS|flag)",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p3-sig-l3-mqtt",
+      "promoted_in_bundle": "defender-2026-08-21-p3-mqtt-rtsp",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/1883"
+      ],
+      "evidence_id": "TEAM1-L3-MQTT-WILDCARD-20260821",
+      "positive_fixture_id": "SIG-L3-MQTT-WILDCARD-POS-001",
+      "negative_fixture_id": "SIG-L3-MQTT-WILDCARD-NEG-001",
+      "sla_fixture_id": "TEAM1-P3-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 MQTT CONNECT fixture가 실패하면 직전 검증 이미지로 복귀",
+      "owner_review": "approved",
+      "lead_review": "approved"
+    },
+    {
+      "rule_id": "sig-l3-rtsp-flag-path-001",
+      "kind": "payload_regex",
+      "category": "sensitive-path",
+      "reason_code": "sig-l3-rtsp-flag-path",
+      "protocol": "tcp",
+      "ports": [
+        8554
+      ],
+      "pattern": "DESCRIBE[^\\r\\n]{0,240}/(?:flag|secret|admin)(?:/|\\s|\\?)",
+      "ignore_case": true,
+      "promotion_state": "ACTIVE",
+      "canary_fraction": 0.0,
+      "canary_seed": "",
+      "promotion_cohort": "team1-p3-sig-l3-rtsp",
+      "promoted_in_bundle": "defender-2026-08-21-p3-mqtt-rtsp",
+      "parser_version": 1,
+      "profile_scope": [
+        "6/8554"
+      ],
+      "evidence_id": "TEAM1-L3-RTSP-FLAG-20260821",
+      "positive_fixture_id": "SIG-L3-RTSP-FLAG-POS-001",
+      "negative_fixture_id": "SIG-L3-RTSP-FLAG-NEG-001",
+      "sla_fixture_id": "TEAM1-P3-SLA-100-001",
+      "expires_at": "2026-09-01T00:00:00Z",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 정상 RTSP OPTIONS fixture가 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
     }
