@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 
+from . import __version__
 from .advisory import AdvisoryWorker
 from .anomaly import AnomalyMonitor
 from .config import ConfigError, RuntimeConfig, load_config
@@ -321,6 +322,7 @@ class DefenderRuntime:
         self.start_workers()
         self.audit.log(
             "startup",
+            agent_version=__version__,
             agent_socket=self.config.agent_socket,
             policy_source=self.policy_report.source,
             bundle_id=self.policy_report.bundle_id,

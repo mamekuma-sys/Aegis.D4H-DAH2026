@@ -67,6 +67,34 @@ def _write_pcap(path: Path, frames: list[bytes]) -> None:
 
 
 class TestPcapReplay(unittest.TestCase):
+    def test_replays_split_egress_flag_as_one_blocked_marker(self):
+        client = b"\x0a\x01\x00\x04"
+        server = b"\x0a\x01\x01\x02"
+        request = b"GET /health HTTP/1.1\r\nHost: service\r\n\r\n"
+        first = b"HTTP/1.1 200 OK\r\n\r\nFLAG{f754c99511e9caa2"
+        second = b"6226bc372215084b}"
+        frames = [
+            _tcp_packet(client, server, 40000, 8080, 100, request),
+            _tcp_packet(server, client, 8080, 40000, 500, first),
+            _tcp_packet(server, client, 8080, 40000, 500 + len(first), second),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pcap = Path(temp_dir) / "split-egress.pcap"
+            _write_pcap(pcap, frames)
+            report = replay_pcaps.replay_paths(
+                [pcap],
+                REPO_ROOT / "agents" / "defender" / "policy",
+                replay_pcaps.parse_as_of("2026-08-21T07:00:00Z"),
+            ).to_dict()
+
+        total = report["total"]
+        self.assertEqual(total["egress_packets"], 2)
+        self.assertEqual(total["egress_flag_packets"], 1)
+        self.assertEqual(total["blocked_egress_flag_packets"], 1)
+        self.assertEqual(total["unexpected_egress_drops"], 0)
+        self.assertEqual(total["flag_linked_labels"], {"unclassified": 1})
+
     def test_replays_egress_flag_verdicts_without_dropping_normal_responses(self):
         client = b"\x0a\x01\x00\x04"
         server = b"\x0a\x01\x01\x02"

@@ -15,7 +15,12 @@ import urllib.error
 from types import MappingProxyType
 
 from aegis_defender.advisory import (
+    FAILURE_BACKOFF_SECONDS,
+    MAX_CALLS_PER_ROUND,
+    MAX_CONSECUTIVE_FAILURES,
     MAX_RECENT_ADVISORIES,
+    MIN_CALL_INTERVAL_SECONDS,
+    REQUEST_TIMEOUT_SECONDS,
     AdvisoryWorker,
     SecretLeakError,
     assert_no_secrets,
@@ -109,7 +114,7 @@ class TestRedaction(unittest.TestCase):
 
         worker = AdvisoryWorker(ENABLED, published_ref(clock), clock=clock, transport=transport)
         worker.build_messages = leaky_messages
-        clock.advance(120.0)
+        clock.advance(301.0)
         self.assertIsNone(worker.run_once())
         self.assertEqual(calls, [], "guard 에 걸렸는데도 외부 호출이 나갔다")
         self.assertEqual(worker.failures, 1)
@@ -134,12 +139,21 @@ class TestBudget(unittest.TestCase):
     def test_minimum_interval_between_calls(self):
         clock = FakeClock()
         worker = self._worker(clock)
-        clock.advance(120.0)
+        clock.advance(MIN_CALL_INTERVAL_SECONDS + 1.0)
         self.assertIsNotNone(worker.run_once())
         self.assertIsNone(worker.run_once())  # 간격 미충족
-        clock.advance(61.0)
+        clock.advance(MIN_CALL_INTERVAL_SECONDS - 1.0)
+        self.assertIsNone(worker.run_once())
+        clock.advance(2.0)
         self.assertIsNotNone(worker.run_once())
         self.assertEqual(worker.calls, 2)
+
+    def test_production_budget_is_break_only_and_bounded(self):
+        self.assertEqual(MIN_CALL_INTERVAL_SECONDS, 300.0)
+        self.assertEqual(MAX_CALLS_PER_ROUND, 4)
+        self.assertEqual(REQUEST_TIMEOUT_SECONDS, 15.0)
+        self.assertEqual(MAX_CONSECUTIVE_FAILURES, 2)
+        self.assertEqual(FAILURE_BACKOFF_SECONDS, 600.0)
 
     def test_uses_official_completion_token_parameter(self):
         clock = FakeClock()
@@ -150,7 +164,7 @@ class TestBudget(unittest.TestCase):
             return self._ok_transport(url, key, body, timeout)
 
         worker = self._worker(clock, transport=transport)
-        clock.advance(120.0)
+        clock.advance(301.0)
         self.assertIsNotNone(worker.run_once())
         self.assertEqual(sent["max_completion_tokens"], 768)
         self.assertNotIn("max_tokens", sent)
@@ -163,7 +177,7 @@ class TestBudget(unittest.TestCase):
             sent.update(body)
             return self._ok_transport(url, key, body, timeout)
 
-        # 기본은 gpt-5.6-sol — low effort로 60초 내 완료되게 한다.
+        # 명시적으로 gpt-5.6-sol을 선택해도 low effort로 제한한다.
         from aegis_defender.config import RuntimeConfig
         cfg = RuntimeConfig(
             agent_socket="/run/agent.sock",
@@ -174,7 +188,7 @@ class TestBudget(unittest.TestCase):
         worker = AdvisoryWorker(
             cfg, published_ref(clock), clock=clock, transport=transport,
         )
-        clock.advance(120.0)
+        clock.advance(301.0)
         self.assertIsNotNone(worker.run_once())
         self.assertEqual(sent["model"], "gpt-5.6-sol")
         self.assertEqual(sent["reasoning_effort"], "low")
@@ -192,7 +206,7 @@ class TestBudget(unittest.TestCase):
             return self._ok_transport(url, key, body, timeout)
 
         worker = self._worker(clock, transport=transport)
-        clock.advance(120.0)
+        clock.advance(301.0)
         self.assertIsNotNone(worker.run_once())
         self.assertEqual(sent["model"], "gpt-5.4")
         self.assertNotIn("reasoning_effort", sent)
@@ -202,7 +216,7 @@ class TestBudget(unittest.TestCase):
         clock = FakeClock()
         worker = self._worker(clock, max_calls=3)
         for _ in range(10):
-            clock.advance(120.0)
+            clock.advance(301.0)
             worker.run_once()
         self.assertEqual(worker.calls, 3)
 
@@ -210,7 +224,7 @@ class TestBudget(unittest.TestCase):
         clock = FakeClock()
         worker = self._worker(clock, max_calls=1000)
         for _ in range(MAX_RECENT_ADVISORIES + 10):
-            clock.advance(120.0)
+            clock.advance(301.0)
             worker.run_once()
         self.assertEqual(len(worker.recent), MAX_RECENT_ADVISORIES)
 
@@ -218,7 +232,7 @@ class TestBudget(unittest.TestCase):
         """제23조 — 외부 API 사용 내역과 호출 증빙."""
         clock = FakeClock()
         worker = self._worker(clock)
-        clock.advance(120.0)
+        clock.advance(301.0)
         worker.run_once()
         evidence = worker.usage_evidence()
         self.assertEqual(evidence["model_id"], "gpt-5.4")
@@ -238,7 +252,7 @@ class TestFailureIsolation(unittest.TestCase):
             raise error
 
         worker = AdvisoryWorker(ENABLED, published_ref(clock), clock=clock, transport=transport)
-        clock.advance(120.0)
+        clock.advance(301.0)
         result = worker.run_once()
         return worker, result
 
@@ -265,7 +279,7 @@ class TestFailureIsolation(unittest.TestCase):
             return {"unexpected": True}
 
         worker = AdvisoryWorker(ENABLED, published_ref(clock), clock=clock, transport=transport)
-        clock.advance(120.0)
+        clock.advance(301.0)
         self.assertIsNone(worker.run_once())
         self.assertEqual(worker.failures, 1)
 
@@ -276,13 +290,13 @@ class TestFailureIsolation(unittest.TestCase):
             raise TimeoutError("slow")
 
         worker = AdvisoryWorker(ENABLED, published_ref(clock), clock=clock, transport=transport)
-        for _ in range(8):
-            clock.advance(120.0)
+        for _ in range(MAX_CONSECUTIVE_FAILURES):
+            clock.advance(301.0)
             worker.run_once()
-        self.assertEqual(worker.failures, 8)
-        clock.advance(15.0)
+        self.assertEqual(worker.failures, MAX_CONSECUTIVE_FAILURES)
+        clock.advance(FAILURE_BACKOFF_SECONDS - 1.0)
         self.assertFalse(worker.should_call(clock.now))
-        clock.advance(20.0)
+        clock.advance(2.0)
         self.assertTrue(worker.should_call(clock.now))
 
     def test_no_snapshot_means_no_call(self):
@@ -292,7 +306,7 @@ class TestFailureIsolation(unittest.TestCase):
             ENABLED, CorrelationSnapshotRef(), clock=clock,
             transport=lambda *args: calls.append(args) or {},
         )
-        clock.advance(120.0)
+        clock.advance(301.0)
         self.assertIsNone(worker.run_once())
         self.assertEqual(calls, [])
 
@@ -378,7 +392,7 @@ class TestNoRuntimeAuthority(unittest.TestCase):
             ENABLED, published_ref(clock), clock=clock,
             transport=TestBudget._ok_transport,
         )
-        clock.advance(120.0)
+        clock.advance(301.0)
         advisory = worker.run_once()
         self.assertIsNotNone(advisory)
         with self.assertRaises(Exception):
@@ -396,7 +410,7 @@ class TestNoRuntimeAuthority(unittest.TestCase):
             }
 
         worker = AdvisoryWorker(ENABLED, published_ref(clock), clock=clock, transport=transport)
-        clock.advance(120.0)
+        clock.advance(301.0)
         advisory = worker.run_once()
         self.assertNotIn("aaaaaaaabbbbbbbb", advisory.recommendation)
 

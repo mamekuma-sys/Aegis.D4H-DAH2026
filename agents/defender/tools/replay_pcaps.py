@@ -38,7 +38,7 @@ from aegis_defender.packet import (  # noqa: E402
 )
 from aegis_defender.policy import HotPolicy  # noqa: E402
 from aegis_defender.rules import CompiledPolicy, load_policy  # noqa: E402
-from aegis_defender.stream import HttpStreamStitcher  # noqa: E402
+from aegis_defender.stream import EgressStreamStitcher, HttpStreamStitcher  # noqa: E402
 
 
 SERVICE_PORTS = frozenset({8080, 9000, 8082, 1883, 8554, 9090, 8410, 8420})
@@ -115,6 +115,7 @@ class LayerReport:
     rules: Counter[str] = field(default_factory=Counter)
     labels: Counter[str] = field(default_factory=Counter)
     missed_labels: Counter[str] = field(default_factory=Counter)
+    flag_linked_labels: Counter[str] = field(default_factory=Counter)
 
     def add(self, other: "LayerReport") -> None:
         for name in (
@@ -131,12 +132,14 @@ class LayerReport:
         self.rules.update(other.rules)
         self.labels.update(other.labels)
         self.missed_labels.update(other.missed_labels)
+        self.flag_linked_labels.update(other.flag_linked_labels)
 
     def to_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["rules"] = dict(sorted(self.rules.items()))
         result["labels"] = dict(sorted(self.labels.items()))
         result["missed_labels"] = dict(sorted(self.missed_labels.items()))
+        result["flag_linked_labels"] = dict(sorted(self.flag_linked_labels.items()))
         positives = self.exploit_shape_requests
         others = self.other_requests
         result["exploit_shape_block_rate"] = (
@@ -379,6 +382,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
     clock = ReplayClock()
     hot_policy = HotPolicy(policy=policy, clock=clock)
     request_stitcher = HttpStreamStitcher()
+    egress_stitcher = EgressStreamStitcher()
     pending: dict[tuple[bytes, int, bytes, int], list[RequestRecord]] = {}
     current_response: dict[tuple[bytes, int, bytes, int], RequestRecord] = {}
     records: list[tuple[str, RequestRecord]] = []
@@ -454,6 +458,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
             layer_name = PORT_LAYERS[parsed.src_port]
             layer = layers[layer_name]
             decision = hot_policy.decide(packet_id, parsed, received_at=clock.now)
+            egress_view = egress_stitcher.feed(parsed, clock.now)
             if not parsed.payload:
                 if connection_flow is not None and parsed.tcp_flags & (TCP_FIN | TCP_RST):
                     pending.pop(connection_flow, None)
@@ -461,8 +466,12 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
                 continue
 
             layer.egress_packets += 1
-            flag_in_packet = EGRESS_FLAG_MARKER.search(parsed.payload) is not None
+            flag_view = egress_view if egress_view is not None else parsed.payload
+            flag_in_packet = EGRESS_FLAG_MARKER.search(flag_view) is not None
             if flag_in_packet:
+                # HotPolicy는 marker DROP 뒤 flow tail을 폐기한다. ground-truth도 같은
+                # lifecycle을 써야 이미 막은 marker를 후속 packet에서 중복 세지 않는다.
+                egress_stitcher.discard(parsed.flow_key)
                 layer.egress_flag_packets += 1
                 if decision.is_drop:
                     layer.blocked_egress_flag_packets += 1
@@ -476,7 +485,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
                 for _ in range(response_starts):
                     if queue:
                         current_response[flow] = queue.pop(0)
-            if FLAG_MARKER.search(parsed.payload):
+            if FLAG_MARKER.search(flag_view):
                 record = current_response.get(flow)
                 if record is None:
                     queue = pending.get(flow, [])
@@ -491,6 +500,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
     for layer_name, record in records:
         if record.flag_linked:
             layers[layer_name].flag_linked_requests += 1
+            layers[layer_name].flag_linked_labels[record.label or "unclassified"] += 1
             if record.dropped:
                 layers[layer_name].blocked_flag_linked_requests += 1
     return layers, statuses

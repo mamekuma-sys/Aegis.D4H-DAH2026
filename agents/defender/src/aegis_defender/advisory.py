@@ -37,21 +37,23 @@ from .logging import AuditLogger, contains_secret_like, redact_secrets
 from .metrics import M_ADVISORY_CALL, M_ADVISORY_FAILURE, M_ADVISORY_TOKENS, Metrics
 from .state import CorrelationSnapshotRef
 
-# 호출 예산(§12.1). 팀 LiteLLM $1360 한도를 방어 조언에도 적극 사용한다.
-# (판정 핫패스에는 들어가지 않으며 SHADOW 후보·Break 입력만 생성한다.)
-MIN_CALL_INTERVAL_SECONDS = 1.0
-MAX_CALLS_PER_ROUND = 4000
+# 호출 예산(§12.1). 실전 P3-R9에서 19회 중 18회가 TimeoutError였고 성공한
+# 조언에도 runtime authority가 없다. Break 검토용 증거만 남기도록 빈도와 round
+# 상한을 낮춘다(판정 핫패스에는 들어가지 않는다).
+MIN_CALL_INTERVAL_SECONDS = 300.0
+MAX_CALLS_PER_ROUND = 4
 TOP_K_FLOWS = 24
-REQUEST_TIMEOUT_SECONDS = 45.0
+REQUEST_TIMEOUT_SECONDS = 15.0
 MAX_RECENT_ADVISORIES = 128
 MAX_RECOMMENDATION_CHARS = 12000
 ADVISORY_TTL_SECONDS = 1800.0
 ADVISORY_MAX_COMPLETION_TOKENS = 768
 ADVISORY_REASONING_EFFORT = "low"
 
-# 실패가 이어지면 잠시 물러나되, 예산 소진을 위해 백오프는 짧게 둔다.
-FAILURE_BACKOFF_SECONDS = 30.0
-MAX_CONSECUTIVE_FAILURES = 8
+# 연속 timeout이면 남은 호출·token을 보존한다. 다음 Break 후보를 완전히 잃지
+# 않도록 영구 disable 대신 bounded circuit break를 쓴다.
+FAILURE_BACKOFF_SECONDS = 600.0
+MAX_CONSECUTIVE_FAILURES = 2
 
 _SYSTEM_PROMPT = (
     "You are assisting Team1 finals defense (Aegis). You receive only aggregated, "

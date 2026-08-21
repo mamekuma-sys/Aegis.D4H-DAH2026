@@ -391,6 +391,11 @@ class TestLoadOrder(unittest.TestCase):
             self.assertEqual(rule.protocol, 6, rule.rule_id)
             if rule.rule_id == "sig-flag-egress-001":
                 self.assertEqual(rule.ports, ())
+                self.assertIs(rule.promotion_state, PromotionState.ACTIVE)
+                self.assertEqual(
+                    rule.pattern_source,
+                    r"FLAG\{[0-9a-fA-F]{6,128}\}",
+                )
                 self.assertEqual(
                     set(rule.source_ports),
                     {8080, 9000, 8082, 1883, 8554, 9090, 8410, 8420},

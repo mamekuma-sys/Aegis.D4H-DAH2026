@@ -91,13 +91,16 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         parsed = parse_ip(ipv4_tcp(payload, dst_port=dst_port))
         return self.policy.decide(pkt_id, parsed, 0.0)
 
-    def _decide_response(self, payload, src_port=8080, pkt_id=1):
+    def _decide_response(
+        self, payload, src_port=8080, pkt_id=1, *, dst_port=51234, sequence=0
+    ):
         parsed = parse_ip(ipv4_tcp(
             payload,
             src_ip=bytes((10, 1, 1, 4)),
             dst_ip=bytes((10, 1, 0, 4)),
             src_port=src_port,
-            dst_port=51234,
+            dst_port=dst_port,
+            sequence=sequence,
         ))
         return self.policy.decide(pkt_id, parsed, 0.0)
 
@@ -148,6 +151,25 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                     pkt_id=10_000 + index,
                 )
                 self.assertEqual(decision.verdict, VERDICT_ACCEPT)
+
+    def test_normal_http_grpc_mqtt_and_rtsp_each_accept_100_times(self):
+        fixtures = (
+            (8080, b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nhealthy"),
+            (9000, b"\x00\x00\x00\x00\x02ok"),
+            (1883, b"\x20\x02\x00\x00"),
+            (8554, b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n"),
+        )
+        for protocol_index, (source_port, payload) in enumerate(fixtures):
+            for index in range(100):
+                with self.subTest(source_port=source_port, index=index):
+                    decision = self._decide_response(
+                        payload,
+                        src_port=source_port,
+                        dst_port=52000 + index,
+                        sequence=1000 + protocol_index * 100000 + index * 1000,
+                        pkt_id=20_000 + protocol_index * 100 + index,
+                    )
+                    self.assertEqual(decision.verdict, VERDICT_ACCEPT)
 
     def test_observed_plain_and_encoded_variants_drop(self):
         for index, path in enumerate(_POSITIVE_PATHS, start=1):

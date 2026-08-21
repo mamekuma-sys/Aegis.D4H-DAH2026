@@ -269,6 +269,7 @@ class TestEndToEnd(unittest.TestCase):
         lines = [json.loads(line) for line in harness.stream.getvalue().splitlines() if line]
         startup = [line for line in lines if line["event"] == "startup"]
         self.assertEqual(len(startup), 1)
+        self.assertEqual(startup[0]["agent_version"], "0.3.6-r9-egress-reassembly")
         self.assertEqual(startup[0]["policy_source"], "active")
         self.assertEqual(
             startup[0]["bundle_id"],

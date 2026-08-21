@@ -97,13 +97,18 @@ stitching으로 완성된 요청만 파싱합니다. stitcher는 4KB·2,048 flow
 ```text
 alert 확인
   → 방어 담당자가 비민감 로그, 공식 SLA 결과, 정상·공격 fixture를 대조
+  → `rule.shadow_hit`를 round·rule별 집계하고 실제 PCAP의 동일 경로/필드로 재현
   → rollback 또는 승격 후보와 새 PolicyBundle diff 작성
-  → 정상 negative·100회 SLA fixture·latency 회귀 실행
+  → 해당 rule의 evidence/positive/negative/SLA fixture ID와 만료·rollback 조건 기록
+  → 전체 PCAP replay·정상 protocol별 100회 fixture·latency 회귀 실행
   → 방어 담당자와 팀장 이경준 승인
   → Docker 담당자가 다음 Round 이미지 build/push
+  → 다음 round `startup`의 bundle_id·ACTIVE 수·demotions로 실제 적용 확인
 ```
 
 `SHADOW` → `CANARY` → `ACTIVE` 승격에는 §6.1의 여섯 조건이 모두 필요합니다. 다만 §0.2의 산식 분석에 따라, 정상 negative fixture를 통과하고 한 Round 관찰에서 충돌이 없는 고신뢰 rule을 여러 Round에 걸쳐 `SHADOW`에 묶어두는 것은 손해입니다. LLM이 제안한 rule은 예외 없이 `SHADOW`부터 시작합니다.
+
+`anomaly.alert`, advisory 성공, shadow hit 개수만으로는 공식 checker 상태를 알 수 없습니다. 따라서 이 값들은 runtime 승격·강등 입력이 아니며, 위 절차를 거쳐 versioned bundle에 영구 반영되고 다음 startup에서 확인되기 전까지 방어 적용으로 간주하지 않습니다.
 
 ## Break 체크리스트
 
@@ -114,3 +119,4 @@ alert 확인
 5. `rollback_condition`과 직전 안전 이미지 태그를 적었는가
 6. `owner_review`와 `lead_review`를 모두 `approved`로 바꿨는가 (아니면 `SHADOW`로 강등됩니다)
 7. `bundle_id`를 갱신했는가 (로그 추적성)
+8. push한 commit과 이미지 revision/digest를 기록하고, 다음 startup 기대 bundle/ACTIVE 수와 일치하는가

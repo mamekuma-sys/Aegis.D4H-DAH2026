@@ -50,7 +50,7 @@ from .rules import (
     canary_selected,
 )
 from .state import CorrelationSnapshotRef
-from .stream import HttpStreamStitcher
+from .stream import EgressStreamStitcher, HttpStreamStitcher
 
 # §5.2 — 판정 soft cutoff. PACKET 수신 시각 기준이며 큐 진입 시각 기준이 아니다.
 SOFT_CUTOFF_SECONDS = 0.005
@@ -117,6 +117,7 @@ class HotPolicy:
         clock=time.monotonic,
         soft_cutoff: float = SOFT_CUTOFF_SECONDS,
         http_stream: HttpStreamStitcher | None = None,
+        egress_stream: EgressStreamStitcher | None = None,
         grpc_stream: GrpcH2StreamInspector | None = None,
     ) -> None:
         self._policy = policy or EMPTY_POLICY
@@ -125,6 +126,7 @@ class HotPolicy:
         self._clock = clock
         self._soft_cutoff = soft_cutoff
         self._http_stream = http_stream or HttpStreamStitcher()
+        self._egress_stream = egress_stream or EgressStreamStitcher()
         self._grpc_stream = grpc_stream or GrpcH2StreamInspector()
 
     @property
@@ -317,6 +319,11 @@ class HotPolicy:
     ) -> VerdictDecision | None:
         payload = parsed.payload
         deferred_shadow: tuple[Rule, str] | None = None
+        source_matchers = self._policy.source_payload_matchers
+        source_matcher = (
+            source_matchers.get((parsed.protocol, parsed.src_port))
+            if source_matchers else None
+        )
 
         # gRPC semantic rule이 없으면 H2 재조립을 돌리지 않는다(§5.2 Sig 예산).
         if self._policy.grpc_semantic_rules:
@@ -340,21 +347,23 @@ class HotPolicy:
         if not payload:
             if parsed.tcp_flags & (TCP_SYN | TCP_FIN | TCP_RST):
                 self._http_stream.discard(parsed.flow_key)
+                self._egress_stream.discard(parsed.flow_key)
             return None
 
+        egress_stitched = (
+            self._egress_stream.feed(parsed, self._clock())
+            if source_matcher is not None else None
+        )
         stitched = self._http_stream.feed(parsed, self._clock())
         payload_views = [payload]
         if stitched is not None and stitched != payload:
             payload_views.insert(0, stitched)
+        if egress_stitched is not None and egress_stitched != payload:
+            payload_views.insert(0, egress_stitched)
 
         # source-port matcher는 해당 규칙이 있을 때만 조회한다. 일반 ingress는
         # destination-port와 wildcard matcher 최대 두 번만 검색한다(§5.2, §9.3).
-        source_matchers = self._policy.source_payload_matchers
         for candidate in payload_views:
-            source_matcher = (
-                source_matchers.get((parsed.protocol, parsed.src_port))
-                if source_matchers else None
-            )
             if source_matcher is not None:
                 found = source_matcher.pattern.search(candidate)
                 if found is not None:
@@ -368,6 +377,7 @@ class HotPolicy:
                             )
                         if rule is not None:
                             self._http_stream.discard(parsed.flow_key)
+                            self._egress_stream.discard(parsed.flow_key)
                             return self._enforce(
                                 pkt_id, rule, parsed, received_at, STAGE_SIG,
                                 allowed_by, rule.category, baseline,
@@ -395,6 +405,7 @@ class HotPolicy:
                         continue
                     rule = enforcing_rule
                 self._http_stream.discard(parsed.flow_key)
+                self._egress_stream.discard(parsed.flow_key)
                 return self._enforce(
                     pkt_id, rule, parsed, received_at, STAGE_SIG,
                     allowed_by, rule.category, baseline,
