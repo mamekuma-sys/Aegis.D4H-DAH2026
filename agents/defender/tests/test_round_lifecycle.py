@@ -268,7 +268,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(startup[0]["policy_source"], "active")
         self.assertEqual(
             startup[0]["bundle_id"],
-            "defender-2026-08-15-full-corpus-hardening",
+            "defender-2026-08-21-p1r1-8080-hotfix",
         )
         self.assertEqual(startup[0]["drop_capable_rules"], 9)
         self.assertEqual(startup[0]["demotions"], [])

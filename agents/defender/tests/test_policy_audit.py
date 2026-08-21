@@ -309,11 +309,12 @@ class TestLoadOrder(unittest.TestCase):
     def test_shipped_bundle_activates_only_reviewed_observed_rules(self):
         compiled, report = load_policy(_POLICY_DIR, now_epoch=1786764000.0)
         self.assertEqual(report.source, "active")
-        self.assertEqual(report.bundle_id, "defender-2026-08-15-full-corpus-hardening")
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p1r1-8080-hotfix")
         self.assertEqual(report.drop_capable_rules, 9)
         self.assertEqual(report.demotions, ())
         self.assertEqual(
-            compiled.baseline_profiles, frozenset({"6/8082", "6/8083", "6/8084"})
+            compiled.baseline_profiles,
+            frozenset({"6/8080", "6/8082", "6/8083", "6/8084"}),
         )
         active_ids = {
             "sig-l1-helper-secret-001",
@@ -332,7 +333,7 @@ class TestLoadOrder(unittest.TestCase):
 
     def test_shipped_bundle_keeps_reviewed_rules_active_during_finals_week(self):
         _, report = load_policy(_POLICY_DIR, now_epoch=1787356800.0)
-        self.assertEqual(report.bundle_id, "defender-2026-08-15-full-corpus-hardening")
+        self.assertEqual(report.bundle_id, "defender-2026-08-21-p1r1-8080-hotfix")
         self.assertEqual(report.drop_capable_rules, 9)
         self.assertEqual(report.demotions, ())
 
@@ -343,7 +344,7 @@ class TestLoadOrder(unittest.TestCase):
             if rule.promotion_state is not PromotionState.ACTIVE:
                 continue
             self.assertEqual(rule.protocol, 6, rule.rule_id)
-            self.assertEqual(len(rule.ports), 1, rule.rule_id)
+            self.assertGreaterEqual(len(rule.ports), 1, rule.rule_id)
             self.assertNotIn("PENDING", rule.evidence_id.upper(), rule.rule_id)
             self.assertNotEqual(rule.positive_fixture_id.lower(), "pending", rule.rule_id)
             self.assertNotEqual(rule.negative_fixture_id.lower(), "pending", rule.rule_id)
@@ -352,13 +353,14 @@ class TestLoadOrder(unittest.TestCase):
             self.assertEqual(rule.lead_review, "approved", rule.rule_id)
             self.assertTrue(rule.rollback_condition.strip(), rule.rule_id)
             self.assertTrue(rule.promoted_in_bundle.strip(), rule.rule_id)
-            active_by_port.setdefault(rule.ports[0], set()).add(rule.rule_id)
+            for port in rule.ports:
+                active_by_port.setdefault(port, set()).add(rule.rule_id)
 
         # 104개 실 PCAP이 증명한 profile만 ACTIVE다. 실제 L4 profile이 들어오면
         # 같은 evidence gate를 통과시킨 뒤 이 기대값과 bundle을 함께 갱신한다.
         self.assertEqual(
             {port: len(rule_ids) for port, rule_ids in active_by_port.items()},
-            {8082: 3, 8083: 4, 8084: 2},
+            {8080: 3, 8082: 3, 8083: 4, 8084: 2},
         )
 
     def test_shipped_bundle_expires_after_finals_validity_window(self):

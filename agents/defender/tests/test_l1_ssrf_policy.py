@@ -56,7 +56,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
     def _decide(self, path, dst_port=8082, pkt_id=1, headers=""):
         payload = (
             f"GET {path} HTTP/1.1\r\n"
-            "Host: team1.lig.internal:8082\r\n"
+            f"Host: team1.lig.internal:{dst_port}\r\n"
             f"User-Agent: fixture\r\n{headers}\r\n"
         ).encode("ascii")
         parsed = parse_ip(ipv4_tcp(payload, dst_port=dst_port))
@@ -69,6 +69,38 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 self.assertEqual(decision.verdict, VERDICT_DROP)
                 self.assertEqual(decision.rule_id, _L1_RULE_ID)
                 self.assertEqual(decision.reason_code, "sig-l1-helper-secret")
+
+    def test_finals_p1_8080_observed_l1_attacks_drop(self):
+        cases = (
+            ("/fetch?url=http://helper-box:8080/secret", _L1_RULE_ID),
+            (
+                "/fetch?url=http%3A%2F%2F172.18.0.2%3A8080%2Fsecret",
+                _L1_CANONICAL_RULE_ID,
+            ),
+            ("/config?file=../../../../flag", _L1_CONFIG_RULE_ID),
+        )
+        for index, (path, rule_id) in enumerate(cases, start=1):
+            with self.subTest(path=path):
+                decision = self._decide(path, dst_port=8080, pkt_id=50 + index)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, rule_id)
+
+    def test_finals_p1_8080_normal_requests_accept_100_times(self):
+        paths = (
+            "/",
+            "/health",
+            "/config?file=config.json",
+            "/config?file=../settings.json",
+            "/fetch?url=http%3A%2F%2F172.18.0.2%3A8080%2Fhealth",
+        )
+        for index in range(100):
+            with self.subTest(index=index):
+                self.assertEqual(
+                    self._decide(
+                        paths[index % len(paths)], dst_port=8080, pkt_id=150 + index
+                    ).verdict,
+                    VERDICT_ACCEPT,
+                )
 
     def test_round1_negative_and_sla_requests_accept_100_times(self):
         for index in range(100):
@@ -232,11 +264,12 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
 
     def test_shipped_bundle_activates_only_observed_exact_rules(self):
         self.assertEqual(self.report.source, "active")
-        self.assertEqual(self.report.bundle_id, "defender-2026-08-15-full-corpus-hardening")
+        self.assertEqual(self.report.bundle_id, "defender-2026-08-21-p1r1-8080-hotfix")
         self.assertEqual(self.report.drop_capable_rules, 9)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
-            self.compiled.baseline_profiles, frozenset({"6/8082", "6/8083", "6/8084"})
+            self.compiled.baseline_profiles,
+            frozenset({"6/8080", "6/8082", "6/8083", "6/8084"}),
         )
         for rule_id, rule in self.compiled.rules_by_id.items():
             expected = PromotionState.ACTIVE if rule_id in _ACTIVE_RULES else PromotionState.SHADOW
