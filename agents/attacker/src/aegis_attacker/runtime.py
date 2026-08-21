@@ -27,7 +27,7 @@ from .exploits import (
     uses_observed_read_only_interface,
 )
 from .flags import FlagPipeline, SubmitClient
-from .llm_advisor import LLMAdvisor, MAX_LLM_CALLS_PER_ROUND, escalated_model
+from .llm_advisor import LLMAdvisor, MAX_LLM_CALLS_PER_ROUND
 from .models import (
     Capability,
     ExecutionPlan,
@@ -48,8 +48,8 @@ from .round_report import RoundReport
 from .secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
 from .tools import ExecutionAdapter, PlanBindingError, evasion_variants
 
-LOOP_SLEEP = 1.0
-PER_TARGET_BUDGET = 2
+LOOP_SLEEP = 4.0
+PER_TARGET_BUDGET = 1
 MAX_EVASION_VARIANTS = 6
 ENDPOINT_RETRY_COOLDOWN = 30.0
 BOOTSTRAP_RETRY_COOLDOWN = 1.0
@@ -606,10 +606,10 @@ class AttackerRuntime:
             while (not self._stop_event.is_set()
                    and not self._planner.should_stop(state)):
                 state.turn += 1
-                # 맵게: 전 턴 gpt-5.4-pro 고정.
-                model = escalated_model(self.config.llm_model, max(0, state.turn - 1))
+                # 성공·실패와 무관하게 검증된 기본 모델을 유지하고, 전송 실패 시 advisor가
+                # 한 번만 fallback 모델을 사용한다.
                 plan = self._planner.plan_next(endpoint, observed_banner, feedback, state,
-                                               model=model)
+                                               model=self.config.llm_model)
                 if plan is None:
                     break
                 if (observed_only

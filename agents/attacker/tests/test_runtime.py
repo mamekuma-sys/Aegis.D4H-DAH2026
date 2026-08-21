@@ -463,11 +463,10 @@ class TestRuntimeResilience(unittest.TestCase):
         self.assertEqual(rt.budget.llm_calls, after_first)
         self.assertEqual(rt._report.summary()["llm_calls"], after_first)
 
-    def test_llm_model_escalates_after_failed_turns(self):
-        from aegis_attacker.llm_advisor import ESCALATION_MODELS
+    def test_llm_model_stays_configured_after_failed_turns(self):
         from aegis_attacker.planner import MAX_TURNS
 
-        # 결정론·LLM 모두 flag를 못 잡게 해 MAX_TURNS까지 승급 경로를 탄다.
+        # 결정론·LLM 모두 flag를 못 잡아도 임의의 고가 모델로 승급하지 않는다.
         arena = FakeArena(
             "URL Fetcher — GET /fetch?url=<url>",
             "/fetch?url=miss",
@@ -476,9 +475,9 @@ class TestRuntimeResilience(unittest.TestCase):
         )
         rt = make_runtime(arena)
         rt.run_once()
-        # 전 턴 최상단 고가용만.
+        # make_cfg가 명시한 모델을 전 턴 유지한다.
         self.assertGreaterEqual(len(arena.llm_models), 2)
-        self.assertTrue(all(m == "gpt-5.4-pro" for m in arena.llm_models[:MAX_TURNS]))
+        self.assertTrue(all(m == "gpt-4o-mini" for m in arena.llm_models[:MAX_TURNS]))
         self.assertEqual(len(arena.llm_models[:MAX_TURNS]), MAX_TURNS)
 
 

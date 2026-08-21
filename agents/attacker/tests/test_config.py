@@ -66,20 +66,20 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(cfg.llm_model, DEFAULT_LLM_MODEL)
 
     def test_ignores_injected_llm_model_env(self):
-        # 스켈레톤이 gpt-4o-mini 를 넣어도 hot 프로필(gpt-5.4-pro)을 강제한다.
+        # 스켈레톤이 구형 기본값을 넣어도 검증된 sol 프로필을 강제한다.
         cfg = load_config({
             "TARGETS": "a", "PORTS": "8080", "LLM_API_KEY": "k",
             "LLM_MODEL": "gpt-4o-mini",
         })
         self.assertEqual(cfg.llm_model, DEFAULT_LLM_MODEL)
-        self.assertEqual(cfg.llm_model, "gpt-5.4-pro")
+        self.assertEqual(cfg.llm_model, "gpt-5.6-sol")
 
     def test_concurrency_optional_with_default(self):
-        self.assertEqual(load_config({}).concurrency, 16)  # 기본 16
+        self.assertEqual(load_config({}).concurrency, 8)  # 기본 8
         self.assertEqual(load_config({"ATTACK_CONCURRENCY": "4"}).concurrency, 4)
         self.assertEqual(load_config({"ATTACK_CONCURRENCY": "0"}).concurrency, 1)  # 최소 1
         self.assertEqual(load_config({"ATTACK_CONCURRENCY": "9999"}).concurrency, 32)  # 상한
-        self.assertEqual(load_config({"ATTACK_CONCURRENCY": "abc"}).concurrency, 16)  # 무효→기본
+        self.assertEqual(load_config({"ATTACK_CONCURRENCY": "abc"}).concurrency, 8)  # 무효→기본
 
 
 if __name__ == "__main__":

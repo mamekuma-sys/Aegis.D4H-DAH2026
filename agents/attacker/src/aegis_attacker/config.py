@@ -13,10 +13,10 @@ from typing import Mapping
 from .models import Endpoint
 
 DEFAULT_LLM_BASE_URL = "http://litellm.lig.internal:4000"
-# 스켈레톤/운영이 LLM_MODEL=gpt-4o-mini 를 주입해도 무시한다. R1 로그에서 mini+cap48로
-# 구이미지가 그대로 돌아간 것이 확인됐으므로, 런타임이 고가용 프로필을 강제한다.
-DEFAULT_LLM_MODEL = "gpt-5.4-pro"
-DEFAULT_CONCURRENCY = 16
+# 스켈레톤/운영이 주입하는 구형 기본 모델로 되돌아가지 않도록 런타임 프로필을 강제한다.
+DEFAULT_LLM_MODEL = "gpt-5.6-sol"
+DEFAULT_LLM_FALLBACK_MODEL = "gpt-5.6-terra"
+DEFAULT_CONCURRENCY = 8
 MAX_CONCURRENCY = 32
 FORCED_LLM_MODEL = DEFAULT_LLM_MODEL
 

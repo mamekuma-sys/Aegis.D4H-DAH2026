@@ -98,11 +98,11 @@ if ($attackerText -notmatch 'check-layout\.ps1' -or $attackerText -notmatch 'val
 if ($attackerText -notmatch 'ConfigOnly') {
     throw 'attacker-deploy.md does not verify merged Compose context before live smoke.'
 }
-if ($attackerText -match 'LLM_MODEL\(gpt-4o-mini\)') {
+if ($attackerText -match 'LLM_MODEL\(gpt-5\.6-sol\)') {
     throw 'attacker-deploy.md still lists LLM_MODEL as an official injected contract.'
 }
-if ($attackerText -notmatch '(?s)LLM_MODEL.*gpt-4o-mini') {
-    throw 'attacker-deploy.md does not document LLM_MODEL as an optional default.'
+if ($attackerText -notmatch '(?s)LLM_MODEL.*무시.*gpt-5\.6-sol') {
+    throw 'attacker-deploy.md does not document the forced LLM model profile.'
 }
 if ($attackerText -notmatch "throw 'docker build failed'") {
     throw 'attacker-deploy.md does not stop when docker build fails.'
