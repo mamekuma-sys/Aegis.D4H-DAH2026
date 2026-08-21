@@ -218,6 +218,51 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(report.accepted_count(), 1)
         self.assertEqual(arena.submits[0]["flag"], "FLAG{finals_export_fixture}")
 
+    def test_satdiag_gateway_pivot_refreshes_http_endpoint_evidence(self):
+        gateway_path = "/svc/flag-8ceb780e-e860-4078-8a1c-f5348976062f/"
+
+        class GatewayArena:
+            def __init__(self):
+                self.target_paths = []
+                self.submits = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    return HttpResponse(500, "unused")
+                path = urlsplit(url).path
+                self.target_paths.append(path)
+                if path == gateway_path:
+                    return HttpResponse(200, "FLAG{satdiag_gateway_pivot}")
+                return HttpResponse(200, "portal online")
+
+            def request_grpc(self, host, port, rpc, string_fields=None,
+                             varint_fields=None, timeout=6.0):
+                if rpc.endswith("/Health"):
+                    return HttpResponse(
+                        200,
+                        json.dumps({"gateway_path": gateway_path}),
+                    )
+                return HttpResponse(200, "no flag")
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(9000, 8080),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        arena = GatewayArena()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertIn("/", arena.target_paths)
+        self.assertIn(gateway_path, arena.target_paths)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{satdiag_gateway_pivot}")
+
     def test_finals_8080_runs_observed_fast_path_and_always_calls_sol_llm(self):
         class FinalsHttpArena:
             def __init__(self):

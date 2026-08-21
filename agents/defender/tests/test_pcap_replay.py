@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import importlib.util
 import struct
 import sys
@@ -125,6 +126,65 @@ class TestPcapReplay(unittest.TestCase):
         self.assertEqual(total["parsed_requests"], 2)
         self.assertEqual(total["coalesced_other_requests"], 1)
         self.assertEqual(total["unexpected_other_drops"], 0)
+
+    def test_portal_feedback_requires_observed_service_id_query(self):
+        client = b"\x0a\x01\x00\x04"
+        server = b"\x0a\x01\x01\x02"
+        exploit = (
+            b"GET /portal/feedback?service_id=vulncheck HTTP/1.1\r\n"
+            b"Host: service\r\n\r\n"
+        )
+        normal = b"GET /portal/feedback HTTP/1.1\r\nHost: service\r\n\r\n"
+        frames = [
+            _tcp_packet(client, server, 40000, 8080, 100, exploit),
+            _tcp_packet(client, server, 40001, 8080, 200, normal),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pcap = Path(temp_dir) / "portal-feedback.pcap"
+            _write_pcap(pcap, frames)
+            report = replay_pcaps.replay_paths(
+                [pcap],
+                REPO_ROOT / "agents" / "defender" / "policy",
+                replay_pcaps.parse_as_of("2026-08-21T02:50:00Z"),
+            ).to_dict()
+
+        total = report["total"]
+        self.assertEqual(total["exploit_shape_requests"], 1)
+        self.assertEqual(total["blocked_exploit_shape_requests"], 1)
+        self.assertEqual(total["passed_other_requests"], 1)
+        self.assertEqual(total["unexpected_other_drops"], 0)
+
+    def test_discovers_and_replays_gzip_compressed_pcap(self):
+        client = b"\x0a\x01\x00\x04"
+        server = b"\x0a\x01\x01\x02"
+        frame = _tcp_packet(
+            client,
+            server,
+            40000,
+            8080,
+            100,
+            b"GET /health HTTP/1.1\r\nHost: service\r\n\r\n",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            plain = root / "capture.pcap"
+            compressed = root / "capture.pcap.gz"
+            _write_pcap(plain, [frame])
+            with plain.open("rb") as source, gzip.open(compressed, "wb") as target:
+                target.write(source.read())
+            plain.unlink()
+
+            paths = replay_pcaps.discover_pcaps([str(root)])
+            report = replay_pcaps.replay_paths(
+                paths,
+                REPO_ROOT / "agents" / "defender" / "policy",
+                replay_pcaps.parse_as_of("2026-08-21T02:50:00Z"),
+            ).to_dict()
+
+        self.assertEqual(paths, [compressed])
+        self.assertEqual(report["files"], 1)
+        self.assertEqual(report["total"]["parsed_requests"], 1)
 
     def test_real_hot_policy_still_blocks_a_split_header(self):
         client = b"\x0a\x01\x00\x04"

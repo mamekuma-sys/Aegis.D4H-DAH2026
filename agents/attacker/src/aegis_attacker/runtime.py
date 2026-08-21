@@ -438,10 +438,7 @@ class AttackerRuntime:
         captured_any = self._process_flags(resp.body, resp.headers)
         evidence_ref = obs.evidence_ref
         # Health/Probe 응답에 gateway_path가 있으면 동일 L1 HTTP:8080으로 즉시 피벗.
-        captured_any = (
-            self._pivot_satdiag_gateway(endpoint, resp.body, evidence_ref)
-            or captured_any
-        )
+        captured_any = self._pivot_satdiag_gateway(endpoint, resp.body) or captured_any
         for attempt in observed_grpc_attempts(endpoint.port):
             if self._stop_event.is_set():
                 break
@@ -451,8 +448,7 @@ class AttackerRuntime:
             if result is not None:
                 evidence_ref = result.observation.evidence_ref
                 captured_any = (
-                    self._pivot_satdiag_gateway(endpoint, result.body, evidence_ref)
-                    or captured_any
+                    self._pivot_satdiag_gateway(endpoint, result.body) or captured_any
                 )
             if captured:
                 captured_any = True
@@ -465,8 +461,12 @@ class AttackerRuntime:
                 )
         return True, captured_any
 
-    def _pivot_satdiag_gateway(self, endpoint, body: str, evidence_ref) -> bool:
-        """gRPC 응답의 ``/svc/flag-…`` 경로를 같은 host:8080 GET으로 회수한다(P2-R4)."""
+    def _pivot_satdiag_gateway(self, endpoint, body: str) -> bool:
+        """gRPC 응답의 ``/svc/flag-…`` 경로를 같은 host:8080 GET으로 회수한다(P2-R4).
+
+        9000에서 생성된 evidence는 8080 실행 근거로 쓸 수 없다. 같은 host의 8080을
+        먼저 관측해 정확한 endpoint에 결속된 신선한 evidence를 만든 뒤 피벗한다.
+        """
         if 8080 not in self.config.ports:
             return False
         paths = extract_svc_flag_paths(body or "")
@@ -474,6 +474,21 @@ class AttackerRuntime:
             return False
         http_ep = Endpoint(endpoint.host, 8080)
         captured_any = False
+        evidence_ref = self._latest_evidence(http_ep)
+        if not (
+            evidence_ref
+            and evidence_ref.valid_at(self.clock(), self._round_id, http_ep.endpoint_id)
+        ):
+            obs, resp = self._observer.observe_banner(http_ep)
+            self._report.record_observation()
+            self._report.record_request()
+            self._remember_evidence(http_ep, obs.evidence_ref)
+            evidence_ref = obs.evidence_ref
+            if resp.status == 0:
+                return False
+            with self._state_lock:
+                self._responsive_endpoints.add(http_ep.endpoint_id)
+            captured_any = self._process_flags(resp.body, resp.headers)
         for path in paths:
             if self._stop_event.is_set():
                 break

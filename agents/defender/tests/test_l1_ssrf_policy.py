@@ -336,6 +336,20 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 self.assertEqual(decision.rule_id, rule_id)
                 self.assertEqual(decision.reason_code, reason)
 
+    def test_finals_p2r4_portal_feedback_view_without_service_id_accepts(self):
+        cases = (
+            "/portal/feedback",
+            "/portal/feedback?",
+            "/portal/feedback?view=recent",
+            "/portal/feedback?service_id=",
+        )
+        for index, path in enumerate(cases, start=1):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    self._decide(path, dst_port=8080, pkt_id=890 + index).verdict,
+                    VERDICT_ACCEPT,
+                )
+
     def test_finals_p2r4_export_printf_flag_drops(self):
         payload = (
             b":path*/satdiag.v1.SatDiag/ExportDiagnosticBundle\x00"
@@ -382,7 +396,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p2r4-satdiag-portal",
+            "defender-2026-08-21-p2r4-evidence-fix",
         )
         self.assertEqual(self.report.drop_capable_rules, 14)
         self.assertEqual(self.report.demotions, ())

@@ -85,25 +85,25 @@ p50·p95·p99·max가 남습니다.
 
 ## 현재 정책 상태
 
-현재 bundle `defender-2026-08-21-p2r4-satdiag-portal`은 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi에 대응하는 12개 규칙만 `ACTIVE`이고 일반 휴리스틱 13개는 `SHADOW`입니다.
+현재 bundle `defender-2026-08-21-p2r4-evidence-fix`는 본선 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록합니다. helper/config, SatDiag Tail/Export, GraphQL `missionAudit`, `/svc/flag-*`, `service_id`가 있는 portal feedback, 관리자 session 위조, loopback secret/registry SSRF, `app_meta` SQLi에 대응하는 14개 규칙만 `ACTIVE`이고 일반 휴리스틱 13개는 `SHADOW`입니다.
 
 L2 cookie rule은 raw Base64 문자열을 나열하지 않고 packet-local 또는 최대 4KB in-order stitching으로 완성된 HTTP request prefix와 bounded JSON scalar claim만 해석합니다. GraphQL은 숫자 하나로 명확한 bounded `Content-Length` 본문까지 기다려 분할된 `missionAudit` 요청도 판정합니다. gap·불완전·상한 초과는 차단 사유가 아닙니다. 만료·review·baseline 조건이 깨지면 로더가 해당 rule을 `SHADOW`로 강등합니다.
 
-P2-R3 11:00~11:20의 PCAP 6개를 재생한 결과 HTTP 관측 공격 형태 1,884/1,884와 GraphQL 플래그 연계 요청 7/7을 차단했고, 기타 HTTP 요청 13,346건의 예상 밖 DROP은 0건이었습니다. 별도 HTTP/2 stream 상관 검증에서는 SatDiag 플래그 응답 stream 34/34가 요청 단계에서 차단됐습니다. 이 수치는 현재 확보한 PCAP의 offline proxy이며 공식 SLA 오탐률은 아닙니다.
+P2-R3·R4 PCAP 10개를 재생한 결과 HTTP 관측 공격 형태 2,355/2,355와 HTTP 플래그 연계 요청 16/16을 차단했고, 기타 HTTP 요청 18,969건의 예상 밖 DROP은 0건이었습니다. 9000에서는 SatDiag Tail 43 packet과 Export 44 packet이 ACTIVE 규칙에 일치했습니다. `service_id` query가 있는 portal feedback 2건만 차단하고 query 없는 10건은 통과시켰습니다. 이 수치는 현재 확보한 PCAP의 offline proxy이며 공식 SLA 오탐률은 아닙니다.
 
 같은 원본을 현재 `HotPolicy`에 다시 재생하는 macOS/Linux 자동 검사는 다음과 같습니다. 원본
 PCAP은 계속 Git 제외 경로에 두며 출력에는 payload, 주소, cookie, flag 값이 포함되지 않습니다.
 
 ```bash
-bash scripts/replay-defender-pcaps.sh <private-p2r3-pcap-dir> \
-  --as-of 2026-08-21T02:20:00Z \
-  --require-files 6 \
-  --require-drop-rules 12 \
+bash scripts/replay-defender-pcaps.sh <private-p2-pcap-dir> \
+  --as-of 2026-08-21T03:00:00Z \
+  --require-files 10 \
+  --require-drop-rules 14 \
   --min-exploit-block-rate 1.0 \
   --require-zero-unexpected-other-drops
 ```
 
-이 도구는 packet-local 또는 bounded TCP stitching으로 완성된 HTTP request prefix를 실제
+이 도구는 `.pcap`과 `.pcap.gz`를 직접 읽고 packet-local 또는 bounded TCP stitching으로 완성된 HTTP request prefix를 실제
 `HotPolicy`와 같은 상한으로 판정합니다. `unexpected-other`는 관측 공격 형태를 제외한 오탐
 대리값이지 공식 SLA 오탐률이 아닙니다. gRPC 플래그 연계율은 HTTP/2 stream 단위의 별도
 상관 검증 결과와 함께 확인합니다.
@@ -126,7 +126,7 @@ CI의 `defender-tests` job이 `ubuntu-latest` + Python 3.12(= 이미지와 같�
 소켓에만 의존시킬 수 없기 때문입니다. 설계 §15.4가 fake 기반 검증을 명시한 것도 같은 이유입니다.
 
 단, `tests/test_linux_seqpacket.py`는 Linux에서 실제 `AF_UNIX/SOCK_SEQPACKET`으로 전체 runtime을
-기동해 PACKET→VERDICT, HEARTBEAT, ACTIVE policy source·12개 DROP rule, 300ms 미만 송신 완료를
+기동해 PACKET→VERDICT, HEARTBEAT, ACTIVE policy source·14개 DROP rule, 300ms 미만 송신 완료를
 검증합니다. macOS에서는 명시적으로 skip되고 `ubuntu-latest` CI와 `linux/amd64` 이미지 검증에서
 실행됩니다. 공식 스켈레톤이 제공되면 이 검사를 대체하는 것이 아니라 그 위에 skeleton Compose
 E2E를 추가합니다.
@@ -169,6 +169,6 @@ correlation worker와 공유하지 않고 단일 producer만 소유하므로 loc
 - 환경변수: `AGENT_SOCKET`(기본 `/run/agent.sock`), `LLM_BASE_URL`, `LLM_API_KEY`
 - mount: `/run/agent.sock` (`AF_UNIX`/`SOCK_SEQPACKET`)
 - 실행 옵션 전제: `--cap-drop ALL`, `no-new-privileges`, memory reservation 2g, cpu-shares 2048, pids-limit 512, `--add-host litellm.lig.internal`
-- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-21-p2r4-satdiag-portal", "drop_capable_rules":14, "demotions":[], ...}`
+- 정상 시작 로그: `{"event":"startup", "policy_source":"active", "bundle_id":"defender-2026-08-21-p2r4-evidence-fix", "drop_capable_rules":14, "demotions":[], ...}`
 - 종료: SIGTERM에서 2초 내 정리 종료, 종료 코드 0
 - 비밀 비출력: `FLAG{...}`, API key, Bearer 토큰, raw payload가 로그에 나오지 않음을 `tests/test_advisory.py`의 `TestAuditRedaction`이 검증

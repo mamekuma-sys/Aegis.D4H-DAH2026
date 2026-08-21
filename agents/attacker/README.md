@@ -11,6 +11,9 @@ endpoint당 최대 20회의 zero-token fast path로 일반 정찰보다 먼저 �
 P1-R2에서 flag를 회수한 경로와, HTTP 팀들이 잘 안 보는 축을 앞에 둡니다:
 `ExportDiagnosticBundle` command-injection(`${FLAG}`/cat/printenv/environ),
 `TailDiagnosticLog(/proc/self/environ|/flag)`, `ProbeEndpoint` loopback pivot.
+P2-R4에서 관측한 `printf "$FLAG"` 변형과 `/portal/feedback?service_id=...`도 bounded fast path로
+실행합니다. Probe/Export가 `/svc/flag-<id>/`를 반환하면 8080을 먼저 별도 관측해 해당 endpoint의
+신선한 evidence를 만든 뒤 동적 경로로 피벗합니다.
 이어서 관측 필드 변형을 bounded로 시도합니다. 그 밖의 미확인 서비스는 root와 읽기 전용
 probe 응답이 실제로 노출한 route·parameter만 bounded discovery text로 다음 결정론 공격에 전달합니다.
 미확인 포트의 discovery는 상태·문서용 6개 GET으로 제한하고, parameter를 광고된 정확한 route에

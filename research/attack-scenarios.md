@@ -62,7 +62,10 @@ Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한�
   `ExportDiagnosticBundle` field1=`telemetry.log;echo …${FLAG}…` / field2=`capture` /
   field3=`gzip`(유한 flag-directed mutation).
 - 추가 bounded: Tail filename 변형과 `ProbeEndpoint(service_id, path)` 관측 필드.
-- `8080`에서 읽기 전용 exploit route가 추가 관측되기 전에는 validator가 거부할 LLM 호출을 생략한다.
+- P2-R4에서 `ExportDiagnosticBundle`의 `printf "$FLAG"` 변형과 `8080`의
+  `/portal/feedback?service_id=...`가 추가 관측됐다.
+- Probe/Export 응답이 `gateway_path=/svc/flag-<id>/`를 노출하면 9000 evidence를 재사용하지
+  않고 같은 host의 8080을 새로 관측한 뒤, 8080에 결속된 evidence로 해당 GET만 실행한다.
 
 ### L4 증거 gate
 

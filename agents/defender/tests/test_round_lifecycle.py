@@ -272,7 +272,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(startup[0]["policy_source"], "active")
         self.assertEqual(
             startup[0]["bundle_id"],
-            "defender-2026-08-21-p2r4-satdiag-portal",
+            "defender-2026-08-21-p2r4-evidence-fix",
         )
         self.assertEqual(startup[0]["drop_capable_rules"], 14)
         self.assertEqual(startup[0]["demotions"], [])

@@ -9,6 +9,7 @@ separate from policy rule IDs so that unexpected drops remain visible.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import re
 import struct
@@ -182,7 +183,8 @@ def _read_exact(handle: BinaryIO, size: int) -> bytes:
 
 def iter_pcap_frames(path: Path) -> Iterator[CapturedFrame]:
     """Yield bounded frames from a classic Ethernet PCAP."""
-    with path.open("rb") as handle:
+    opener = gzip.open if path.name.lower().endswith(".pcap.gz") else Path.open
+    with opener(path, "rb") as handle:
         header = _read_exact(handle, 24)
         magic = header[:4]
         if magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1"):
@@ -259,6 +261,18 @@ def classify_observed_shape(
     port: int, request: HttpRequestView, payload: bytes = b""
 ) -> str | None:
     """Independent labels derived from documented TEAM1 observed exploit shapes."""
+    if port == 8080:
+        if re.fullmatch(
+            r"/svc/flag-[0-9a-fA-F][0-9a-fA-F-]{6,}[0-9a-fA-F]/?",
+            request.path,
+        ):
+            return "l1-svc-flag-gateway"
+        if request.path == "/portal/feedback" and any(
+            name == "service_id" and bool(value)
+            for name, value in request.query_pairs
+        ):
+            return "l1-portal-feedback-service-id"
+
     if port in (8080, 8082):
         layer = "l1" if port == 8080 else "l2"
         if request.ssrf_target_matches(
@@ -426,12 +440,15 @@ def discover_pcaps(inputs: list[str]) -> list[Path]:
         path = Path(raw)
         if path.is_dir():
             paths.update(candidate for candidate in path.rglob("*.pcap") if candidate.is_file())
-        elif path.is_file() and path.suffix.lower() == ".pcap":
+            paths.update(
+                candidate for candidate in path.rglob("*.pcap.gz") if candidate.is_file()
+            )
+        elif path.is_file() and path.name.lower().endswith((".pcap", ".pcap.gz")):
             paths.add(path)
         else:
             raise FileNotFoundError(f"PCAP input not found: {path}")
     if not paths:
-        raise FileNotFoundError("no .pcap files found")
+        raise FileNotFoundError("no .pcap or .pcap.gz files found")
     return sorted(paths)
 
 

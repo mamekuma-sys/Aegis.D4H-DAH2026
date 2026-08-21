@@ -15,9 +15,9 @@ rule과 운영 임계값은 Python 분기문이 아니라 이 디렉터리의 ve
 
 ## 현재 상태
 
-현재 bundle은 `defender-2026-08-21-p2r4-satdiag-portal`입니다. 본선에서 확인한 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록했습니다. 증거·정상 negative·SLA fixture와 두 review가 있는 rule 12개가 `ACTIVE`이고 일반 휴리스틱 13개는 `SHADOW`입니다. ACTIVE 규칙은 `2026-09-01T00:00:00Z`에 만료합니다.
+현재 bundle은 `defender-2026-08-21-p2r4-evidence-fix`입니다. 본선에서 확인한 TCP profile `6/8080`, `6/9000`, `6/8082`, `6/1883`, `6/8554`, `6/9090`, `6/8410`, `6/8420`을 등록했습니다. 증거·정상 negative·SLA fixture와 두 review가 있는 rule 14개가 `ACTIVE`이고 일반 휴리스틱 13개는 `SHADOW`입니다. ACTIVE 규칙은 `2026-09-01T00:00:00Z`에 만료합니다.
 
-활성 범위는 L1 helper secret SSRF와 config-to-flag traversal, SatDiag Tail/Export 플래그 접근, L2 GraphQL `missionAudit`, Base64-JSON `session` 관리자 claim 위조와 loopback secret/registry SSRF, L3 `app_meta` 대상 UNION SQLi입니다. GraphQL은 실제 플래그 응답과 연결된 `missionAudit`만 차단하며 `systemConfig`는 포함하지 않습니다. HTTP 의미 규칙은 완성된 bounded request prefix에만 적용하고 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. SHADOW 일치가 뒤의 ACTIVE 의미 규칙을 가리지 않도록 ACTIVE→CANARY→SHADOW 순서로 평가합니다.
+활성 범위는 L1 helper secret SSRF와 config-to-flag traversal, SatDiag Tail/Export 플래그 접근, `/svc/flag-*`, `service_id` query가 있는 portal feedback, L2 GraphQL `missionAudit`, Base64-JSON `session` 관리자 claim 위조와 loopback secret/registry SSRF, L3 `app_meta` 대상 UNION SQLi입니다. query 없는 `/portal/feedback`과 GraphQL `systemConfig`는 포함하지 않습니다. HTTP 의미 규칙은 완성된 bounded request prefix에만 적용하고 `/fetch`, `/admin`, `/product`, User-Agent, NAT source IP만으로는 차단하지 않습니다. SHADOW 일치가 뒤의 ACTIVE 의미 규칙을 가리지 않도록 ACTIVE→CANARY→SHADOW 순서로 평가합니다.
 
 로더는 안전 조건을 구조적으로 강제합니다. `baseline_profiles`가 비거나 rule이 만료되거나 두 review 중 하나라도 미승인이면 차단 권한을 가진 rule을 기동 시 `SHADOW`로 강등합니다(§15.6 마지막 항목).
 

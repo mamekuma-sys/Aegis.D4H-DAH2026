@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "bundle_id": "defender-2026-08-21-p2r4-satdiag-portal",
-  "generated_at": "2026-08-21T02:45:00Z",
+  "bundle_id": "defender-2026-08-21-p2r4-evidence-fix",
+  "generated_at": "2026-08-21T02:57:12Z",
   "baseline_profiles": [
     "6/8080",
     "6/9000",
@@ -641,23 +641,23 @@
       "ports": [
         8080
       ],
-      "pattern": "(?:GET|POST) /portal/feedback[^\\r\\n]{0,200} HTTP/1\\.[01]",
+      "pattern": "(?:GET|POST) /portal/feedback\\?(?:service_id|service%5[fF]id)=[^&\\r\\n ]{1,128} HTTP/1\\.[01]",
       "ignore_case": true,
       "promotion_state": "ACTIVE",
       "canary_fraction": 0.0,
       "canary_seed": "",
       "promotion_cohort": "team1-p2r4-l1-portal-feedback",
-      "promoted_in_bundle": "defender-2026-08-21-p2r4-satdiag-portal",
+      "promoted_in_bundle": "defender-2026-08-21-p2r4-evidence-fix",
       "parser_version": 1,
       "profile_scope": [
         "6/8080"
       ],
-      "evidence_id": "TEAM1-PCAP-P2-R4-L1-8080-PORTAL-FEEDBACK-20260821",
+      "evidence_id": "TEAM1-PCAP-P2-R4-L1-8080-PORTAL-FEEDBACK-SERVICE-ID-20260821",
       "positive_fixture_id": "TEAM1-P2R4-PORTAL-FEEDBACK-POS-001",
-      "negative_fixture_id": "TEAM1-P2R4-PORTAL-HOME-NEG-001",
+      "negative_fixture_id": "TEAM1-P2R4-PORTAL-FEEDBACK-VIEW-NEG-001",
       "sla_fixture_id": "TEAM1-P2R4-L1-SLA-100-001",
       "expires_at": "2026-09-01T00:00:00Z",
-      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 GET /portal 정상 fixture가 실패하면 직전 검증 이미지로 복귀",
+      "rollback_condition": "공식 SLA가 직전 Round보다 하락하거나 query 없는 GET /portal/feedback fixture가 실패하면 직전 검증 이미지로 복귀",
       "owner_review": "approved",
       "lead_review": "approved"
     },
