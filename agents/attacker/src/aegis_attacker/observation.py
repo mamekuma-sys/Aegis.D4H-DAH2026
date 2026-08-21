@@ -81,26 +81,30 @@ class UrllibHttp:
 
     @staticmethod
     def request_grpc(host: str, port: int, rpc: str, string_fields=None,
-                     varint_fields=None, timeout: float = 6.0) -> HttpResponse:
+                     varint_fields=None, timeout: float = 6.0,
+                     delivery: str = "standard") -> HttpResponse:
         """ATTACK_TARGET의 관측된 plaintext gRPC unary 메서드를 호출한다."""
         from .grpc_transport import grpc_unary_request
         return grpc_unary_request(
-            host, port, rpc, string_fields, varint_fields, timeout
+            host, port, rpc, string_fields, varint_fields, timeout, delivery
         )
 
     @staticmethod
-    def request_mqtt(host: str, port: int, topics, timeout: float = 4.0) -> HttpResponse:
-        from .mqtt_transport import mqtt_subscribe_collect
-        return mqtt_subscribe_collect(host, port, list(topics or ()), timeout=timeout)
+    def request_websocket(host: str, port: int, path: str, session_token: str,
+                          timeout: float = 6.0) -> HttpResponse:
+        from .websocket_transport import mission_feed_request
+        return mission_feed_request(host, port, path, session_token, timeout)
 
     @staticmethod
-    def request_rtsp(host: str, port: int, method: str, path: str, cseq: int = 1,
-                     extra_headers=None, timeout: float = 4.0) -> HttpResponse:
-        from .rtsp_transport import rtsp_exchange
-        return rtsp_exchange(
-            host, port, method, path, cseq=cseq, timeout=timeout,
-            extra_headers=dict(extra_headers or {}),
-        )
+    def request_mqtt(host: str, port: int, topics=(), timeout: float = 3.0) -> HttpResponse:
+        from .protocol_transport import mqtt_read_request
+        return mqtt_read_request(host, port, topics, timeout)
+
+    @staticmethod
+    def request_rtsp(host: str, port: int, method: str, path: str,
+                     timeout: float = 3.0) -> HttpResponse:
+        from .protocol_transport import rtsp_read_request
+        return rtsp_read_request(host, port, method, path, timeout)
 
     @staticmethod
     def _request_with(opener, method: str, url: str, headers=None, body=None,
@@ -267,7 +271,8 @@ class Observer:
         return obs, resp
 
     def observe_grpc(self, endpoint: Endpoint, rpc: str, string_fields=None,
-                     varint_fields=None, timeout: float = 6.0):
+                     varint_fields=None, timeout: float = 6.0,
+                     delivery: str = "standard"):
         """관측된 gRPC 메서드로 bootstrap하고 Round·endpoint 증거를 만든다."""
         self._rate.acquire_request()
         start = self._clock()
@@ -279,6 +284,7 @@ class Observer:
             string_fields,
             varint_fields,
             timeout,
+            delivery,
         )
         latency_ms = (self._clock() - start) * 1000.0
         body_fp = fingerprint(resp.body)
@@ -295,20 +301,21 @@ class Observer:
         )
         return obs, resp
 
-    def observe_mqtt(self, endpoint: Endpoint, topics, timeout: float = 4.0):
+    def observe_mqtt(self, endpoint: Endpoint, topics=(), timeout: float = 3.0):
+        """MQTT CONNECT 또는 read-only subscription을 endpoint 증거로 정규화한다."""
         self._rate.acquire_request()
         start = self._clock()
         resp = self._egress.request_mqtt(
-            Capability.ATTACK_TARGET, endpoint.host, endpoint.port, topics, timeout,
+            Capability.ATTACK_TARGET, endpoint.host, endpoint.port, topics, timeout
         )
         latency_ms = (self._clock() - start) * 1000.0
         body_fp = fingerprint(resp.body)
-        topic_label = ",".join(topics[:3]) if topics else "#"
+        label = "MQTT CONNECT" if not topics else "MQTT SUBSCRIBE"
         obs = Observation(
             endpoint=endpoint,
-            request_fingerprint=fingerprint(f"MQTT SUB {topic_label}"),
+            request_fingerprint=fingerprint(label),
             status=resp.status,
-            redacted_header_hints=notable_headers(resp.headers),
+            redacted_header_hints={},
             body_fingerprint=body_fp,
             latency_ms=latency_ms,
             note="no-response" if resp.status == 0 else "mqtt",
@@ -318,20 +325,20 @@ class Observer:
         return obs, resp
 
     def observe_rtsp(self, endpoint: Endpoint, method: str, path: str,
-                     extra_headers=None, timeout: float = 4.0):
+                     timeout: float = 3.0):
+        """RTSP read-only 요청을 endpoint 증거로 정규화한다."""
         self._rate.acquire_request()
         start = self._clock()
         resp = self._egress.request_rtsp(
-            Capability.ATTACK_TARGET, endpoint.host, endpoint.port,
-            method, path, 1, extra_headers, timeout,
+            Capability.ATTACK_TARGET, endpoint.host, endpoint.port, method, path, timeout
         )
         latency_ms = (self._clock() - start) * 1000.0
         body_fp = fingerprint(resp.body)
         obs = Observation(
             endpoint=endpoint,
-            request_fingerprint=fingerprint(f"RTSP {method} {path}"),
+            request_fingerprint=fingerprint(f"RTSP {method.upper()} {path}"),
             status=resp.status,
-            redacted_header_hints=notable_headers(resp.headers),
+            redacted_header_hints={},
             body_fingerprint=body_fp,
             latency_ms=latency_ms,
             note="no-response" if resp.status == 0 else "rtsp",

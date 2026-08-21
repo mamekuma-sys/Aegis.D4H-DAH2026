@@ -37,7 +37,8 @@ from .metrics import (
     Metrics,
 )
 from .http_semantics import parse_http_request
-from .packet import ParsedPacket, ParseStatus, is_scan_flag_combination
+from .grpc_semantics import GrpcH2StreamInspector
+from .packet import TCP_FIN, TCP_RST, TCP_SYN, ParsedPacket, ParseStatus, is_scan_flag_combination
 from .protocol import FrameStatus, VERDICT_ACCEPT, VERDICT_DROP
 from .rules import CompiledPolicy, EMPTY_POLICY, MatchKind, PromotionState, Rule, canary_selected
 from .state import CorrelationSnapshotRef
@@ -108,6 +109,7 @@ class HotPolicy:
         clock=time.monotonic,
         soft_cutoff: float = SOFT_CUTOFF_SECONDS,
         http_stream: HttpStreamStitcher | None = None,
+        grpc_stream: GrpcH2StreamInspector | None = None,
     ) -> None:
         self._policy = policy or EMPTY_POLICY
         self._snapshot_ref = snapshot_ref
@@ -115,6 +117,7 @@ class HotPolicy:
         self._clock = clock
         self._soft_cutoff = soft_cutoff
         self._http_stream = http_stream or HttpStreamStitcher()
+        self._grpc_stream = grpc_stream or GrpcH2StreamInspector()
 
     @property
     def policy(self) -> CompiledPolicy:
@@ -278,10 +281,29 @@ class HotPolicy:
         baseline: bool,
     ) -> VerdictDecision | None:
         payload = parsed.payload
-        if not payload:
-            return None
-
         deferred_shadow: tuple[Rule, str] | None = None
+
+        semantic = self._grpc_stream.feed(parsed, self._clock())
+        if semantic is not None:
+            rules = self._policy.grpc_semantic_rules.get(
+                (parsed.protocol, parsed.dst_port, semantic), ()
+            )
+            for rule in rules:
+                if not self._scope_allows(rule, parsed):
+                    continue
+                if rule.promotion_state is PromotionState.SHADOW:
+                    if deferred_shadow is None:
+                        deferred_shadow = (rule, semantic)
+                    continue
+                return self._enforce(
+                    pkt_id, rule, parsed, received_at, STAGE_SIG,
+                    allowed_by, semantic, baseline,
+                )
+
+        if not payload:
+            if parsed.tcp_flags & (TCP_SYN | TCP_FIN | TCP_RST):
+                self._http_stream.discard(parsed.flow_key)
+            return None
 
         stitched = self._http_stream.feed(parsed, self._clock())
         payload_views = [payload]
@@ -353,6 +375,18 @@ class HotPolicy:
                         matched = request.path_traversal_target_matches(
                             rule.query_names,
                             rule.path_basenames,
+                        )
+                    elif rule.kind is MatchKind.HTTP_GRAPHQL_FIELD:
+                        matched = request.graphql_field_matches(
+                            rule.json_field, rule.match_values, rule.query_names
+                        )
+                    elif rule.kind is MatchKind.HTTP_JSON_BASE64_VALUE:
+                        matched = request.json_base64_matches(
+                            rule.json_field, rule.match_values
+                        )
+                    elif rule.kind is MatchKind.HTTP_QUERY_TOKEN_SET:
+                        matched = request.query_token_set_matches(
+                            rule.query_names, rule.match_values
                         )
                     if matched:
                         if rule.promotion_state is PromotionState.SHADOW:

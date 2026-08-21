@@ -146,3 +146,11 @@ flag 수나 공식 SLA 결과가 아니다. hot-path 회귀의 1,100 pkt/s profi
 - 방어 담당자와 팀장 이경준의 review 상태
 
 `미확인`으로 표시된 신호는 runtime `DROP` rule에서 제외한다. 관측 증거가 확보되면 해당 행을 갱신하고 rule 승격 절차를 밟는다.
+
+## 2026-08-21 L3 MQTT·RTSP 준비 상태
+
+공식 대시보드로 `1883/MQTT`, `8554/RTSP` 진입점은 확인했지만 L3 실제 PCAP과 정상 SLA traffic은
+아직 확보하지 못했다. 현재 정책은 MQTT SUBSCRIBE의 `#`·`$SYS/#` wildcard와 RTSP 민감 경로
+DESCRIBE를 port-scoped `SHADOW`로 분류한다. 정상 MQTT wildcard 소비자나 합법적인 RTSP 관리 경로를
+오탐할 수 있으므로 verdict는 `ACCEPT`이며, positive PCAP·동일 protocol negative·100회 SLA fixture와
+방어 담당자/팀장 승인이 모두 확보될 때만 CANARY/ACTIVE 후보가 된다.

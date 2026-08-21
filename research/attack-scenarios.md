@@ -91,6 +91,15 @@ Phase 4에서는 운영 측이 전달한 `TARGETS × PORTS` 전체를 유지한�
 - 새 L4 PCAP이 들어오면 protocol·port·route·method·parameter를 먼저 inventory하고, positive와 정상
   negative fixture가 함께 생기기 전에는 port별 fast path를 추가하지 않는다.
 
+### 2026-08-21 공식 L3 진입 프로토콜 반영
+
+대시보드가 L3 `uav-node`의 `1883`을 MQTT, `8554`를 RTSP, `9090`을 HTTP 진입점으로 명시했다.
+이 관측은 protocol bootstrap을 허용하지만 MAVLink command·topic·stream 경로의 존재까지 증명하지는
+않는다. 따라서 `1883`은 MQTT 3.1.1 CONNECT와 `#`·`$SYS/#` QoS 0 read subscription만, `8554`는
+OPTIONS와 bounded DESCRIBE만 실행한다. MQTT PUBLISH, RTSP PLAY/SETUP, MAVLink/UGV 제어 payload와
+UDP probe는 금지한다. 각 전송은 `TARGETS × PORTS` allowlist, 공통 rate limiter, endpoint-local
+evidence TTL, 128KiB 응답 상한을 그대로 적용한다.
+
 ### R17 피드백에 따른 적응 전략
 
 R17 공격 로그는 33개 endpoint에 1,600회 요청과 111회 LLM 호출(93,427 token)을 사용했지만,

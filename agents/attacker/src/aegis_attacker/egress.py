@@ -80,12 +80,14 @@ class EgressGateway:
         return reader(host, port, timeout, max_bytes)
 
     def request_grpc(self, capability: Capability, host: str, port: int, rpc: str,
-                     string_fields=None, varint_fields=None, timeout: float = 6.0):
+                     string_fields=None, varint_fields=None, timeout: float = 6.0,
+                     delivery: str = "standard"):
         """Allowlisted ATTACK_TARGET의 plaintext gRPC unary 요청만 전달한다."""
         if capability != Capability.ATTACK_TARGET:
             raise EgressError("gRPC 요청은 ATTACK_TARGET 전용")
-        from .grpc_transport import ALLOWED_GRPC_RPCS
-        if port != 9000 or rpc not in ALLOWED_GRPC_RPCS:
+        from .grpc_transport import ALLOWED_DELIVERY_MODES, ALLOWED_GRPC_RPCS
+        if (port != 9000 or rpc not in ALLOWED_GRPC_RPCS
+                or delivery not in ALLOWED_DELIVERY_MODES):
             raise EgressError("관측되지 않은 gRPC port 또는 RPC")
         if (host, port) not in self._allow.get(capability, set()):
             raise EgressError(
@@ -96,45 +98,56 @@ class EgressGateway:
             from .observation import HttpResponse
             return HttpResponse(0, "", {})
         return requester(
-            host, port, rpc, string_fields, varint_fields, timeout
+            host, port, rpc, string_fields, varint_fields, timeout, delivery
         )
 
-    def request_mqtt(self, capability: Capability, host: str, port: int, topics,
-                     timeout: float = 4.0):
-        """Allowlisted ATTACK_TARGET의 MQTT CONNECT+SUBSCRIBE 수집."""
+    def request_websocket(self, capability: Capability, host: str, port: int,
+                          path: str, session_token: str, timeout: float = 6.0):
+        """Allowlisted L2 mission-feed WebSocket read sequence."""
+        from .websocket_transport import MISSION_FEED_PATH
+        if capability != Capability.ATTACK_TARGET:
+            raise EgressError("WebSocket 요청은 ATTACK_TARGET 전용")
+        if port != 8082 or path != MISSION_FEED_PATH:
+            raise EgressError("관측되지 않은 WebSocket port 또는 path")
+        if (host, port) not in self._allow.get(capability, set()):
+            raise EgressError(f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖")
+        requester = getattr(self._transport, "request_websocket", None)
+        if requester is None:
+            from .observation import HttpResponse
+            return HttpResponse(0, "", {})
+        return requester(host, port, path, session_token, timeout)
+
+    def request_mqtt(self, capability: Capability, host: str, port: int,
+                     topics=(), timeout: float = 3.0):
+        """Allowlisted 1883/MQTT의 CONNECT·read subscription만 전달한다."""
+        from .protocol_transport import MQTT_PORT, MQTT_READ_TOPICS
+        normalized = tuple(dict.fromkeys(str(topic) for topic in (topics or ())))
         if capability != Capability.ATTACK_TARGET:
             raise EgressError("MQTT 요청은 ATTACK_TARGET 전용")
-        if port != 1883:
-            raise EgressError("관측되지 않은 MQTT port")
+        if port != MQTT_PORT or any(topic not in MQTT_READ_TOPICS for topic in normalized):
+            raise EgressError("허용되지 않은 MQTT port 또는 topic")
         if (host, port) not in self._allow.get(capability, set()):
-            raise EgressError(
-                f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖"
-            )
+            raise EgressError(f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖")
         requester = getattr(self._transport, "request_mqtt", None)
-        if requester is not None:
-            return requester(host, port, list(topics or ()), timeout)
-        from .mqtt_transport import mqtt_subscribe_collect
-        return mqtt_subscribe_collect(host, port, list(topics or ()), timeout=timeout)
+        if requester is None:
+            from .observation import HttpResponse
+            return HttpResponse(0, "", {})
+        return requester(host, port, normalized, timeout)
 
     def request_rtsp(self, capability: Capability, host: str, port: int,
-                     method: str, path: str, cseq: int = 1,
-                     extra_headers=None, timeout: float = 4.0):
-        """Allowlisted ATTACK_TARGET의 RTSP OPTIONS/DESCRIBE."""
+                     method: str, path: str, timeout: float = 3.0):
+        """Allowlisted 8554/RTSP의 OPTIONS·DESCRIBE만 전달한다."""
+        from .protocol_transport import RTSP_DISCOVERY_PATHS, RTSP_PORT, RTSP_READ_METHODS
+        normalized_method = str(method).upper()
+        valid_path = path == "*" if normalized_method == "OPTIONS" else path in RTSP_DISCOVERY_PATHS
         if capability != Capability.ATTACK_TARGET:
             raise EgressError("RTSP 요청은 ATTACK_TARGET 전용")
-        if port != 8554:
-            raise EgressError("관측되지 않은 RTSP port")
+        if port != RTSP_PORT or normalized_method not in RTSP_READ_METHODS or not valid_path:
+            raise EgressError("허용되지 않은 RTSP port, method 또는 path")
         if (host, port) not in self._allow.get(capability, set()):
-            raise EgressError(
-                f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖"
-            )
+            raise EgressError(f"{capability.value} egress 거부: {host}:{port} 는 allowlist 밖")
         requester = getattr(self._transport, "request_rtsp", None)
-        if requester is not None:
-            return requester(
-                host, port, method, path, cseq, extra_headers, timeout,
-            )
-        from .rtsp_transport import rtsp_exchange
-        return rtsp_exchange(
-            host, port, method, path, cseq=cseq, timeout=timeout,
-            extra_headers=dict(extra_headers or {}),
-        )
+        if requester is None:
+            from .observation import HttpResponse
+            return HttpResponse(0, "", {})
+        return requester(host, port, normalized_method, path, timeout)

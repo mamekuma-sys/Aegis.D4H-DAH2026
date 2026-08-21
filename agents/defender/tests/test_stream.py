@@ -66,6 +66,27 @@ class TestHttpStreamStitcher(unittest.TestCase):
             VERDICT_ACCEPT,
         )
 
+    def test_segmented_portal_ssti_drops_completing_packet(self):
+        request = (
+            b"GET /portal%2Ffeedback?service_id=%7B%7B(lipsum%7Cattr('__globals__'))"
+            b".get('__builtins__').get('open')('/flag').read()%7D%7D HTTP/1.1\r\n"
+            b"Host: team1.lig.internal:8080\r\n\r\n"
+        )
+        split = request.index(b"__globals__") + 5
+        first, second = request[:split], request[split:]
+        parsed_first = parse_ip(ipv4_tcp(first, dst_port=8080, sequence=3000))
+        parsed_second = parse_ip(
+            ipv4_tcp(second, dst_port=8080, sequence=3000 + len(first))
+        )
+
+        self.assertEqual(self.policy.decide(5, parsed_first, 0.0).verdict, VERDICT_ACCEPT)
+        decision = self.policy.decide(6, parsed_second, 0.0)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(
+            decision.rule_id,
+            "http-l1-portal-feedback-ssti-semantic-001",
+        )
+
     def test_gap_fails_open_and_discards_state(self):
         stitcher = HttpStreamStitcher()
         first = parse_ip(ipv4_tcp(b"GET /admin HTTP/1.1\r\n", dst_port=8082, sequence=10))

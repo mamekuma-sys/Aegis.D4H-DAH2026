@@ -70,6 +70,10 @@ class MatchKind(str, Enum):
     HTTP_SSRF_TARGET = "http_ssrf_target"
     HTTP_SQLI_SOURCE = "http_sqli_source"
     HTTP_PATH_TRAVERSAL = "http_path_traversal"
+    HTTP_GRAPHQL_FIELD = "http_graphql_field"
+    HTTP_JSON_BASE64_VALUE = "http_json_base64_value"
+    HTTP_QUERY_TOKEN_SET = "http_query_token_set"
+    GRPC_SEMANTIC = "grpc_semantic"
     TCP_FLAGS = "tcp_flags"
     FLOW_SCORE = "flow_score"
     ALLOW_PROFILE = "allow_profile"
@@ -115,6 +119,9 @@ class Rule:
     target_path: str = ""
     sql_source: str = ""
     path_basenames: tuple[str, ...] = ()
+    json_field: str = ""
+    match_values: tuple[str, ...] = ()
+    grpc_semantic: str = ""
 
     @property
     def enforces_drop(self) -> bool:
@@ -163,6 +170,7 @@ class CompiledPolicy:
     wildcard_matchers: Mapping[int, CompiledMatcher]
     http_json_rules: Mapping[tuple[int, int, str, str], tuple[Rule, ...]]
     http_semantic_rules: Mapping[tuple[int, int, str, str], tuple[Rule, ...]]
+    grpc_semantic_rules: Mapping[tuple[int, int, str], tuple[Rule, ...]]
     flag_rules: tuple[Rule, ...]
     score_rules: tuple[Rule, ...]
     allow_rules: tuple[Rule, ...]
@@ -194,6 +202,7 @@ EMPTY_POLICY = CompiledPolicy(
     wildcard_matchers=MappingProxyType({}),
     http_json_rules=MappingProxyType({}),
     http_semantic_rules=MappingProxyType({}),
+    grpc_semantic_rules=MappingProxyType({}),
     flag_rules=(),
     score_rules=(),
     allow_rules=(),
@@ -355,6 +364,9 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
     target_path = ""
     sql_source = ""
     path_basenames: tuple[str, ...] = ()
+    json_field = ""
+    match_values: tuple[str, ...] = ()
+    grpc_semantic = ""
 
     if kind is MatchKind.PAYLOAD_REGEX:
         pattern_source = str(_require(raw, "pattern", context))
@@ -393,6 +405,9 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
         MatchKind.HTTP_SSRF_TARGET,
         MatchKind.HTTP_SQLI_SOURCE,
         MatchKind.HTTP_PATH_TRAVERSAL,
+        MatchKind.HTTP_GRAPHQL_FIELD,
+        MatchKind.HTTP_JSON_BASE64_VALUE,
+        MatchKind.HTTP_QUERY_TOKEN_SET,
     ):
         if protocol != IPPROTO_TCP:
             raise PolicyValidationError(f"{context}: HTTP semantic rule 의 protocol 이 tcp 가 아니다")
@@ -450,7 +465,7 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
             sql_source = str(_require(raw, "sql_source", context)).strip().lower()
             if not re.fullmatch(r"[a-z_][a-z0-9_]{0,63}", sql_source):
                 raise PolicyValidationError(f"{context}: 안전하지 않은 sql_source")
-        else:
+        elif kind is MatchKind.HTTP_PATH_TRAVERSAL:
             raw_bases = _require(raw, "path_basenames", context)
             if not isinstance(raw_bases, list) or not (1 <= len(raw_bases) <= 16):
                 raise PolicyValidationError(f"{context}: path_basenames 는 1~16개 배열이어야 한다")
@@ -462,6 +477,30 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
                 if value not in normalized_bases:
                     normalized_bases.append(value)
             path_basenames = tuple(normalized_bases)
+        else:
+            if kind is not MatchKind.HTTP_QUERY_TOKEN_SET:
+                json_field = str(_require(raw, "json_field", context)).strip().lower()
+                if not re.fullmatch(r"[a-z0-9_-]{1,64}", json_field):
+                    raise PolicyValidationError(f"{context}: 안전하지 않은 json_field")
+            raw_values = _require(raw, "match_values", context)
+            if not isinstance(raw_values, list) or not (1 <= len(raw_values) <= 16):
+                raise PolicyValidationError(f"{context}: match_values 는 1~16개 배열이어야 한다")
+            normalized_values = []
+            for item in raw_values:
+                value = str(item)
+                if not value or len(value) > 128 or any(ch in value for ch in "\r\n\x00"):
+                    raise PolicyValidationError(f"{context}: 안전하지 않은 match_values 항목")
+                if value not in normalized_values:
+                    normalized_values.append(value)
+            match_values = tuple(normalized_values)
+    elif kind is MatchKind.GRPC_SEMANTIC:
+        if protocol != IPPROTO_TCP or not ports:
+            raise PolicyValidationError(
+                f"{context}: gRPC semantic rule 은 tcp와 명시적 port가 필요하다"
+            )
+        grpc_semantic = str(_require(raw, "grpc_semantic", context)).strip().lower()
+        if not re.fullmatch(r"[a-z0-9-]{1,96}", grpc_semantic):
+            raise PolicyValidationError(f"{context}: 안전하지 않은 grpc_semantic")
     elif kind is MatchKind.TCP_FLAGS:
         tcp_flags_name = str(_require(raw, "tcp_flags_name", context))
         if protocol != IPPROTO_TCP:
@@ -519,6 +558,9 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
         target_path=target_path,
         sql_source=sql_source,
         path_basenames=path_basenames,
+        json_field=json_field,
+        match_values=match_values,
+        grpc_semantic=grpc_semantic,
     )
     return rule, None
 
@@ -613,6 +655,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
     wildcard_buckets: dict[int, list[Rule]] = {}
     http_json_buckets: dict[tuple[int, int, str, str], list[Rule]] = {}
     http_semantic_buckets: dict[tuple[int, int, str, str], list[Rule]] = {}
+    grpc_semantic_buckets: dict[tuple[int, int, str], list[Rule]] = {}
     flag_rules: list[Rule] = []
     score_rules: list[Rule] = []
     allow_rules: list[Rule] = []
@@ -632,11 +675,18 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
             MatchKind.HTTP_SSRF_TARGET,
             MatchKind.HTTP_SQLI_SOURCE,
             MatchKind.HTTP_PATH_TRAVERSAL,
+            MatchKind.HTTP_GRAPHQL_FIELD,
+            MatchKind.HTTP_JSON_BASE64_VALUE,
+            MatchKind.HTTP_QUERY_TOKEN_SET,
         ):
             for port in rule.ports:
                 for path in rule.http_paths:
                     key = (rule.protocol, port, rule.http_method, path)
                     http_semantic_buckets.setdefault(key, []).append(rule)
+        elif rule.kind is MatchKind.GRPC_SEMANTIC:
+            for port in rule.ports:
+                key = (rule.protocol, port, rule.grpc_semantic)
+                grpc_semantic_buckets.setdefault(key, []).append(rule)
         elif rule.kind is MatchKind.TCP_FLAGS:
             flag_rules.append(rule)
         elif rule.kind is MatchKind.FLOW_SCORE:
@@ -652,6 +702,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
     for buckets in (
         payload_buckets.values(), wildcard_buckets.values(),
         http_json_buckets.values(), http_semantic_buckets.values(),
+        grpc_semantic_buckets.values(),
     ):
         for bucket in buckets:
             bucket.sort(key=lambda rule: promotion_rank[rule.promotion_state])
@@ -667,6 +718,9 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
     }
     http_semantic_rules = {
         key: tuple(bucket) for key, bucket in http_semantic_buckets.items()
+    }
+    grpc_semantic_rules = {
+        key: tuple(bucket) for key, bucket in grpc_semantic_buckets.items()
     }
 
     alert_profiles: dict[str, AlertProfile] = {}
@@ -692,6 +746,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
         wildcard_matchers=MappingProxyType(wildcard_matchers),
         http_json_rules=MappingProxyType(http_json_rules),
         http_semantic_rules=MappingProxyType(http_semantic_rules),
+        grpc_semantic_rules=MappingProxyType(grpc_semantic_rules),
         flag_rules=tuple(flag_rules),
         score_rules=tuple(score_rules),
         allow_rules=tuple(allow_rules),

@@ -20,6 +20,7 @@ MAX_HEADER_LINES = 64
 MAX_COOKIE_VALUE = 512
 MAX_JSON_KEYS = 16
 MAX_JSON_TEXT = 512
+MAX_JSON_BODY = 2048
 MAX_PERCENT_DECODE_ROUNDS = 3
 MAX_NESTED_URL_DEPTH = 3
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
@@ -223,6 +224,7 @@ class HttpRequestView:
     path: str
     query_pairs: tuple[tuple[str, str], ...]
     json_cookies: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+    json_fields: tuple[tuple[str, str], ...] = ()
 
     def cookie_claim_matches(
         self, cookie_name: str, claim_key: str, claim_values: tuple[str, ...]
@@ -303,6 +305,58 @@ class HttpRequestView:
                     return True
         return False
 
+    def graphql_field_matches(
+        self, field_name: str, match_values: tuple[str, ...], query_names: tuple[str, ...]
+    ) -> bool:
+        expected_field = field_name.lower()
+        expected_values = frozenset(match_values)
+        candidates = []
+        if self.method == "GET":
+            expected_names = frozenset(name.lower() for name in query_names)
+            candidates.extend(
+                value for name, value in self.query_pairs
+                if not expected_names or name in expected_names
+            )
+        else:
+            candidates.extend(value for name, value in self.json_fields if name == expected_field)
+        for value in candidates:
+            identifiers = frozenset(re.findall(r"[_A-Za-z][_0-9A-Za-z]*", value))
+            if identifiers.intersection(expected_values):
+                return True
+        return False
+
+    def json_base64_matches(self, field_name: str, match_values: tuple[str, ...]) -> bool:
+        expected_field = field_name.lower()
+        expected_values = frozenset(match_values)
+        for name, value in self.json_fields:
+            if name != expected_field or len(value) > MAX_JSON_TEXT:
+                continue
+            try:
+                raw = value.encode("ascii")
+                decoded = base64.b64decode(
+                    raw + b"=" * ((4 - len(raw) % 4) % 4), altchars=b"-_", validate=True
+                ).decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError, ValueError, binascii.Error):
+                continue
+            if decoded in expected_values:
+                return True
+        return False
+
+    def query_token_set_matches(
+        self, query_names: tuple[str, ...], match_values: tuple[str, ...]
+    ) -> bool:
+        expected_names = frozenset(name.lower() for name in query_names)
+        required = frozenset(value.lower() for value in match_values)
+        for name, value in self.query_pairs:
+            if expected_names and name not in expected_names:
+                continue
+            tokens = frozenset(
+                token.lower() for token in re.findall(r"[_A-Za-z][_0-9A-Za-z]*", value)
+            )
+            if required and required.issubset(tokens):
+                return True
+        return False
+
 
 def parse_http_request(payload: bytes) -> HttpRequestView | None:
     """Parse one complete bounded HTTP/1 request header, or fail open with ``None``."""
@@ -323,7 +377,7 @@ def parse_http_request(payload: bytes) -> HttpRequestView | None:
     if target is None:
         return None
     path, separator, query = target.partition("?")
-    path = path or "/"
+    path = _canonical_url_path(path or "/")
     query_pairs = _query_pairs(query if separator else "")
 
     cookies = []
@@ -347,10 +401,23 @@ def parse_http_request(payload: bytes) -> HttpRequestView | None:
             claims = _decode_json_cookie(cookie_value)
             if normalized_name and claims is not None:
                 cookies.append((normalized_name, claims))
+    json_fields = []
+    body = payload[header_end + 4:]
+    if body and len(body) <= MAX_JSON_BODY:
+        try:
+            document = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            document = None
+        if isinstance(document, dict) and len(document) <= MAX_JSON_KEYS:
+            for key, value in document.items():
+                if isinstance(key, str) and isinstance(value, str):
+                    if 0 < len(key) <= 64 and len(value) <= MAX_JSON_TEXT:
+                        json_fields.append((key.strip().lower(), value))
     return HttpRequestView(
         method=method,
         target=target,
         path=path,
         query_pairs=query_pairs,
         json_cookies=tuple(cookies),
+        json_fields=tuple(json_fields),
     )

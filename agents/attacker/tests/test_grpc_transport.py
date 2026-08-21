@@ -95,6 +95,35 @@ class TestGrpcUnaryRequest(unittest.TestCase):
         self.assertEqual(response.status, 0)
         connect.assert_not_called()
 
+    def test_fragmented_huffman_delivery_hides_path_and_splits_envelope(self):
+        incoming = b"".join((
+            _frame(4, 0, 0),
+            _frame(1, 0x04, 1),
+            _frame(0, 0x01, 1, b"\x00\x00\x00\x00\x00"),
+        ))
+        fake = FakeSocket(incoming)
+        with patch(
+            "aegis_attacker.grpc_transport.socket.create_connection",
+            return_value=fake,
+        ):
+            response = grpc_unary_request(
+                "team2.lig.internal", 9000, TAIL,
+                {1: "/flag"}, {2: 1}, delivery="fragmented_huffman",
+            )
+
+        self.assertEqual(response.status, 200)
+        self.assertNotIn(TAIL.encode("ascii"), fake.sent)
+        offset = len(CLIENT_PREFACE)
+        data_lengths = []
+        while offset + 9 <= len(fake.sent):
+            length = int.from_bytes(fake.sent[offset:offset + 3], "big")
+            frame_type = fake.sent[offset + 3]
+            if frame_type == 0:
+                data_lengths.append(length)
+            offset += 9 + length
+        message = encode_protobuf({1: "/flag"}, {2: 1})
+        self.assertEqual(data_lengths, [1] * (5 + len(message)))
+
     def test_catalog_contains_observed_satdiag_methods(self):
         self.assertEqual(
             READ_ONLY_RPCS,

@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import threading
 import unittest
@@ -92,6 +93,52 @@ def make_runtime(arena):
 
 
 class TestRuntimeEndToEnd(unittest.TestCase):
+    def test_l2_fresh_session_drives_rsc_and_websocket_without_logging_token(self):
+        session_token = "0123456789abcdef0123456789abcdef"
+
+        class SessionArena:
+            def __init__(self):
+                self.submits = []
+                self.rsc_tokens = []
+                self.ws_tokens = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                path = urlsplit(url).path
+                if path == "/":
+                    return HttpResponse(200, "mission console")
+                if method == "POST" and path == "/api/session":
+                    return HttpResponse(200, json.dumps({"sessionToken": session_token}))
+                if method == "POST" and path == "/api/rsc-action":
+                    document = json.loads(body)
+                    self.rsc_tokens.append(document["token"])
+                    expected_ref = base64.b64encode(
+                        b"process.env.MC2_INTERNAL_API_TOKEN"
+                    ).decode("ascii")
+                    if document["ref"] == expected_ref:
+                        return HttpResponse(200, "FLAG{rsc-fresh-session}")
+                return HttpResponse(404, "not found")
+
+            def request_websocket(self, host, port, path, token, timeout=6.0):
+                self.ws_tokens.append(token)
+                return HttpResponse(101, "FLAG{ws-fresh-session}")
+
+        arena = SessionArena()
+        stream = io.StringIO()
+        cfg = make_cfg()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt),
+            audit=AuditLogger(sink=lambda line: stream.write(line + "\n")),
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 2)
+        self.assertEqual(arena.rsc_tokens, [session_token])
+        self.assertEqual(arena.ws_tokens, [session_token])
+        self.assertNotIn(session_token, stream.getvalue())
+
     def test_missing_submit_config_does_not_increment_submit_report(self):
         cfg = AttackerConfig(
             targets=("t2.lig.internal",), ports=(8082,),
@@ -144,9 +191,11 @@ class TestRuntimeEndToEnd(unittest.TestCase):
                 return HttpResponse(0, "")
 
             def request_grpc(self, host, port, rpc, string_fields=None,
-                             varint_fields=None, timeout=6.0):
+                             varint_fields=None, timeout=6.0, delivery="standard"):
                 fields = dict(string_fields or {})
-                self.grpc_calls.append((host, port, rpc, fields, dict(varint_fields or {})))
+                self.grpc_calls.append((
+                    host, port, rpc, fields, dict(varint_fields or {}), delivery
+                ))
                 if rpc.endswith("/Health"):
                     return HttpResponse(200, "ok")
                 if rpc.endswith("/ExportDiagnosticBundle") and "${FLAG}" in fields.get(1, ""):
@@ -167,20 +216,13 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         ).run_once()
 
         self.assertGreaterEqual(report.accepted_count(), 1)
-        self.assertEqual(arena.submits[0]["flag"], "FLAG{finals_export_first}")
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{finals_grpc_fixture}")
         self.assertEqual(arena.target_http_calls, [])
         self.assertEqual(arena.llm_calls, 0)
         self.assertTrue(arena.grpc_calls[0][2].endswith("/Health"))
-        self.assertTrue(any(call[2].endswith("/ProbeEndpoint") for call in arena.grpc_calls))
-        self.assertTrue(any(
-            call[2].endswith("/ExportDiagnosticBundle")
-            and "${FLAG}" in call[3].get(1, "")
-            for call in arena.grpc_calls
-        ))
-        self.assertTrue(any(
-            call[2].endswith("/TailDiagnosticLog") and call[3].get(1) == "/proc/self/environ"
-            for call in arena.grpc_calls
-        ))
+        self.assertEqual(arena.grpc_calls[1][2].rsplit("/", 1)[-1], "TailDiagnosticLog")
+        self.assertEqual(arena.grpc_calls[1][3].get(1), "/flag")
+        self.assertEqual(arena.grpc_calls[1][5], "fragmented_huffman")
 
     def test_finals_9000_export_flag_echo_captures_when_tail_misses(self):
         class ExportArena:
@@ -194,7 +236,7 @@ class TestRuntimeEndToEnd(unittest.TestCase):
                 return HttpResponse(0, "")
 
             def request_grpc(self, host, port, rpc, string_fields=None,
-                             varint_fields=None, timeout=6.0):
+                             varint_fields=None, timeout=6.0, delivery="standard"):
                 fields = dict(string_fields or {})
                 if rpc.endswith("/Health"):
                     return HttpResponse(200, "ok")
@@ -239,7 +281,7 @@ class TestRuntimeEndToEnd(unittest.TestCase):
                 return HttpResponse(200, "portal online")
 
             def request_grpc(self, host, port, rpc, string_fields=None,
-                             varint_fields=None, timeout=6.0):
+                             varint_fields=None, timeout=6.0, delivery="standard"):
                 if rpc.endswith("/Health"):
                     return HttpResponse(
                         200,
@@ -263,7 +305,7 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertIn(gateway_path, arena.target_paths)
         self.assertEqual(arena.submits[0]["flag"], "FLAG{satdiag_gateway_pivot}")
 
-    def test_finals_8080_runs_observed_fast_path_and_always_calls_sol_llm(self):
+    def test_finals_8080_runs_observed_fast_path_then_bounded_llm(self):
         class FinalsHttpArena:
             def __init__(self):
                 self.target_paths = []
@@ -302,8 +344,7 @@ class TestRuntimeEndToEnd(unittest.TestCase):
 
         self.assertEqual(report.accepted_count(), 0)
         self.assertGreater(arena.llm_calls, 0)
-        self.assertIn("gpt-5.4-pro", arena.llm_models)
-        self.assertGreaterEqual(arena.llm_calls, 1)
+        self.assertEqual(arena.llm_models, ["gpt-4o-mini", "gpt-4o-mini"])
         self.assertIn("/fetch", arena.target_paths)
         self.assertIn("/config", arena.target_paths)
         self.assertIn("/portal", arena.target_paths)
@@ -345,15 +386,13 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertEqual(arena.submits[0]["flag"], "FLAG{recon_win}")
         self.assertEqual(arena.llm_calls, 0)  # 토큰 0
 
-    def test_recon_hit_still_forces_llm_when_key_present(self):
-        # 결정론 hit 후에도 POST_DET_LLM_TURNS만큼 LiteLLM을 강제 호출한다.
+    def test_recon_hit_skips_llm_when_key_present(self):
         arena = FakeArena("plain service", "/unused", "FLAG{recon_win}",
                           flag_when=lambda full: full.startswith("/flag"))
         rt = make_runtime(arena)
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 1)
-        self.assertGreaterEqual(arena.llm_calls, 1)
-        # 예산 소진 모드: endpoint당 최대 MAX_TURNS * 2(pro+burn) 호출
+        self.assertEqual(arena.llm_calls, 0)
 
     def test_recon_collects_multiple_flags_from_one_service(self):
         class MultiFlagArena:
@@ -669,10 +708,7 @@ class TestRuntimeResilience(unittest.TestCase):
         self.assertEqual(rt.budget.llm_calls, after_first)
         self.assertEqual(rt._report.summary()["llm_calls"], after_first)
 
-    def test_llm_model_always_forced_sol(self):
-        from aegis_attacker.planner import MAX_TURNS
-
-        # 결정론·LLM 모두 flag를 못 잡아도 강제 sol 모델을 유지한다(env/mini 무시).
+    def test_llm_model_and_turns_are_bounded(self):
         arena = FakeArena(
             "URL Fetcher — GET /fetch?url=<url>",
             "/fetch?url=miss",
@@ -681,10 +717,7 @@ class TestRuntimeResilience(unittest.TestCase):
         )
         rt = make_runtime(arena)
         rt.run_once()
-        self.assertGreaterEqual(len(arena.llm_models), MAX_TURNS)
-        # primary는 항상 gpt-5.4-pro, 매 턴 예산 소진용 gpt-5-pro가 추가로 붙을 수 있다.
-        self.assertGreaterEqual(arena.llm_models.count("gpt-5.4-pro"), MAX_TURNS)
-        self.assertTrue(all(m in ("gpt-5.4-pro", "gpt-5-pro") for m in arena.llm_models))
+        self.assertEqual(arena.llm_models, ["gpt-4o-mini", "gpt-4o-mini"])
 
 
 class MultiPortArena:

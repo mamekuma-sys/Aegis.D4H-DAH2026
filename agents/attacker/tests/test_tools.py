@@ -50,8 +50,8 @@ class FakeTransport:
         return self.responses[idx]
 
     def request_grpc(self, host, port, rpc, string_fields=None,
-                     varint_fields=None, timeout=6.0):
-        self.calls.append(("GRPC", host, port, rpc, string_fields, varint_fields))
+                     varint_fields=None, timeout=6.0, delivery="standard"):
+        self.calls.append(("GRPC", host, port, rpc, string_fields, varint_fields, delivery))
         idx = min(len(self.calls) - 1, len(self.responses) - 1)
         return self.responses[idx]
 

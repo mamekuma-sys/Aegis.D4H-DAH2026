@@ -36,8 +36,6 @@ _L2_SCHEMA_RULE_ID = "sig-l2-graphql-schema-001"
 _L4_FLAG_RULE_ID = "sig-l4-flag-secret-001"
 _L1_CONFIG_CANON_RULE_ID = "http-l1-config-flag-canonical-001"
 _L1_CONFIG_CANON_POST_RULE_ID = "http-l1-config-flag-canonical-post-001"
-_L3_MQTT_RULE_ID = "sig-l3-mqtt-wildcard-flag-001"
-_L3_RTSP_RULE_ID = "sig-l3-rtsp-flag-path-001"
 _ACTIVE_RULES = {
     _L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID,
     _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
@@ -47,7 +45,12 @@ _ACTIVE_RULES = {
     _L2_RSC_RULE_ID, _L2_WS_FEED_RULE_ID,
     _L3_SENSITIVE_RULE_ID, _L3_UNION_BROAD_RULE_ID, _L2_SCHEMA_RULE_ID, _L4_FLAG_RULE_ID,
     _L1_CONFIG_CANON_RULE_ID, _L1_CONFIG_CANON_POST_RULE_ID,
-    _L3_MQTT_RULE_ID, _L3_RTSP_RULE_ID,
+    "http-l2-graphql-get-semantic-001",
+    "http-l2-graphql-post-semantic-001",
+    "http-l2-rsc-env-ref-semantic-001",
+    "grpc-l1-tail-sensitive-file-001",
+    "grpc-l1-export-flag-command-001",
+    "http-l1-portal-feedback-ssti-semantic-001",
 }
 
 _POSITIVE_PATHS = (
@@ -364,6 +367,21 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                     VERDICT_ACCEPT,
                 )
 
+    def test_finals_p2r6_long_portal_ssti_drops_semantically(self):
+        payload = (
+            b"GET /portal/feedback?service_id=%7B%7B%20%28lipsum%7Cattr%28%27"
+            b"__globals__%27%29%29.get%28%27__builtins__%27%29.get%28%27open%27"
+            b"%29%28%27%2Fflag%27%29.read%28%29%20%7D%7D HTTP/1.1\r\n"
+            b"Host: x\r\n\r\n"
+        )
+        decision = self.policy.decide(
+            899, parse_ip(ipv4_tcp(payload, dst_port=8080)), 0.0
+        )
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(
+            decision.rule_id, "http-l1-portal-feedback-ssti-semantic-001"
+        )
+
     def test_finals_p2r4_export_printf_flag_drops(self):
         payload = (
             b":path*/satdiag.v1.SatDiag/ExportDiagnosticBundle\x00"
@@ -377,7 +395,7 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
     def test_finals_p2r5_8082_rsc_action_and_ws_drop(self):
         cases = (
             (b"POST /api/rsc-action HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n\r\n"
-             b'{"ref":"cHJvY2Vzcy5lbnYuTUMyX0lOVEVSTkFMX0FQSV9UT0tFTg==","token":"081bc56c6c874621acfc937dc543a801"}',
+             b'{"ref":"cHJvY2Vzcy5lbnYuTUMyX0lOVEVSTkFMX0FQSV9UT0tFTg==","token":"00000000000000000000000000000000"}',
              _L2_RSC_RULE_ID, "sig-l2-rsc-action-env-ref"),
             (b"GET /ws/mission-feed HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n"
              b"Upgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
@@ -497,9 +515,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p3-mqtt-rtsp"
+            "defender-2026-08-21-p3-all-semantic"
         )
-        self.assertEqual(self.report.drop_capable_rules, 24)
+        self.assertEqual(self.report.drop_capable_rules, 28)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 import re
+import json
 import urllib.parse
 
 from .models import (
@@ -21,6 +22,7 @@ from .models import (
     ToolResult,
 )
 from .observation import EvidenceFactory, fingerprint, notable_headers
+from .secrets import KIND_SESSION, SecretError, SecretHandle
 
 _QUOTE_SAFE = "/?&=%:+@,;!*'()$-_.~"
 
@@ -207,12 +209,28 @@ class ExecutionAdapter:
     """
 
     def __init__(self, egress, rate, round_id: str = "", clock=time.monotonic,
-                 evidence: EvidenceFactory = None):
+                 evidence: EvidenceFactory = None, secret_store=None):
         self._egress = egress
         self._rate = rate
         self._round_id = round_id
         self._clock = clock
         self._evidence = evidence or EvidenceFactory(round_id, clock)
+        self._secret_store = secret_store
+
+    def _materialize(self, value):
+        """Resolve session handles only at the transport boundary."""
+        if isinstance(value, SecretHandle):
+            if value.kind != KIND_SESSION or self._secret_store is None:
+                raise PlanBindingError("허용되지 않은 비밀 handle")
+            try:
+                return self._secret_store.resolve(value)
+            except SecretError as exc:
+                raise PlanBindingError("session handle 해석 실패") from exc
+        if isinstance(value, dict):
+            return {key: self._materialize(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._materialize(item) for item in value]
+        return value
 
     def _validate_binding(self, plan: ExecutionPlan, endpoint_id: str) -> None:
         now = self._clock()
@@ -254,30 +272,7 @@ class ExecutionAdapter:
                 plan.args.get("string_fields") or {},
                 plan.args.get("varint_fields") or {},
                 plan.timeout,
-            )
-        elif plan.tool == "mqtt":
-            method = "MQTT"
-            topics = list(plan.args.get("topics") or ("#",))
-            raw_path = "SUBSCRIBE " + ",".join(topics[:4])
-            resp = self._egress.request_mqtt(
-                Capability.ATTACK_TARGET,
-                plan.target.host,
-                plan.target.port,
-                topics,
-                plan.timeout,
-            )
-        elif plan.tool == "rtsp":
-            method = str(plan.args.get("method", "DESCRIBE")).upper()
-            raw_path = plan.args.get("path", "/") or "/"
-            resp = self._egress.request_rtsp(
-                Capability.ATTACK_TARGET,
-                plan.target.host,
-                plan.target.port,
-                method,
-                raw_path,
-                int(plan.args.get("cseq") or 1),
-                plan.args.get("headers") or {},
-                plan.timeout,
+                str(plan.args.get("delivery", "standard")),
             )
         elif plan.tool == "http":
             method = str(plan.args.get("method", "GET")).upper()
@@ -285,11 +280,52 @@ class ExecutionAdapter:
             if not raw_path.startswith("/"):
                 raw_path = "/" + raw_path
             url = plan.target.base_url() + urllib.parse.quote(raw_path, safe=_QUOTE_SAFE)
-            headers = plan.args.get("headers") or {}
-            body = plan.args.get("body") or None
+            headers = self._materialize(plan.args.get("headers") or {})
+            if "json_body" in plan.args:
+                body = json.dumps(
+                    self._materialize(plan.args["json_body"]), separators=(",", ":")
+                )
+                headers = {**headers, "Content-Type": "application/json"}
+            else:
+                body = self._materialize(plan.args.get("body") or None)
             # egress가 host·port allowlist·capability 교차·redirect를 강제한다.
             resp = self._egress.request(
                 Capability.ATTACK_TARGET, method, url, headers, body, plan.timeout)
+        elif plan.tool == "websocket":
+            method = "WEBSOCKET"
+            raw_path = str(plan.args.get("path", ""))
+            token = self._materialize(plan.args.get("token"))
+            if not isinstance(token, str) or not token:
+                raise PlanBindingError("WebSocket session token 누락")
+            resp = self._egress.request_websocket(
+                Capability.ATTACK_TARGET,
+                plan.target.host,
+                plan.target.port,
+                raw_path,
+                token,
+                plan.timeout,
+            )
+        elif plan.tool == "mqtt":
+            method = "MQTT"
+            raw_path = "SUBSCRIBE"
+            resp = self._egress.request_mqtt(
+                Capability.ATTACK_TARGET,
+                plan.target.host,
+                plan.target.port,
+                tuple(plan.args.get("topics") or ()),
+                plan.timeout,
+            )
+        elif plan.tool == "rtsp":
+            method = str(plan.args.get("method", "DESCRIBE")).upper()
+            raw_path = str(plan.args.get("path", "/"))
+            resp = self._egress.request_rtsp(
+                Capability.ATTACK_TARGET,
+                plan.target.host,
+                plan.target.port,
+                method,
+                raw_path,
+                plan.timeout,
+            )
         else:
             raise PlanBindingError("허용되지 않은 실행 도구")
         latency_ms = (self._clock() - start) * 1000.0

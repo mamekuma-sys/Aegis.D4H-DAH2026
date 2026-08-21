@@ -136,11 +136,11 @@ if ($defenderText -notmatch 'ConfigOnly') {
 if ($defenderText -notmatch 'policy_source=active') {
     throw 'defender-deploy.md does not require policy_source=active.'
 }
-if ($defenderText -notmatch 'bundle_id=defender-2026-08-21-p3-mqtt-rtsp') {
+if ($defenderText -notmatch 'bundle_id=defender-2026-08-21-p3-all-semantic') {
     throw 'defender-deploy.md does not require the P2-R3 hardened bundle id.'
 }
-if ($defenderText -notmatch 'drop_capable_rules=24') {
-    throw 'defender-deploy.md does not require drop_capable_rules=24.'
+if ($defenderText -notmatch 'drop_capable_rules=28') {
+    throw 'defender-deploy.md does not require drop_capable_rules=28.'
 }
 if ($defenderText -notmatch 'COPY policy /policy') {
     throw 'defender-deploy.md does not document the /policy image path.'

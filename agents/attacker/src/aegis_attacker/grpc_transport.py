@@ -16,6 +16,12 @@ from .observation import HttpResponse
 CLIENT_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 MAX_GRPC_REQUEST_BYTES = 16 * 1024
 MAX_GRPC_RESPONSE_BYTES = 1024 * 1024
+DELIVERY_STANDARD = "standard"
+DELIVERY_FRAGMENTED = "fragmented"
+DELIVERY_FRAGMENTED_HUFFMAN = "fragmented_huffman"
+ALLOWED_DELIVERY_MODES = frozenset({
+    DELIVERY_STANDARD, DELIVERY_FRAGMENTED, DELIVERY_FRAGMENTED_HUFFMAN,
+})
 
 # Health/Probe/Tail은 읽기 전용. Export는 P1-R2에서 flag echo에 쓰인 관측 RPC다.
 ALLOWED_GRPC_RPCS = frozenset({
@@ -88,11 +94,30 @@ def _literal_new_name(name: str, value: str) -> bytes:
     return b"\x00" + _hpack_string(name) + _hpack_string(value)
 
 
-def _request_headers(host: str, port: int, rpc: str) -> bytes:
+_HUFFMAN_PATH_VALUES = {
+    "/satdiag.v1.SatDiag/TailDiagnosticLog": bytes.fromhex(
+        "61034c861ccbf70afb869be61ccc6f19a8be61cd51d0931339e6"
+    ),
+    "/satdiag.v1.SatDiag/ExportDiagnosticBundle": bytes.fromhex(
+        "61034c861ccbf70afb869be61ccc60f359ec4df30e6a8e8498976daa4a0b"
+    ),
+}
+
+
+def _path_header(rpc: str, huffman: bool) -> bytes:
+    encoded = _HUFFMAN_PATH_VALUES.get(rpc) if huffman else None
+    if encoded is None:
+        return _literal_indexed_name(4, rpc)
+    # Literal Header Field with Incremental Indexing, indexed name :path (4),
+    # followed by a Huffman-coded string. These exact encodings were accepted in R6.
+    return b"\x44" + _hpack_integer(len(encoded), 7, 0x80) + encoded
+
+
+def _request_headers(host: str, port: int, rpc: str, huffman: bool = False) -> bytes:
     return b"".join((
         b"\x83",  # :method POST, static table index 3
         b"\x86",  # :scheme http, static table index 6
-        _literal_indexed_name(4, rpc),
+        _path_header(rpc, huffman),
         _literal_indexed_name(1, f"{host}:{port}"),
         _literal_indexed_name(31, "application/grpc"),
         _literal_new_name("te", "trailers"),
@@ -142,18 +167,28 @@ def _decode_grpc_messages(data: bytes) -> str:
 
 
 def grpc_unary_request(host: str, port: int, rpc: str, string_fields=None,
-                       varint_fields=None, timeout: float = 6.0) -> HttpResponse:
+                       varint_fields=None, timeout: float = 6.0,
+                       delivery: str = DELIVERY_STANDARD) -> HttpResponse:
     """관측된 SatDiag RPC 하나를 h2c unary 요청으로 실행한다."""
-    if rpc not in ALLOWED_GRPC_RPCS:
+    if rpc not in ALLOWED_GRPC_RPCS or delivery not in ALLOWED_DELIVERY_MODES:
         return HttpResponse(0, "", {})
     try:
         message = encode_protobuf(string_fields, varint_fields)
         envelope = b"\x00" + len(message).to_bytes(4, "big") + message
+        fragmented = delivery in (DELIVERY_FRAGMENTED, DELIVERY_FRAGMENTED_HUFFMAN)
+        huffman = delivery == DELIVERY_FRAGMENTED_HUFFMAN
+        data_frames = (
+            b"".join(
+                _frame(0, 0x01 if index == len(envelope) - 1 else 0, 1, bytes((byte,)))
+                for index, byte in enumerate(envelope)
+            )
+            if fragmented else _frame(0, 0x01, 1, envelope)
+        )
         request = b"".join((
             CLIENT_PREFACE,
             _frame(4, 0, 0),  # SETTINGS
-            _frame(1, 0x04, 1, _request_headers(host, port, rpc)),  # END_HEADERS
-            _frame(0, 0x01, 1, envelope),  # END_STREAM
+            _frame(1, 0x04, 1, _request_headers(host, port, rpc, huffman)),
+            data_frames,
         ))
         response_data = bytearray()
         saw_stream = False

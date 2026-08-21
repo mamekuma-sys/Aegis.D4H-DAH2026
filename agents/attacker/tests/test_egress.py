@@ -16,8 +16,8 @@ class RecordingTransport:
         return self.response
 
     def request_grpc(self, host, port, rpc, string_fields=None,
-                     varint_fields=None, timeout=6.0):
-        self.calls.append(("GRPC", host, port, rpc, string_fields, varint_fields))
+                     varint_fields=None, timeout=6.0, delivery="standard"):
+        self.calls.append(("GRPC", host, port, rpc, string_fields, varint_fields, delivery))
         return self.response
 
 

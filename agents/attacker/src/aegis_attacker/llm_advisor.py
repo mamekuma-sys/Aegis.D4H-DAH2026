@@ -19,17 +19,15 @@ from .config import (
 from .models import Capability, RoundBudget
 from .planner import parse_exploit
 
-MAX_LLM_CALLS_PER_ROUND = 8000  # 팀 한도 $1360 — 라운드당 상한을 사실상 열어 둔다.
-LLM_TIMEOUT = 90.0
-LLM_MAX_COMPLETION_TOKENS = 8192  # output $180/1M — 길게 뽑을수록 소진 빠름
-LLM_REASONING_EFFORT = "high"
-# 매 조언마다 추가 고가 모델 1회를 더 쳐 크레딧을 가속 소진한다(결과는 무시 가능).
-BUDGET_BURN_EXTRA_MODEL = "gpt-5-pro"
+MAX_LLM_CALLS_PER_ROUND = 32
+LLM_TIMEOUT = 30.0
+LLM_MAX_COMPLETION_TOKENS = 1024
+LLM_REASONING_EFFORT = "low"
 _RETRYABLE_LLM_STATUSES = frozenset({0, 408, 409, 425, 429, 500, 502, 503, 504})
 # 공격 대상이 반환한 최대 1MiB 응답을 그대로 prompt로 보내지 않는다. 토큰 수는
 # tokenizer 없이 정확히 계산할 수 없으므로 UTF-8 byte를 보수적인 상한으로 사용한다.
 # 시작의 service 설명과 끝의 최신 error를 함께 남겨 관측 증거의 양쪽 경계를 보존한다.
-MAX_LLM_USER_CONTENT_BYTES = 48 * 1024  # input $30/1M — 프롬프트를 크게 유지
+MAX_LLM_USER_CONTENT_BYTES = 4 * 1024
 _TRUNCATION_MARKER = "\n[OBSERVATION_TRUNCATED]\n"
 
 
@@ -80,8 +78,7 @@ SYSTEM_PROMPT = (
     "Finals layer map (entry ports):\n"
     "- L1 starlink-gw TCP 8080 HTTP + 9000 gRPC SatDiag (9000 is NOT plain HTTP).\n"
     "- L2 mission-c2 TCP 8082 — GraphQL often leaks FLAG in missionAudit.lastDeployment.notes.\n"
-    "- L3 uav-node TCP 9090 HTTP; also MQTT 1883 (SUBSCRIBE wildcards/flag topics) "
-    "and RTSP 8554 (OPTIONS/DESCRIBE /stream|/flag).\n"
+    "- L3 uav-node TCP 9090 HTTP (also 1883 MQTT / 8554 RTSP elsewhere).\n"
     "- L4 ugv-node TCP 8410/8420 — probe any advertised telemetry/control GET routes only.\n"
     "Must-try classes (rotate if blocked):\n"
     "- GraphQL OTHER: POST /graphql Content-Type application/json with bodies like "
@@ -141,7 +138,7 @@ class LLMAdvisor:
         result, retryable = self._request_model(model_id, user_content)
         if result is not None:
             return result
-        # 강제 primary(pro)가 재시도 가능 실패일 때만 sol→terra로 이어간다.
+        # 기본 저비용 primary가 재시도 가능 실패일 때만 luna→terra로 이어간다.
         # 테스트·명시 model 호출은 fallback 없이 그 모델 결과만 본다.
         if model_id != DEFAULT_LLM_MODEL or not retryable:
             return None
@@ -161,13 +158,6 @@ class LLMAdvisor:
             return None, False
 
         is_gpt56 = model_id.startswith("gpt-5.6-")
-        is_pro_family = (
-            model_id.endswith("-pro")
-            or model_id in {"o3", "o4-mini"}
-            or model_id.endswith("-codex")
-            or model_id.endswith("-codex-max")
-            or model_id.endswith("-codex-mini")
-        )
         payload_obj = {
             "model": model_id,
             "max_completion_tokens": LLM_MAX_COMPLETION_TOKENS,
@@ -178,8 +168,7 @@ class LLMAdvisor:
         }
         if is_gpt56:
             payload_obj["reasoning_effort"] = LLM_REASONING_EFFORT
-        elif not is_pro_family:
-            # gpt-5.4-pro / o-series 등은 temperature를 거부해 400 → advise-empty 가 된다.
+        else:
             payload_obj["temperature"] = 0
 
         payload = json.dumps(payload_obj)
@@ -204,27 +193,13 @@ class LLMAdvisor:
             obj = json.loads(resp.body)
             self._budget.add_llm(0, int(obj.get("usage", {}).get("total_tokens", 0) or 0))
             choice = obj["choices"][0]
-            message = choice.get("message") or {}
-            content = message.get("content")
-            finish_reason = choice.get("finish_reason")
-            # 일부 모델은 content를 list(part)로 준다.
-            if isinstance(content, list):
-                parts = []
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") in (None, "text"):
-                        parts.append(str(part.get("text") or ""))
-                    elif isinstance(part, str):
-                        parts.append(part)
-                content = "".join(parts)
-            if not isinstance(content, str):
-                content = ""
+            if choice.get("finish_reason") == "length":
+                return None, True
+            content = choice["message"]["content"]
         except Exception:
             return None, True
         try:
             plan = parse_exploit(content)
         except Exception:
-            return None, True
-        # finish_reason=length 는 잘린 응답으로 보고 fallback/재시도한다.
-        if finish_reason == "length":
             return None, True
         return plan, plan is None

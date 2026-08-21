@@ -20,11 +20,14 @@ probe 응답이 실제로 노출한 route·parameter만 bounded discovery text�
 결속합니다. traversal·파괴적 action route는 실행하지 않으며, 포트별 인터페이스와 flag 상태를 섞지
 않습니다.
 
-관측된 본선 `9000`은 gRPC `Health`를 먼저 실행합니다. 그 밖의 `PORTS`는 평문 HTTP `GET /`을 먼저 실행하고,
-무응답일 때만 같은 endpoint의 HTTPS `GET /`, 다시 무응답일 때만 passive TCP banner read로
+관측된 본선 `9000`은 gRPC `Health`를 먼저 실행합니다. L3의 `1883`은 MQTT CONNECT 뒤 `#`·`$SYS/#`
+읽기 전용 구독으로 retained/telemetry 응답을 수집하고, `8554`는 RTSP OPTIONS 뒤 제한된
+DESCRIBE 경로만 조회합니다. publish·PLAY·제어 명령은 전송하지 않습니다. 그 밖의 `PORTS`는
+평문 HTTP `GET /`을 먼저 실행하고, 무응답일 때만 같은 endpoint의 HTTPS `GET /`, 다시 무응답일
+때만 passive TCP banner read로
 이어집니다. TCP 단계는 최대 4KiB·750ms이며 client application byte를 보내지 않습니다. 경기 대상의
 self-signed TLS는 `ATTACK_TARGET`에서만 허용하고 제출·LLM 인증서 검증에는 영향을 주지 않습니다.
-UDP·protocol별 command는 관측 근거 없이 생성하지 않습니다.
+UDP와 물리 로봇 제어 command는 관측 근거 없이 생성하지 않습니다.
 
 공식 `PORTS`에 L1~L4가 함께 들어오면 알려진 데모 포트는 `L4→L1→L2→L3` wave로 섞습니다.
 새 UGV 레이어를 초반에 시작하면서도 이전 세 레이어를 모두 같은 wave에 유지합니다. 데모 포트가
@@ -51,6 +54,7 @@ src/aegis_attacker/
 ├─ rate_limit.py    # 전역 토큰버킷(초당 10·버스트 20)·제출(분당 30)·429 backoff
 ├─ observation.py   # HTTP 관측·정규화(timeout·거부도 관측)
 ├─ grpc_transport.py # 본선 9000 h2c gRPC unary·protobuf 최소 전송
+├─ protocol_transport.py # 본선 1883 MQTT·8554 RTSP bounded read-only 전송
 ├─ profiles.py      # ObservedServiceProfile 분류·취약 부류 우선순위 힌트
 ├─ phase_policy.py  # 누적 레이어 공정 예산 배분·스케줄러
 ├─ planner.py       # S1~S5 증거기반 가설 선택·중단(하드코딩 순서 금지)

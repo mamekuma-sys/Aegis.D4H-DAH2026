@@ -26,6 +26,7 @@ def _tcp_packet(
     dst_port: int,
     sequence: int,
     payload: bytes,
+    flags: int = 0x18,
 ) -> bytes:
     tcp = struct.pack(
         ">HHIIBBHHH",
@@ -34,7 +35,7 @@ def _tcp_packet(
         sequence,
         0,
         5 << 4,
-        0x18,
+        flags,
         65535,
         0,
         0,
@@ -94,7 +95,7 @@ class TestPcapReplay(unittest.TestCase):
             ).to_dict()
 
         total = report["total"]
-        self.assertEqual(report["policy"]["drop_capable_rules"], 24)
+        self.assertEqual(report["policy"]["drop_capable_rules"], 28)
         self.assertEqual(total["parsed_requests"], 2)
         self.assertEqual(total["exploit_shape_requests"], 1)
         self.assertEqual(total["blocked_exploit_shape_requests"], 1)
@@ -153,6 +154,46 @@ class TestPcapReplay(unittest.TestCase):
         self.assertEqual(total["exploit_shape_requests"], 1)
         self.assertEqual(total["blocked_exploit_shape_requests"], 1)
         self.assertEqual(total["passed_other_requests"], 1)
+        self.assertEqual(total["unexpected_other_drops"], 0)
+
+    def test_semantic_graphql_rsc_and_ws_are_labeled_as_observed_shapes(self):
+        client = b"\x0a\x01\x00\x04"
+        server = b"\x0a\x01\x01\x02"
+        bodies = (
+            (
+                b"POST /%67%72%61%70%68%71%6C HTTP/1.1\r\n",
+                b'{"query":"{ missionAudit { lastDeployment { notes } } }"}',
+            ),
+            (
+                b"POST /api/rsc-action HTTP/1.1\r\n",
+                b'{"ref":"cHJvY2Vzcy5lbnYuTUMyX0lOVEVSTkFMX0FQSV9UT0tFTg==","token":"fresh"}',
+            ),
+        )
+        frames = []
+        for index, (line, body) in enumerate(bodies):
+            request = (
+                line + b"Host: service\r\nContent-Type: application/json\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii") + body
+            )
+            frames.append(_tcp_packet(
+                client, server, 41000 + index, 8082, 100, request
+            ))
+        frames.append(_tcp_packet(
+            client, server, 41002, 8082, 100,
+            b"GET /ws/mission-feed HTTP/1.1\r\nHost: service\r\n"
+            b"Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+        ))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pcap = Path(temp_dir) / "semantic-l2.pcap"
+            _write_pcap(pcap, frames)
+            report = replay_pcaps.replay_paths(
+                [pcap], REPO_ROOT / "agents" / "defender" / "policy",
+                replay_pcaps.parse_as_of("2026-08-21T05:00:00Z"),
+            ).to_dict()
+
+        total = report["total"]
+        self.assertEqual(total["exploit_shape_requests"], 3)
+        self.assertEqual(total["blocked_exploit_shape_requests"], 3)
         self.assertEqual(total["unexpected_other_drops"], 0)
 
     def test_discovers_and_replays_gzip_compressed_pcap(self):
@@ -246,6 +287,31 @@ class TestPcapReplay(unittest.TestCase):
         self.assertEqual(total["blocked_exploit_shape_requests"], 1)
         self.assertEqual(total["flag_linked_requests"], 1)
         self.assertEqual(total["blocked_flag_linked_requests"], 1)
+
+    def test_new_syn_prevents_flag_link_across_reused_four_tuple(self):
+        client = b"\x0a\x01\x00\x04"
+        server = b"\x0a\x01\x01\x02"
+        old_request = b"GET /health HTTP/1.1\r\nHost: service\r\n\r\n"
+        unrelated_response = (
+            b"HTTP/1.1 200 OK\r\nContent-Length: 24\r\n\r\n"
+            + b"FLAG" + b"{synthetic-marker}"
+        )
+        frames = [
+            _tcp_packet(client, server, 40000, 8082, 100, old_request),
+            _tcp_packet(client, server, 40000, 8082, 5000, b"", flags=0x02),
+            _tcp_packet(server, client, 8082, 40000, 7000, unrelated_response),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pcap = Path(temp_dir) / "tuple-reuse.pcap"
+            _write_pcap(pcap, frames)
+            report = replay_pcaps.replay_paths(
+                [pcap],
+                REPO_ROOT / "agents" / "defender" / "policy",
+                replay_pcaps.parse_as_of("2026-08-21T02:50:00Z"),
+            ).to_dict()
+
+        self.assertEqual(report["total"]["parsed_requests"], 1)
+        self.assertEqual(report["total"]["flag_linked_requests"], 0)
 
     def test_rejects_pcapng_and_unsafe_lengths(self):
         with tempfile.TemporaryDirectory() as temp_dir:

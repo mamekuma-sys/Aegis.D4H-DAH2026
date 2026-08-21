@@ -272,9 +272,9 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(startup[0]["policy_source"], "active")
         self.assertEqual(
             startup[0]["bundle_id"],
-            "defender-2026-08-21-p3-mqtt-rtsp"
+            "defender-2026-08-21-p3-all-semantic"
         )
-        self.assertEqual(startup[0]["drop_capable_rules"], 24)
+        self.assertEqual(startup[0]["drop_capable_rules"], 28)
         self.assertEqual(startup[0]["demotions"], [])
         self.assertFalse(startup[0]["advisory_enabled"])
 

@@ -15,6 +15,14 @@ def request(target="/admin", cookie=None, complete=True):
     return ("\r\n".join(lines) + ending).encode("latin-1")
 
 
+def json_request(method, target, document):
+    body = json.dumps(document, separators=(",", ":")).encode("utf-8")
+    return (
+        f"{method} {target} HTTP/1.1\r\nHost: service\r\n"
+        f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n"
+    ).encode("ascii") + body
+
+
 def encoded(document, strip_padding=False):
     value = base64.urlsafe_b64encode(
         json.dumps(document, separators=(",", ":")).encode("utf-8")
@@ -135,6 +143,57 @@ class TestHttpRequestView(unittest.TestCase):
             with self.subTest(target=target):
                 view = parse_http_request(request(target))
                 self.assertFalse(view.sql_source_matches(("id",), "app_meta"))
+
+    def test_graphql_semantics_survive_route_and_query_encoding(self):
+        samples = (
+            request("/%67%72%61%70%68%71%6C?query=%257B%2520missionAudit%2520%257Bnotes%257D%257D"),
+            request("http://service:8082/%25%36%37%72%61%70%68%71%6C?query={missionAudit}"),
+            json_request(
+                "POST", "/%67%72%25%36%31%70%68%71%6C",
+                {"query": "{ missionAudit { lastDeployment { notes } } }"},
+            ),
+        )
+        for payload in samples:
+            with self.subTest(payload=payload[:50]):
+                view = parse_http_request(payload)
+                self.assertEqual(view.path, "/graphql")
+                self.assertTrue(view.graphql_field_matches(
+                    "query", ("missionAudit",), ("query",)
+                ))
+
+    def test_graphql_substrings_and_normal_queries_do_not_match(self):
+        samples = (
+            request("/graphql?query={notmissionAuditLog}"),
+            json_request("POST", "/graphql", {"query": "{ systemHealth }"}),
+            json_request("POST", "/graphql", {"operation": "missionAudit"}),
+        )
+        for payload in samples:
+            view = parse_http_request(payload)
+            self.assertFalse(view.graphql_field_matches(
+                "query", ("missionAudit",), ("query",)
+            ))
+
+    def test_rsc_base64_ref_matches_exact_environment_name(self):
+        ref = base64.b64encode(b"process.env.MC2_INTERNAL_API_TOKEN").decode("ascii")
+        view = parse_http_request(json_request(
+            "POST", "/api/rsc-action", {"ref": ref, "token": "session"}
+        ))
+        self.assertTrue(view.json_base64_matches(
+            "ref", ("process.env.MC2_INTERNAL_API_TOKEN",)
+        ))
+        self.assertFalse(view.json_base64_matches("ref", ("process.env.FLAG",)))
+
+    def test_portal_ssti_requires_full_observed_token_chain(self):
+        malicious = parse_http_request(request(
+            "/portal/feedback?service_id=%7B%7B%20(lipsum%7Cattr('__globals__'))"
+            ".get('__builtins__').get('open')('/flag').read()%20%7D%7D"
+        ))
+        normal = parse_http_request(request(
+            "/portal/feedback?service_id=please+open+flag+report"
+        ))
+        required = ("lipsum", "attr", "__globals__", "__builtins__", "open", "flag")
+        self.assertTrue(malicious.query_token_set_matches(("service_id",), required))
+        self.assertFalse(normal.query_token_set_matches(("service_id",), required))
 
 
 if __name__ == "__main__":

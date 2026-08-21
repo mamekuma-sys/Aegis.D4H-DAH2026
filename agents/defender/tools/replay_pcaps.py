@@ -28,7 +28,14 @@ if str(DEFENDER_SRC) not in sys.path:
     sys.path.insert(0, str(DEFENDER_SRC))
 
 from aegis_defender.http_semantics import HttpRequestView, parse_http_request  # noqa: E402
-from aegis_defender.packet import IPPROTO_TCP, ParsedPacket, parse_ip  # noqa: E402
+from aegis_defender.packet import (  # noqa: E402
+    IPPROTO_TCP,
+    TCP_FIN,
+    TCP_RST,
+    TCP_SYN,
+    ParsedPacket,
+    parse_ip,
+)
 from aegis_defender.policy import HotPolicy  # noqa: E402
 from aegis_defender.rules import CompiledPolicy, load_policy  # noqa: E402
 from aegis_defender.stream import HttpStreamStitcher  # noqa: E402
@@ -98,6 +105,7 @@ class LayerReport:
     blocked_flag_linked_requests: int = 0
     rules: Counter[str] = field(default_factory=Counter)
     labels: Counter[str] = field(default_factory=Counter)
+    missed_labels: Counter[str] = field(default_factory=Counter)
 
     def add(self, other: "LayerReport") -> None:
         for name in (
@@ -111,11 +119,13 @@ class LayerReport:
             setattr(self, name, getattr(self, name) + getattr(other, name))
         self.rules.update(other.rules)
         self.labels.update(other.labels)
+        self.missed_labels.update(other.missed_labels)
 
     def to_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["rules"] = dict(sorted(self.rules.items()))
         result["labels"] = dict(sorted(self.labels.items()))
+        result["missed_labels"] = dict(sorted(self.missed_labels.items()))
         positives = self.exploit_shape_requests
         others = self.other_requests
         result["exploit_shape_block_rate"] = (
@@ -251,7 +261,18 @@ def extract_http_requests(payload: bytes) -> tuple[HttpRequestView, ...]:
         header_end = payload.find(b"\r\n\r\n", match.end())
         if header_end < 0 or header_end + 4 - start > 4096:
             continue
-        view = parse_http_request(payload[start : header_end + 4])
+        request_end = header_end + 4
+        content_length = 0
+        for line in payload[match.end():header_end].split(b"\r\n"):
+            name, separator, value = line.partition(b":")
+            if separator and name.strip().lower() == b"content-length":
+                stripped = value.strip()
+                if stripped.isdigit():
+                    content_length = min(int(stripped), 2048)
+                break
+        if request_end + content_length <= len(payload):
+            request_end += content_length
+        view = parse_http_request(payload[start:request_end])
         if view is not None:
             requests.append(view)
     return tuple(requests)
@@ -290,11 +311,24 @@ def classify_observed_shape(
 
     if port == 8082:
         if (
-            request.method == "POST"
-            and request.path == "/graphql"
-            and re.search(rb"missionAudit", payload, re.IGNORECASE)
+            request.path == "/graphql"
+            and request.graphql_field_matches("query", ("missionAudit",), ("query",))
         ):
             return "l2-graphql-mission-audit"
+        if (
+            request.method == "POST"
+            and request.path == "/api/rsc-action"
+            and request.json_base64_matches(
+                "ref", ("process.env.MC2_INTERNAL_API_TOKEN",)
+            )
+        ):
+            return "l2-rsc-internal-token-ref"
+        if (
+            request.method == "GET"
+            and request.path == "/ws/mission-feed"
+            and re.search(rb"\r\nupgrade\s*:\s*websocket\r\n", payload, re.IGNORECASE)
+        ):
+            return "l2-ws-mission-feed"
         if request.path == "/admin" and request.cookie_claim_matches(
             "session", "role", ("admin",)
         ):
@@ -345,7 +379,19 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
         if not parsed.ok or parsed.protocol != IPPROTO_TCP:
             continue
 
-        if parsed.dst_port in SERVICE_PORTS:
+        ingress = parsed.dst_port in SERVICE_PORTS
+        response = parsed.src_port in SERVICE_PORTS
+        connection_flow = (
+            _flow_key(parsed) if ingress else _flow_key(parsed, reverse=True)
+        ) if ingress or response else None
+        # A 4-tuple can be reused later in the same capture.  Request/response
+        # attribution is valid only within one TCP generation, so a new SYN must
+        # retire stale queues before any response marker is considered.
+        if connection_flow is not None and parsed.tcp_flags & TCP_SYN:
+            pending.pop(connection_flow, None)
+            current_response.pop(connection_flow, None)
+
+        if ingress:
             packet_id += 1
             layer_name = PORT_LAYERS[parsed.dst_port]
             layer = layers[layer_name]
@@ -378,6 +424,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
                         layer.blocked_exploit_shape_requests += 1
                     else:
                         layer.missed_exploit_shape_requests += 1
+                        layer.missed_labels[label] += 1
                 else:
                     layer.other_requests += 1
                     if decision.is_drop and packet_has_exploit:
@@ -387,7 +434,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
                     else:
                         layer.passed_other_requests += 1
 
-        elif parsed.src_port in SERVICE_PORTS and parsed.payload:
+        elif response and parsed.payload:
             flow = _flow_key(parsed, reverse=True)
             response_starts = len(HTTP_RESPONSE_LINE.findall(parsed.payload))
             if response_starts:
@@ -402,6 +449,10 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
                     record = queue[-1] if queue else None
                 if record is not None:
                     record.flag_linked = True
+
+        if connection_flow is not None and parsed.tcp_flags & (TCP_FIN | TCP_RST):
+            pending.pop(connection_flow, None)
+            current_response.pop(connection_flow, None)
 
     for layer_name, record in records:
         if record.flag_linked:
