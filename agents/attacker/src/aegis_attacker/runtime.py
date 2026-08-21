@@ -45,7 +45,7 @@ from .models import (
 )
 from .observation import EvidenceFactory, Observer, UrllibHttp
 from .phase_policy import FairScheduler, cumulative_endpoint_order
-from .planner import EndpointState, Planner
+from .planner import EndpointState, Planner, MAX_TURNS
 from .playbook import Playbook
 from .profiles import service_fingerprint, suggest_vuln_classes
 from .rate_limit import RateLimiter
@@ -54,6 +54,8 @@ from .round_report import RoundReport
 from .secrets import KIND_LLM_KEY, KIND_SUBMIT_TOKEN, RoundSecretStore
 from .tools import ExecutionAdapter, PlanBindingError, evasion_variants
 
+# 결정론으로 flag를 이미 잡아도 LiteLLM 크레딧·추가 flag를 위해 강제하는 최소 LLM 턴.
+POST_DET_LLM_TURNS = 3
 LOOP_SLEEP = 4.0
 PER_TARGET_BUDGET = 1
 MAX_EVASION_VARIANTS = 6
@@ -611,9 +613,16 @@ class AttackerRuntime:
     def attack_endpoint(self, endpoint) -> bool:
         if self._stop_event.is_set():
             return False
-        grpc_captured = self._attack_observed_grpc(endpoint)[1]
-        if grpc_captured:
-            return True
+        grpc_handled, grpc_captured = self._attack_observed_grpc(endpoint)
+        if grpc_handled:
+            # 9000은 gRPC 전용. HTTP 배너 탐색으로 떨어지면 skip만 나고 LLM도 안 탄다.
+            if grpc_captured:
+                return True
+            self.audit.log(
+                "skip", target=endpoint.key(),
+                reason="grpc-observed-no-flag",
+            )
+            return False
         # gRPC가 protocol만 확인되고 flag가 없으면 HTTP/LLM 경로로 이어서 비싼 모델도 쓴다.
         obs, resp, endpoint, bootstrap_requests = self._observer.observe_banner_adaptive(endpoint)
         for _ in range(bootstrap_requests):
@@ -655,10 +664,7 @@ class AttackerRuntime:
         captured_any = self._process_flags(resp.body, resp.headers)
         if captured_any:
             self.audit.log("hit", target=endpoint.key(), turn=0, path="/", reason="banner")
-            # 한 응답 안의 본문·헤더에 있는 모든 flag는 이미 처리했다. 배너에서
-            # 직접 성공한 endpoint에 추가 탐색을 붙이면 매 scan cycle마다 request
-            # budget을 크게 소모하므로 여기서는 즉시 완료한다.
-            return True
+            # 배너 flag만으로 끝내지 않는다 — 같은 서비스의 추가 flag + LiteLLM 호출을 이어간다.
 
         attempted_keys = set()
 
@@ -703,11 +709,12 @@ class AttackerRuntime:
             return captured_any
         current_evidence = self._latest_evidence(endpoint, current_evidence)
 
-        # 플래그를 찾은 endpoint도 위 bounded 관측·결정론 세트는 끝까지 수행해 같은
-        # 서비스/포트의 추가 flag를 회수한다. 이미 진전이 있으면 비용이 큰 LLM까지
-        # 확장하지 않고 완료한다.
+        # 결정론 hit이 있어도 LLM을 생략하지 않는다. (예전: captured_any면 return → 크레딧 0)
         if captured_any:
-            return True
+            self.audit.log(
+                "det-complete", target=endpoint.key(),
+                continuing_to_llm=True,
+            )
 
         # single-flight + 재사용: 같은 배너(같은 이미지)는 한 표적만 LLM으로 풀고, 나머지는
         # 그 성공 형태(method·path·headers·body)를 재사용한다. skip이 나와도 본선 hot
@@ -725,6 +732,7 @@ class AttackerRuntime:
                     self.audit.log("hit", target=endpoint.key(),
                                    path=(result.plan.args.get("path") if result is not None
                                          else known.get("path")), reason="playbook")
+                    # playbook 재사용 hit는 LLM을 쓰지 않는다(교차 표적 토큰 절약).
                     return True
                 if result is not None:
                     current_evidence = result.observation.evidence_ref
@@ -740,60 +748,90 @@ class AttackerRuntime:
             # "solve" 또는 "skip" — skip이어도 비싼 LLM을 생략하지 않는다.
             break
 
+        if self._planner is None or getattr(self._planner._advisor, "_key_handle", None) is None:
+            self.audit.log(
+                "llm-skip", target=endpoint.key(),
+                reason="no-llm-key",
+            )
+            return captured_any
+
+        # 결정론으로 이미 flag를 잡은 경우에도 POST_DET_LLM_TURNS만큼은 LiteLLM을 강제 호출한다.
+        started_with_flag = bool(captured_any)
+        llm_turn_limit = POST_DET_LLM_TURNS if started_with_flag else MAX_TURNS
+
         state = EndpointState(endpoint)
         feedback = ""
         try:
             while (not self._stop_event.is_set()
-                   and not self._planner.should_stop(state)):
+                   and state.turn < llm_turn_limit):
                 state.turn += 1
                 # 항상 강제 비싼 pro 모델. 실패 시 advisor가 sol→terra fallback.
                 plan = self._planner.plan_next(endpoint, observed_banner, feedback, state,
                                                model=self.config.llm_model)
                 if plan is None:
+                    self.audit.log(
+                        "llm-skip", target=endpoint.key(), turn=state.turn,
+                        reason="advise-empty-or-failed",
+                        model=self.config.llm_model,
+                    )
                     break
+                self.audit.log(
+                    "llm-plan", target=endpoint.key(), turn=state.turn,
+                    path=plan.args.get("path"), model=self.config.llm_model,
+                    reason=plan.reason or "",
+                )
                 self._bind_plan(plan, endpoint, current_evidence)
+                result = None
                 try:
                     result = self._adapter.execute(plan)
                 except PlanBindingError as exc:
                     binding_reason = self._binding_reason(exc)
-                    if binding_reason == "evidence-stale-or-missing":
-                        refresh_obs, refresh_resp = self._observer.observe_banner(endpoint)
-                        self._report.record_observation()
-                        self._report.record_request()
-                        self._remember_evidence(endpoint, refresh_obs.evidence_ref)
-                        if self._process_flags(refresh_resp.body, refresh_resp.headers):
-                            self.audit.log("hit", target=endpoint.key(), turn=state.turn,
-                                           path="/", reason="evidence-refresh")
-                            return True
-                        current_evidence = refresh_obs.evidence_ref
-                        self._bind_plan(plan, endpoint, current_evidence)
-                        try:
-                            result = self._adapter.execute(plan)
-                        except (PlanBindingError, EgressError) as retry_exc:
-                            self.audit.log(
-                                "reject", target=endpoint.key(), turn=state.turn,
-                                reason=(self._binding_reason(retry_exc)
-                                        if isinstance(retry_exc, PlanBindingError)
-                                        else type(retry_exc).__name__),
-                            )
-                            break
-                    else:
+                    if binding_reason != "evidence-stale-or-missing":
                         self.audit.log("reject", target=endpoint.key(), turn=state.turn,
                                        reason=binding_reason)
+                        break
+                    refresh_obs, refresh_resp = self._observer.observe_banner(endpoint)
+                    self._report.record_observation()
+                    self._report.record_request()
+                    self._remember_evidence(endpoint, refresh_obs.evidence_ref)
+                    if self._process_flags(refresh_resp.body, refresh_resp.headers):
+                        self.audit.log("hit", target=endpoint.key(), turn=state.turn,
+                                       path="/", reason="evidence-refresh")
+                        captured_any = True
+                        if not started_with_flag:
+                            return True
+                    current_evidence = refresh_obs.evidence_ref
+                    self._bind_plan(plan, endpoint, current_evidence)
+                    try:
+                        result = self._adapter.execute(plan)
+                    except (PlanBindingError, EgressError) as retry_exc:
+                        self.audit.log(
+                            "reject", target=endpoint.key(), turn=state.turn,
+                            reason=(self._binding_reason(retry_exc)
+                                    if isinstance(retry_exc, PlanBindingError)
+                                    else type(retry_exc).__name__),
+                        )
                         break
                 except EgressError as exc:
                     self.audit.log("reject", target=endpoint.key(), turn=state.turn,
                                    reason=type(exc).__name__)
                     break
+                if result is None:
+                    break
+
                 self._report.record_request()
                 self._remember_evidence(endpoint, result.observation.evidence_ref)
 
                 if self._process_flags(result.body, result.observation.redacted_header_hints):
-                    self._playbook.record(banner_fp, plan.args)  # 교차 재사용용 기록(비밀 없음)
+                    self._playbook.record(banner_fp, plan.args)
                     self.audit.log("hit", target=endpoint.key(), turn=state.turn,
                                    path=plan.args["path"], vuln=str(plan.scenario),
                                    reason=plan.reason)
-                    return True
+                    captured_any = True
+                    # 결정론 없이 LLM으로 처음 잡은 경우: 즉시 완료(playbook 1콜 유지).
+                    # 결정론 hit 후 강제 LLM 구간이면 턴 한도까지 계속 돌린다.
+                    if not started_with_flag:
+                        return True
 
                 current_evidence = result.observation.evidence_ref
                 if result.outcome == Outcome.TIMEOUT:
@@ -803,8 +841,12 @@ class AttackerRuntime:
                         self._playbook.record(banner_fp, evaded.plan.args)
                         self.audit.log("hit", target=endpoint.key(), turn=state.turn,
                                        path=evaded.plan.args["path"], reason="evasion")
-                        return True
-                    if evaded is not None:
+                        captured_any = True
+                        if not started_with_flag:
+                            return True
+                        result = evaded
+                        current_evidence = evaded.observation.evidence_ref
+                    elif evaded is not None:
                         result = evaded
                         current_evidence = evaded.observation.evidence_ref
                 else:
@@ -812,7 +854,7 @@ class AttackerRuntime:
 
                 feedback = self._feedback(plan, result)
         finally:
-            self._playbook.finish_llm(banner_fp)  # 대기 중인 같은-배너 표적을 깨운다
+            self._playbook.finish_llm(banner_fp)
 
         return captured_any
 
@@ -932,6 +974,7 @@ class AttackerRuntime:
             attack_profile=ATTACK_PROFILE,
             version=ATTACKER_VERSION,
             llm_cap=MAX_LLM_CALLS_PER_ROUND,
+            has_llm_key=bool(self.config.llm_api_key),
         )
         if not self.config.can_attack:
             self.audit.log("inert", reason="표적 없음 — fail-open, 공격 없음")

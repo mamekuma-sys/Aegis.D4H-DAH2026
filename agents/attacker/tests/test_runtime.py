@@ -332,11 +332,27 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         # 흔한 경로 /flag 에서 flag → recon이 LLM 토큰 없이 획득
         arena = FakeArena("plain service", "/unused", "FLAG{recon_win}",
                           flag_when=lambda full: full.startswith("/flag"))
-        rt = make_runtime(arena)
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8082,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="",  # 키 없으면 결정론 성공 후 llm-skip
+        )
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt))
         report = rt.run_once()
         self.assertEqual(report.accepted_count(), 1)
         self.assertEqual(arena.submits[0]["flag"], "FLAG{recon_win}")
         self.assertEqual(arena.llm_calls, 0)  # 토큰 0
+
+    def test_recon_hit_still_forces_llm_when_key_present(self):
+        # 결정론 hit 후에도 POST_DET_LLM_TURNS만큼 LiteLLM을 강제 호출한다.
+        arena = FakeArena("plain service", "/unused", "FLAG{recon_win}",
+                          flag_when=lambda full: full.startswith("/flag"))
+        rt = make_runtime(arena)
+        report = rt.run_once()
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertGreaterEqual(arena.llm_calls, 1)
+        self.assertLessEqual(arena.llm_calls, 3)
 
     def test_recon_collects_multiple_flags_from_one_service(self):
         class MultiFlagArena:
@@ -485,12 +501,19 @@ class TestRuntimeResilience(unittest.TestCase):
         self.assertEqual(rt._secret_store.secrets_snapshot(), set())
 
     def test_run_forever_reuses_flag_store_across_scan_cycles(self):
+        # 배너에 FLAG가 있으면 결정론 hit 후 LLM을 이어가므로, 이 테스트는 키 없이 토큰 0 경로만 본다.
         arena = FakeArena("FLAG{same_round}", "/x", "irrelevant")
-        rt = make_runtime(arena)
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8082,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="",
+        )
+        clk = FakeClock()
+        rt = AttackerRuntime(cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt))
         rt.run_forever(max_cycles=2)
         self.assertEqual(len(arena.submits), 1)
         self.assertEqual(rt._report.summary()["submit_states"]["accepted"], 1)
-        self.assertEqual(rt._report.summary()["requests_made"], 1)
+        self.assertGreaterEqual(rt._report.summary()["requests_made"], 1)
 
     def test_unsolved_endpoint_waits_for_cooldown_without_new_playbook(self):
         arena = FakeArena(
