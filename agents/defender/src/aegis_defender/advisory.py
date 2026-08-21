@@ -37,36 +37,37 @@ from .logging import AuditLogger, contains_secret_like, redact_secrets
 from .metrics import M_ADVISORY_CALL, M_ADVISORY_FAILURE, M_ADVISORY_TOKENS, Metrics
 from .state import CorrelationSnapshotRef
 
-# 호출 예산(§12.1). 실전 P3-R9에서 19회 중 18회가 TimeoutError였고 성공한
-# 조언에도 runtime authority가 없다. Break 검토용 증거만 남기도록 빈도와 round
-# 상한을 낮춘다(판정 핫패스에는 들어가지 않는다).
-MIN_CALL_INTERVAL_SECONDS = 300.0
-MAX_CALLS_PER_ROUND = 4
-TOP_K_FLOWS = 24
-REQUEST_TIMEOUT_SECONDS = 15.0
-MAX_RECENT_ADVISORIES = 128
+# 호출 예산(§12.1). P4-R13에서 gpt-5.4 조언은 실제로 성공했으므로 마지막 라운드는
+# redacted 상위 flow를 더 자주 검토한다. 이 worker는 판정 핫패스와 분리되어 있고
+# 출력에 runtime authority가 없으므로 호출 증가가 verdict 지연이나 정책 변경으로
+# 이어지지는 않는다.
+MIN_CALL_INTERVAL_SECONDS = 45.0
+MAX_CALLS_PER_ROUND = 12
+TOP_K_FLOWS = 48
+REQUEST_TIMEOUT_SECONDS = 20.0
+MAX_RECENT_ADVISORIES = 256
 MAX_RECOMMENDATION_CHARS = 12000
-MAX_ADVISORY_CANDIDATES = 8
+MAX_ADVISORY_CANDIDATES = 16
 MAX_CANDIDATE_FIELD_CHARS = 256
 ADVISORY_TTL_SECONDS = 1800.0
-ADVISORY_MAX_COMPLETION_TOKENS = 768
+ADVISORY_MAX_COMPLETION_TOKENS = 2048
 ADVISORY_REASONING_EFFORT = "low"
 
 # 연속 timeout이면 남은 호출·token을 보존한다. 다음 Break 후보를 완전히 잃지
 # 않도록 영구 disable 대신 bounded circuit break를 쓴다.
-FAILURE_BACKOFF_SECONDS = 600.0
-MAX_CONSECUTIVE_FAILURES = 2
+FAILURE_BACKOFF_SECONDS = 90.0
+MAX_CONSECUTIVE_FAILURES = 3
 
 _SYSTEM_PROMPT = (
     "You are assisting Team1 finals defense (Aegis). You receive only aggregated, "
     "redacted flow statistics - never payloads, flags, tokens, or secrets. "
-    "Propose up to eight precise DROP-candidate signatures for the open layers: "
+    "Propose up to sixteen precise DROP-candidate signatures for the open layers: "
     "L1 8080/9000 (portal,/svc/flag-*, SatDiag Export/Tail), "
     "L2 8082 (GraphQL missionAudit, /api/rsc-action, /ws/mission-feed, forged admin), "
     "L3 9090 HTTP UNION SQLi; MQTT 1883 (#/$SYS/flag topics); RTSP 8554 DESCRIBE /flag. "
     "L4 8410/8420 uses g2dds.v1 Layer4Service Exchange plus observed ROS/mission HTTP shapes. "
     "Prefer regex/http semantic checks that miss normal SLA probes. "
-    "Return one JSON object with a candidates array (maximum eight). Every item must have "
+    "Return one JSON object with a candidates array (maximum sixteen). Every item must have "
     "protocol, port, field, pattern_family, evidence_needed, and false_positive_risk. "
     "Do not return executable code or raw secret values. Candidates begin as SHADOW only. "
     "You have NO runtime DROP authority - your text is Break review input only."

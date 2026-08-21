@@ -173,11 +173,11 @@ class TestBudget(unittest.TestCase):
         self.assertEqual(worker.calls, 2)
 
     def test_production_budget_is_break_only_and_bounded(self):
-        self.assertEqual(MIN_CALL_INTERVAL_SECONDS, 300.0)
-        self.assertEqual(MAX_CALLS_PER_ROUND, 4)
-        self.assertEqual(REQUEST_TIMEOUT_SECONDS, 15.0)
-        self.assertEqual(MAX_CONSECUTIVE_FAILURES, 2)
-        self.assertEqual(FAILURE_BACKOFF_SECONDS, 600.0)
+        self.assertEqual(MIN_CALL_INTERVAL_SECONDS, 45.0)
+        self.assertEqual(MAX_CALLS_PER_ROUND, 12)
+        self.assertEqual(REQUEST_TIMEOUT_SECONDS, 20.0)
+        self.assertEqual(MAX_CONSECUTIVE_FAILURES, 3)
+        self.assertEqual(FAILURE_BACKOFF_SECONDS, 90.0)
 
     def test_uses_official_completion_token_parameter(self):
         clock = FakeClock()
@@ -190,7 +190,7 @@ class TestBudget(unittest.TestCase):
         worker = self._worker(clock, transport=transport)
         clock.advance(301.0)
         self.assertIsNotNone(worker.run_once())
-        self.assertEqual(sent["max_completion_tokens"], 768)
+        self.assertEqual(sent["max_completion_tokens"], 2048)
         self.assertNotIn("max_tokens", sent)
 
     def test_gpt56_uses_low_reasoning_and_developer_message(self):
