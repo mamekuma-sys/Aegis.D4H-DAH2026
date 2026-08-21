@@ -810,6 +810,15 @@ class AttackerRuntime:
                     if self._stop_event.is_set():
                         break
                     run(pivot)
+            # L1 8080: /portal·/portal/probes 응답이 노출한 /svc/flag-<uuid>/ 를 즉시 회수한다.
+            # 상대 defender가 flag 필드를 가려도 service uuid로 gateway를 재요청해 뚫는다.
+            if endpoint.port == 8080 and attempt.reason != "svc-flag-chain":
+                for svc_path in extract_svc_flag_paths(result.body or ""):
+                    if self._stop_event.is_set():
+                        break
+                    run(Attempt(
+                        VulnClass.OTHER, "GET", svc_path, reason="svc-flag-chain",
+                    ))
             return captured
 
         for attempt in attempts:

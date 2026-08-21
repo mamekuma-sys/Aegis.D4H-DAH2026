@@ -305,6 +305,50 @@ class TestRuntimeEndToEnd(unittest.TestCase):
         self.assertIn(gateway_path, arena.target_paths)
         self.assertEqual(arena.submits[0]["flag"], "FLAG{satdiag_gateway_pivot}")
 
+    def test_portal_probes_service_name_chains_to_svc_flag_gateway(self):
+        # P3-R9: defender가 /portal/probes 의 flag 필드를 가려도 service uuid로
+        # /svc/flag-<uuid>/ 를 재요청해 FLAG 를 회수해야 한다.
+        gateway_path = "/svc/flag-7ec15f60-c136-4364-8b5b-03f31be3f223/"
+
+        class PortalArena:
+            def __init__(self):
+                self.target_paths = []
+                self.submits = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    return HttpResponse(500, "unused")
+                path = urlsplit(url).path
+                self.target_paths.append(path)
+                if path == gateway_path:
+                    return HttpResponse(200, "FLAG{portal_probes_chain}")
+                if path == "/portal/probes":
+                    # flag 필드는 가려졌지만 service uuid는 남아있다.
+                    return HttpResponse(200, json.dumps([
+                        {"service": "flag-7ec15f60-c136-4364-8b5b-03f31be3f223",
+                         "path": "/", "status": "ok"}
+                    ]))
+                return HttpResponse(200, "portal online")
+
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8080,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        arena = PortalArena()
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 1)
+        self.assertIn("/portal/probes", arena.target_paths)
+        self.assertIn(gateway_path, arena.target_paths)
+        self.assertEqual(arena.submits[0]["flag"], "FLAG{portal_probes_chain}")
+
     def test_finals_8080_runs_observed_fast_path_then_bounded_llm(self):
         class FinalsHttpArena:
             def __init__(self):

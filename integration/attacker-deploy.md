@@ -21,7 +21,7 @@
 |---|---|
 | `TARGETS` · `PORTS` · `SUBMIT_URL` · `SUBMIT_TOKEN` | 공식 주입 계약 |
 | `LLM_BASE_URL` · `LLM_API_KEY` | 공식 주입 계약 |
-| `LLM_MODEL` | 운영의 구형 주입값은 무시하고 내부 기본값 `gpt-5.6-sol`을 강제 |
+| `LLM_MODEL` | 운영의 구형 주입값은 무시하고 내부 기본값 `gpt-5.4`(chat 티어)를 강제 |
 
 `LLM_UPSTREAM_*`는 `litellm-gw` 프록시의 상류 설정이며 에이전트 계약이 아니다.
 
@@ -87,7 +87,7 @@ if ($LASTEXITCODE -ne 0) { throw 'docker push failed' }
 - **pull 타이밍(제15조)**: 운영진이 라운드 시작 5분 전 `latest`를 pull(타임아웃 20분), 컨테이너는 라운드마다 새로 생성·삭제된다. 이미지 시작 시간도 라운드 시간에 포함되므로 시작 경로를 늘리지 않는다.
 - **비밀·주소·경로 미포함(제7·16조)**: `TARGETS`/토큰/키는 이미지에 굽지 않고 운영진 주입 환경변수로만 참조한다. 이미지·저장소에 개인 절대경로를 남기지 않는다.
 - **LLM 변수 이름**: 공식 주입은 `LLM_BASE_URL`·`LLM_API_KEY`. 라이브 스모크에서 LLM 경로까지 태우려면 스켈레톤 `.env`의 `LLM_UPSTREAM_KEY`가 있어야 하며, 없으면 LLM 조언 경로만 fail-open되고 결정론 경로는 정상 동작한다.
-- **LLM fallback**: 기본 `gpt-5.6-sol`이 20초 안에 유효한 계획을 반환하지 못하거나 일시적 오류를 내면 `gpt-5.6-terra`를 한 번 시도한다. 두 upstream 호출은 라운드별 48회 상한에 각각 포함된다.
+- **LLM 사용 정책(det-first)**: LLM은 결정론 경로가 모두 miss한 뒤에만 호출한다. 기본 `gpt-5.4`(chat)가 유효한 계획을 반환하지 못하거나 일시적 오류를 내면 `gpt-5-mini`를 fallback으로 한 번 시도한다. responses 티어(`*-pro`)는 high-effort 타임아웃으로 조언·크레딧이 모두 0이 되므로 강제하지 않는다. 두 upstream 호출은 라운드별 48회 상한에 각각 포함된다.
 - **서비스명/프로필**: override는 스켈레톤 서비스 `team1-attacker`와 `team1-defender`(`profiles: ["combat"]`)에 병합된다. 스켈레톤 서비스명이 바뀌면 override도 갱신해야 한다.
 - **Compose 경로**: 여러 `-f` 병합 시 상대경로는 첫 번째 Compose 파일 기준이다. override에 저장소 상대경로를 두지 말고 `run-with-skeleton.ps1`이 주입하는 `AEGIS_ATTACKER_CONTEXT`를 사용한다.
 - **운영 페이지 시작 재생성**: backend `POST /control/start`는 combatant를 스켈레톤 이미지로 되돌린다. 로컬 스모크에서 라운드를 연 뒤에는 `-ReapplyAgents`로 팀 이미지를 다시 올리고 실행 중 이미지를 검사한다. 본선은 Registry `latest`를 쓰므로 이 절차가 필요 없다.
