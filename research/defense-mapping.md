@@ -7,6 +7,9 @@
 > `docs/superpowers/specs/2026-08-21-r11-defender-hardening-design.md`가 우선한다.
 > 현재는 exact L4 semantic rule과 source-port scoped egress DLP만 ACTIVE이며,
 > LLM·SHADOW·anomaly는 계속 Break 보조 권한만 가진다.
+> P4-R11의 FLAG 응답 상관으로 portal `service_id`, 9090 `/mqtt`, query 기반 imagery
+> ingest를 ACTIVE에 추가했다. Reflection과 `GetCatalog`는 wire 관측만 있고 FLAG 직접
+> 상관과 공식 checker 안전성이 증명되지 않아 SHADOW로 유지한다.
 
 예선 보고서(`PRELIM-REPORT`, SHA-256 `1DD42B99…`, 54쪽)의 방어 개념을 본선 방어 런타임 관점에서 재분류한다. 페이지별 전수 검토 근거는 `docs/references/preliminary-report-defender-map.md`, 설계 본문은 `docs/superpowers/specs/2026-08-11-defender-runtime-design.md`에 있다. 세 문서는 서로 모순되지 않아야 한다.
 

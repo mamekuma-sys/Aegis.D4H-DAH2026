@@ -33,6 +33,8 @@ EXPORT_FLAG_COMMAND = "satdiag-export-flag-command"
 L4_DIAGNOSTIC_MAP_SNAPSHOT = "l4-diagnostic-map-snapshot"
 L4_CALIBRATION_PICKLE_CODE = "l4-calibration-pickle-code"
 L4_PROGRAMMING_SECRET_SOURCE = "l4-programming-secret-source"
+L4_SERVER_REFLECTION = "l4-server-reflection"
+L4_GET_CATALOG = "l4-get-catalog"
 L4_PORTS = frozenset({8410, 8420})
 GRPC_PORTS = frozenset({9000}) | L4_PORTS
 
@@ -45,6 +47,11 @@ _SECRET_SOURCE_MARKERS = (
     b"__import__", b"open(", b"read_text", b"read_bytes", b"printenv",
     b"cat ", b"pathlib.path",
 )
+_L4_REFLECTION_PATHS = (
+    b"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
+    b"/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo",
+)
+_L4_GET_CATALOG_PATH = b"/g2dds.v1.Layer4Service/GetCatalog"
 
 
 @dataclass(slots=True)
@@ -227,6 +234,15 @@ def classify_grpc_message(message: bytes, dst_port: int = 9000) -> str | None:
     return None
 
 
+def classify_grpc_headers(header_block: bytes) -> str | None:
+    """Classify exact literal paths; unsupported HPACK forms fail open."""
+    if any(path in header_block for path in _L4_REFLECTION_PATHS):
+        return L4_SERVER_REFLECTION
+    if _L4_GET_CATALOG_PATH in header_block:
+        return L4_GET_CATALOG
+    return None
+
+
 class GrpcH2StreamInspector:
     """Single-owner bounded HTTP/2 client stream inspector."""
 
@@ -295,6 +311,19 @@ class GrpcH2StreamInspector:
                 return None
             frame_payload = bytes(state.wire[offset + 9:frame_end])
             state.frame_offset = frame_end
+            if frame_type == 1 and stream_id != 0:  # HEADERS
+                if flags & 0x08:  # PADDED
+                    if not frame_payload or frame_payload[0] >= len(frame_payload):
+                        return None
+                    frame_payload = frame_payload[1:len(frame_payload) - frame_payload[0]]
+                if flags & 0x20:  # PRIORITY
+                    if len(frame_payload) < 5:
+                        return None
+                    frame_payload = frame_payload[5:]
+                semantic = classify_grpc_headers(frame_payload)
+                if semantic is not None:
+                    return semantic
+                continue
             if frame_type != 0 or stream_id == 0:
                 continue
             if flags & 0x08:  # PADDED

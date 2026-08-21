@@ -113,6 +113,7 @@ class LayerReport:
     flag_linked_requests: int = 0
     blocked_flag_linked_requests: int = 0
     rules: Counter[str] = field(default_factory=Counter)
+    shadow_rules: Counter[str] = field(default_factory=Counter)
     labels: Counter[str] = field(default_factory=Counter)
     missed_labels: Counter[str] = field(default_factory=Counter)
     flag_linked_labels: Counter[str] = field(default_factory=Counter)
@@ -130,6 +131,7 @@ class LayerReport:
         ):
             setattr(self, name, getattr(self, name) + getattr(other, name))
         self.rules.update(other.rules)
+        self.shadow_rules.update(other.shadow_rules)
         self.labels.update(other.labels)
         self.missed_labels.update(other.missed_labels)
         self.flag_linked_labels.update(other.flag_linked_labels)
@@ -137,6 +139,7 @@ class LayerReport:
     def to_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["rules"] = dict(sorted(self.rules.items()))
+        result["shadow_rules"] = dict(sorted(self.shadow_rules.items()))
         result["labels"] = dict(sorted(self.labels.items()))
         result["missed_labels"] = dict(sorted(self.missed_labels.items()))
         result["flag_linked_labels"] = dict(sorted(self.flag_linked_labels.items()))
@@ -367,6 +370,15 @@ def classify_observed_shape(
         and request.sql_source_matches(("id",), "app_meta")
     ):
         return "l3-app-meta-union-sqli"
+    if port == 9090 and request.method == "GET" and request.path == "/mqtt":
+        return "l3-mqtt-bridge"
+    if (
+        port == 9090
+        and request.method == "POST"
+        and request.path == "/api/imagery/ingest"
+        and request.query_value_present(("source",))
+    ):
+        return "l3-imagery-source-ingest"
 
     if port in (8410, 8420):
         if request.path in ("/flag", "/secret", "/admin", "/debug", "/api/flag"):
@@ -405,6 +417,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
     egress_stitcher = EgressStreamStitcher()
     pending: dict[tuple[bytes, int, bytes, int], list[RequestRecord]] = {}
     current_response: dict[tuple[bytes, int, bytes, int], RequestRecord] = {}
+    pending_request_drop: set[tuple[bytes, int, bytes, int]] = set()
     records: list[tuple[str, RequestRecord]] = []
     packet_id = 0
 
@@ -429,6 +442,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
         if connection_flow is not None and parsed.tcp_flags & TCP_SYN:
             pending.pop(connection_flow, None)
             current_response.pop(connection_flow, None)
+            pending_request_drop.discard(connection_flow)
 
         if ingress:
             packet_id += 1
@@ -439,36 +453,43 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
             if decision.is_drop:
                 layer.dropped_packets += 1
                 layer.rules[decision.rule_id] += 1
+            elif decision.reason_code == "accept-shadow" and decision.rule_id:
+                layer.shadow_rules[decision.rule_id] += 1
 
             request_prefix = request_stitcher.feed(parsed, clock.now)
             requests = list(extract_http_requests(request_prefix or b""))
 
             if decision.is_drop and not requests:
                 layer.drops_without_complete_request += 1
+                pending_request_drop.add(_flow_key(parsed))
             packet_has_exploit = any(
                 classify_observed_shape(parsed.dst_port, request, request_prefix or b"") is not None
                 for request in requests
             )
             flow_pending = pending.setdefault(_flow_key(parsed), [])
-            for request in requests:
+            inherited_drop = _flow_key(parsed) in pending_request_drop
+            if requests:
+                pending_request_drop.discard(_flow_key(parsed))
+            for request_index, request in enumerate(requests):
                 label = classify_observed_shape(parsed.dst_port, request, request_prefix or b"")
-                record = RequestRecord(dropped=decision.is_drop, label=label)
+                request_dropped = decision.is_drop or (inherited_drop and request_index == 0)
+                record = RequestRecord(dropped=request_dropped, label=label)
                 flow_pending.append(record)
                 records.append((layer_name, record))
                 layer.parsed_requests += 1
                 if label is not None:
                     layer.labels[label] += 1
                     layer.exploit_shape_requests += 1
-                    if decision.is_drop:
+                    if request_dropped:
                         layer.blocked_exploit_shape_requests += 1
                     else:
                         layer.missed_exploit_shape_requests += 1
                         layer.missed_labels[label] += 1
                 else:
                     layer.other_requests += 1
-                    if decision.is_drop and packet_has_exploit:
+                    if request_dropped and packet_has_exploit:
                         layer.coalesced_other_requests += 1
-                    elif decision.is_drop:
+                    elif request_dropped:
                         layer.unexpected_other_drops += 1
                     else:
                         layer.passed_other_requests += 1
@@ -478,11 +499,14 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
             layer_name = PORT_LAYERS[parsed.src_port]
             layer = layers[layer_name]
             decision = hot_policy.decide(packet_id, parsed, received_at=clock.now)
+            if decision.reason_code == "accept-shadow" and decision.rule_id:
+                layer.shadow_rules[decision.rule_id] += 1
             egress_view = egress_stitcher.feed(parsed, clock.now)
             if not parsed.payload:
                 if connection_flow is not None and parsed.tcp_flags & (TCP_FIN | TCP_RST):
                     pending.pop(connection_flow, None)
                     current_response.pop(connection_flow, None)
+                    pending_request_drop.discard(connection_flow)
                 continue
 
             layer.egress_packets += 1
@@ -516,6 +540,7 @@ def replay_file(path: Path, policy: CompiledPolicy) -> tuple[dict[str, LayerRepo
         if connection_flow is not None and parsed.tcp_flags & (TCP_FIN | TCP_RST):
             pending.pop(connection_flow, None)
             current_response.pop(connection_flow, None)
+            pending_request_drop.discard(connection_flow)
 
     for layer_name, record in records:
         if record.flag_linked:

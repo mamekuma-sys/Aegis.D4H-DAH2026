@@ -492,6 +492,8 @@ class HotPolicy:
                         matched = request.query_token_set_matches(
                             rule.query_names, rule.match_values
                         )
+                    elif rule.kind is MatchKind.HTTP_QUERY_PRESENT:
+                        matched = request.query_value_present(rule.query_names)
                     if matched:
                         if rule.promotion_state is PromotionState.SHADOW:
                             if deferred_shadow is None:

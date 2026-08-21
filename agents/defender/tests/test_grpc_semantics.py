@@ -10,7 +10,9 @@ from aegis_defender.grpc_semantics import (
     EXPORT_FLAG_COMMAND,
     L4_CALIBRATION_PICKLE_CODE,
     L4_DIAGNOSTIC_MAP_SNAPSHOT,
+    L4_GET_CATALOG,
     L4_PROGRAMMING_SECRET_SOURCE,
+    L4_SERVER_REFLECTION,
     TAIL_SENSITIVE_FILE,
     GrpcH2StreamInspector,
     classify_grpc_message,
@@ -88,6 +90,19 @@ def _grpc_packets(message, src_port=51000, huffman_headers=True, dst_port=9000):
     )
     packets = []
     sequence = 1000
+    for payload in payloads:
+        packets.append(parse_ip(ipv4_tcp(
+            payload, src_port=src_port, dst_port=dst_port, sequence=sequence
+        )))
+        sequence += len(payload)
+    return packets
+
+
+def _headers_packets(path, dst_port=8410, src_port=54000, split_at=None):
+    wire = CLIENT_PREFACE + _frame(4, 0, 0) + _frame(1, 4, 1, b"\x00" + path)
+    payloads = [wire] if split_at is None else [wire[:split_at], wire[split_at:]]
+    packets = []
+    sequence = 4000
     for payload in payloads:
         packets.append(parse_ip(ipv4_tcp(
             payload, src_port=src_port, dst_port=dst_port, sequence=sequence
@@ -184,6 +199,26 @@ class TestGrpcH2StreamInspector(unittest.TestCase):
         self.assertIsNone(inspector.feed(syn, 0.1))
         self.assertEqual(inspector.flow_count, 0)
 
+    def test_l4_literal_discovery_paths_are_port_scoped(self):
+        samples = (
+            (b"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
+             L4_SERVER_REFLECTION),
+            (b"/g2dds.v1.Layer4Service/GetCatalog", L4_GET_CATALOG),
+        )
+        for offset, (path, expected) in enumerate(samples):
+            with self.subTest(expected=expected):
+                inspector = GrpcH2StreamInspector()
+                packets = _headers_packets(
+                    path, dst_port=8410 + offset * 10, src_port=54000 + offset,
+                    split_at=len(CLIENT_PREFACE) + 12,
+                )
+                self.assertIsNone(inspector.feed(packets[0], 0.0))
+                self.assertEqual(inspector.feed(packets[1], 0.0), expected)
+
+        inspector = GrpcH2StreamInspector()
+        normal = _headers_packets(b"/grpc.health.v1.Health/Check", dst_port=8410)
+        self.assertIsNone(inspector.feed(normal[0], 0.0))
+
 
 class TestGrpcSemanticPolicy(unittest.TestCase):
     @classmethod
@@ -211,6 +246,23 @@ class TestGrpcSemanticPolicy(unittest.TestCase):
             decision = policy.decide(len(packets), packets[-1], 0.0)
             self.assertEqual(decision.verdict, VERDICT_DROP)
             self.assertEqual(decision.rule_id, "grpc-l4-diagnostic-map-snapshot-001")
+
+    def test_l4_discovery_paths_remain_shadow(self):
+        policy = HotPolicy(policy=self.compiled, clock=lambda: 0.0)
+        samples = (
+            (b"/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo",
+             8410, "grpc-l4-server-reflection-001"),
+            (b"/g2dds.v1.Layer4Service/GetCatalog",
+             8420, "grpc-l4-get-catalog-001"),
+        )
+        for index, (path, port, rule_id) in enumerate(samples):
+            decision = policy.decide(
+                100 + index,
+                _headers_packets(path, dst_port=port, src_port=55000 + index)[0],
+                0.0,
+            )
+            self.assertEqual(decision.verdict, VERDICT_ACCEPT)
+            self.assertEqual(decision.rule_id, rule_id)
 
 
 if __name__ == "__main__":

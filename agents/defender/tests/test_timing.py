@@ -252,7 +252,7 @@ class TestHotPathBudget(unittest.TestCase):
             os.path.join(os.path.dirname(__file__), "..", "policy")
         )
         compiled, report = load_policy(policy_dir, now_epoch=1787356800.0)
-        self.assertEqual(report.drop_capable_rules, 37)
+        self.assertEqual(report.drop_capable_rules, 40)
         policy = HotPolicy(policy=compiled)
         samples = (
             (8080, b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"),

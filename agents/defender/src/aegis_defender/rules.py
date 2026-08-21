@@ -73,6 +73,7 @@ class MatchKind(str, Enum):
     HTTP_GRAPHQL_FIELD = "http_graphql_field"
     HTTP_JSON_BASE64_VALUE = "http_json_base64_value"
     HTTP_QUERY_TOKEN_SET = "http_query_token_set"
+    HTTP_QUERY_PRESENT = "http_query_present"
     GRPC_SEMANTIC = "grpc_semantic"
     TCP_FLAGS = "tcp_flags"
     FLOW_SCORE = "flow_score"
@@ -425,6 +426,7 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
         MatchKind.HTTP_GRAPHQL_FIELD,
         MatchKind.HTTP_JSON_BASE64_VALUE,
         MatchKind.HTTP_QUERY_TOKEN_SET,
+        MatchKind.HTTP_QUERY_PRESENT,
     ):
         if protocol != IPPROTO_TCP:
             raise PolicyValidationError(f"{context}: HTTP semantic rule 의 protocol 이 tcp 가 아니다")
@@ -494,6 +496,11 @@ def _parse_rule(raw: Mapping[str, Any], index: int) -> tuple[Rule, str | None]:
                 if value not in normalized_bases:
                     normalized_bases.append(value)
             path_basenames = tuple(normalized_bases)
+        elif kind is MatchKind.HTTP_QUERY_PRESENT:
+            if not query_names:
+                raise PolicyValidationError(
+                    f"{context}: HTTP query presence rule 은 query_names 가 필요하다"
+                )
         else:
             if kind is not MatchKind.HTTP_QUERY_TOKEN_SET:
                 json_field = str(_require(raw, "json_field", context)).strip().lower()
@@ -700,6 +707,7 @@ def compile_bundle(document: Mapping[str, Any], now_epoch: float | None = None) 
             MatchKind.HTTP_GRAPHQL_FIELD,
             MatchKind.HTTP_JSON_BASE64_VALUE,
             MatchKind.HTTP_QUERY_TOKEN_SET,
+            MatchKind.HTTP_QUERY_PRESENT,
         ):
             for port in rule.ports:
                 for path in rule.http_paths:

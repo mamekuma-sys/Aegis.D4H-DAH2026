@@ -15,4 +15,4 @@ PACKET 수신 → 제한된 파싱 → 결정론적 판정 → VERDICT 송신 �
 3. 원격 LLM은 packet별 동기 판정 경로에 들어가지 않는다(§0.5, §12).
 """
 
-__version__ = "0.4.0-r11-l4-wire-hardening"
+__version__ = "0.4.1-r11-cross-layer-hardening"
