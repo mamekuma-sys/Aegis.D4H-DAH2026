@@ -14,7 +14,7 @@
 2. `scripts/check-layout.ps1`
 3. `scripts/validate-skeleton.ps1` — 공식 스켈레톤 **필수 파일 존재**만 검사한다. 환경변수 이름, Compose 제약, `*def-lock` 앵커 내용은 이 스크립트가 검증하지 않는다.
 4. 병합된 Compose 설정과 실제 이미지 빌드 — `team1-defender.build.context`가 저장소 `agents/defender`인지 확인한 뒤 이미지를 빌드한다.
-5. 공식 스켈레톤 라이브 스모크 — 공격·방어를 동시에 기동하고, 시작 로그가 `policy_source=active`, `bundle_id=defender-2026-08-21-p2r3-stream-hardening`, `drop_capable_rules=12`, `demotions=[]`인지 확인한다. PACKET→VERDICT·HEARTBEAT·재연결을 확인한다.
+5. 공식 스켈레톤 라이브 스모크 — 공격·방어를 동시에 기동하고, 시작 로그가 `policy_source=active`, `bundle_id=defender-2026-08-21-p2r4-satdiag-portal`, `drop_capable_rules=14`, `demotions=[]`인지 확인한다. PACKET→VERDICT·HEARTBEAT·재연결을 확인한다.
 
 ## 2. 계약 구분
 
@@ -66,8 +66,8 @@ if ($LASTEXITCODE -ne 0) { throw 'skeleton live smoke up failed' }
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -ReapplyAgents
 if ($LASTEXITCODE -ne 0) { throw 'reapply team agent images failed' }
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -LogsDefender
-# 시작 로그에서 policy_source=active, bundle_id=defender-2026-08-21-p2r3-stream-hardening,
-# drop_capable_rules=12, demotions=[] 를 확인한다.
+# 시작 로그에서 policy_source=active, bundle_id=defender-2026-08-21-p2r4-satdiag-portal,
+# drop_capable_rules=14, demotions=[] 를 확인한다.
 # 정리: named volume은 유지한다. down -v 를 쓰지 않는다.
 pwsh -File integration/run-with-skeleton.ps1 -SkeletonPath "<스켈레톤-루트>" -Down
 if ($LASTEXITCODE -ne 0) { throw 'skeleton down failed' }
@@ -93,7 +93,7 @@ if ($LASTEXITCODE -ne 0) { throw 'docker push failed' }
 - **정책 경로**: 이미지 안 `/policy/active.json`. `/app/policy`가 아니다.
 - **비밀·주소·경로 미포함(제7·16조)**: 키·토큰·개인 절대경로를 이미지·저장소에 남기지 않는다.
 - **Compose 경로**: 상대경로는 첫 번째 `-f` 파일 기준이다. `AEGIS_DEFENDER_CONTEXT`를 사용한다.
-- **시작 로그**: `policy_source=active`, `bundle_id=defender-2026-08-21-p2r3-stream-hardening`, `drop_capable_rules=12`, `demotions=[]`가 정상이다. HTTP 정밀 규칙 9개에 SatDiag(`9000`) Tail/Export 2개와 P2-R3 GraphQL(`8082`) `missionAudit` 차단 1개를 더한 12개가 ACTIVE이고, 나머지 휴리스틱은 SHADOW다. 플래그 유출이 연결되지 않은 `systemConfig` 조회는 이 ACTIVE 규칙에 포함하지 않는다.
+- **시작 로그**: `policy_source=active`, `bundle_id=defender-2026-08-21-p2r4-satdiag-portal`, `drop_capable_rules=14`, `demotions=[]`가 정상이다. HTTP 정밀 규칙 9개에 SatDiag(`9000`) Tail/Export 2개와 P2-R3 GraphQL(`8082`) `missionAudit` 차단 1개를 더한 12개가 ACTIVE이고, 나머지 휴리스틱은 SHADOW다. 플래그 유출이 연결되지 않은 `systemConfig` 조회는 이 ACTIVE 규칙에 포함하지 않는다.
 - **운영 페이지 시작 재생성**: backend `POST /control/start`는 combatant를 스켈레톤 이미지로 force-recreate한다. 로컬 스모크에서 라운드를 연 뒤에는 `-ReapplyAgents`로 team1-attacker·team1-defender를 팀 이미지로 되돌리고, 실행 중 이미지가 override 값인지 확인한다. 이 단계 없이 로그를 보면 스켈레톤 레퍼런스 에이전트를 검증하게 된다. 본선은 Registry `latest`를 쓰므로 이 절차가 필요 없다.
 
 ## 5. 설계상 의도된 범위

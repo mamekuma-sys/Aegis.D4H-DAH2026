@@ -26,12 +26,14 @@ _L2_REGISTRY_RULE_ID = "http-l2-loopback-registry-canonical-001"
 _L1_SATDIAG_TAIL_RULE_ID = "sig-l1-satdiag-tail-flag-001"
 _L1_SATDIAG_EXPORT_RULE_ID = "sig-l1-satdiag-export-flag-echo-001"
 _L2_GRAPHQL_RULE_ID = "sig-l2-graphql-mission-audit-001"
+_L1_SVC_FLAG_RULE_ID = "sig-l1-svc-flag-gateway-001"
+_L1_PORTAL_FEEDBACK_RULE_ID = "sig-l1-portal-feedback-001"
 _ACTIVE_RULES = {
     _L1_RULE_ID, _L2_ADMIN_RULE_ID, _L2_SSRF_RULE_ID, _L3_RULE_ID,
     _L1_CANONICAL_RULE_ID, _L2_CANONICAL_RULE_ID, _L3_CANONICAL_RULE_ID,
     _L1_CONFIG_RULE_ID, _L2_REGISTRY_RULE_ID,
     _L1_SATDIAG_TAIL_RULE_ID, _L1_SATDIAG_EXPORT_RULE_ID,
-    _L2_GRAPHQL_RULE_ID,
+    _L2_GRAPHQL_RULE_ID, _L1_SVC_FLAG_RULE_ID, _L1_PORTAL_FEEDBACK_RULE_ID,
 }
 
 _POSITIVE_PATHS = (
@@ -319,7 +321,33 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
                 self.assertEqual(decision.rule_id, _L2_GRAPHQL_RULE_ID)
                 self.assertEqual(decision.reason_code, "sig-l2-graphql-mission-audit")
 
+    def test_finals_p2r4_8080_svc_flag_and_portal_feedback_drop(self):
+        cases = (
+            (b"GET /svc/flag-8ceb780e-e860-4078-8a1c-f5348976062f/ HTTP/1.1\r\nHost: x\r\n\r\n",
+             _L1_SVC_FLAG_RULE_ID, "sig-l1-svc-flag-gateway"),
+            (b"GET /portal/feedback?service_id=vulncheck HTTP/1.1\r\nHost: x\r\n\r\n",
+             _L1_PORTAL_FEEDBACK_RULE_ID, "sig-l1-portal-feedback"),
+        )
+        for index, (payload, rule_id, reason) in enumerate(cases, start=1):
+            with self.subTest(rule_id=rule_id):
+                parsed = parse_ip(ipv4_tcp(payload, dst_port=8080))
+                decision = self.policy.decide(870 + index, parsed, 0.0)
+                self.assertEqual(decision.verdict, VERDICT_DROP)
+                self.assertEqual(decision.rule_id, rule_id)
+                self.assertEqual(decision.reason_code, reason)
+
+    def test_finals_p2r4_export_printf_flag_drops(self):
+        payload = (
+            b":path*/satdiag.v1.SatDiag/ExportDiagnosticBundle\x00"
+            b"telemetry.log;printf 'M%sM' \"$FLAG\"\x12\x07capture"
+        )
+        parsed = parse_ip(ipv4_tcp(payload, dst_port=9000))
+        decision = self.policy.decide(880, parsed, 0.0)
+        self.assertEqual(decision.verdict, VERDICT_DROP)
+        self.assertEqual(decision.rule_id, _L1_SATDIAG_EXPORT_RULE_ID)
+
     def test_finals_p2_8082_benign_graphql_accepts(self):
+
         bodies = (
             b'{"query":"{ __typename }"}',
             b'{"query":"{ systemConfig { mqtt broker password } }"}',
@@ -354,9 +382,9 @@ class TestShippedL1SsrfPolicy(unittest.TestCase):
         self.assertEqual(self.report.source, "active")
         self.assertEqual(
             self.report.bundle_id,
-            "defender-2026-08-21-p2r3-stream-hardening",
+            "defender-2026-08-21-p2r4-satdiag-portal",
         )
-        self.assertEqual(self.report.drop_capable_rules, 12)
+        self.assertEqual(self.report.drop_capable_rules, 14)
         self.assertEqual(self.report.demotions, ())
         self.assertEqual(
             self.compiled.baseline_profiles,

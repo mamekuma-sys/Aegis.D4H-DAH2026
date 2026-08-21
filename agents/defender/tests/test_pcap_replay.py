@@ -93,7 +93,7 @@ class TestPcapReplay(unittest.TestCase):
             ).to_dict()
 
         total = report["total"]
-        self.assertEqual(report["policy"]["drop_capable_rules"], 12)
+        self.assertEqual(report["policy"]["drop_capable_rules"], 14)
         self.assertEqual(total["parsed_requests"], 2)
         self.assertEqual(total["exploit_shape_requests"], 1)
         self.assertEqual(total["blocked_exploit_shape_requests"], 1)
