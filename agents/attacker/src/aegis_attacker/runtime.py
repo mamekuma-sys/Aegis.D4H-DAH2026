@@ -667,7 +667,12 @@ class AttackerRuntime:
             self.audit.log("protocol-observed", target=endpoint.key(), scheme="https")
 
         current_evidence = obs.evidence_ref
-        banner_fp = service_fingerprint(obs.status, resp.body or "", resp.headers)
+        # 포트까지 키에 넣는다. 동일 배너라도 L4처럼 포트별 route가 다르면
+        # playbook 재사용이 다른 서비스 경로를 섞지 않게 한다(CI flake 방지).
+        banner_fp = (
+            f"{endpoint.port}:"
+            f"{service_fingerprint(obs.status, resp.body or '', resp.headers)}"
+        )
         banner = (resp.body or "").strip()
         captured_any = self._process_flags(resp.body, resp.headers)
         if captured_any:
