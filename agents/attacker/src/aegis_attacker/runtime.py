@@ -73,6 +73,9 @@ EVIDENCE_TTL = 90.0
 ROUND_DURATION = 20 * 60.0  # Round 20분 → 제출 재시도 경계
 MAX_DISCOVERY_TEXT = 4096
 MAX_DISCOVERY_BODY = 512
+# P4 R11에서 8410/8420은 bootstrap HTTP·HTTPS·passive banner가 모두 무응답이어도
+# 별도 L4 트래픽이 관측됐다. 이 두 port만 기존 observed_attempts까지 진행한다.
+FORCED_PREBANNER_PROBE_PORTS = frozenset({8410, 8420})
 
 
 class AttackerRuntime:
@@ -859,6 +862,7 @@ class AttackerRuntime:
         self._remember_evidence(endpoint, obs.evidence_ref)
         if self._stop_event.is_set():
             return False
+        force_prebanner_probes = False
         if obs.no_response:
             tcp_obs, tcp_resp = self._observer.observe_passive_banner(endpoint)
             self._report.record_observation()
@@ -874,19 +878,32 @@ class AttackerRuntime:
                     path="PASSIVE_TCP_BANNER", reason="passive-tcp-banner",
                 )
                 return True
+            if endpoint.port not in FORCED_PREBANNER_PROBE_PORTS:
+                self.audit.log(
+                    "skip", target=endpoint.key(),
+                    reason="no-http-https-or-passive-banner",
+                )
+                return False
+
+            # adaptive 관측의 마지막 endpoint는 HTTPS다. R11의 기존 L4 GET/GraphQL
+            # 시도는 평문 HTTP이므로 scheme만 복원하고 host·port evidence는 유지한다.
+            endpoint = endpoint.with_scheme("http")
+            current_evidence = tcp_obs.evidence_ref
+            force_prebanner_probes = True
             self.audit.log(
-                "skip", target=endpoint.key(),
+                "l4-prebanner-probes-forced",
+                target=endpoint.key(),
+                scheme="http",
                 reason="no-http-https-or-passive-banner",
             )
-            return False
+        else:
+            with self._state_lock:
+                self._responsive_endpoints.add(endpoint.endpoint_id)
 
-        with self._state_lock:
-            self._responsive_endpoints.add(endpoint.endpoint_id)
+            if endpoint.scheme == "https":
+                self.audit.log("protocol-observed", target=endpoint.key(), scheme="https")
 
-        if endpoint.scheme == "https":
-            self.audit.log("protocol-observed", target=endpoint.key(), scheme="https")
-
-        current_evidence = obs.evidence_ref
+            current_evidence = obs.evidence_ref
         # 포트까지 키에 넣는다. 동일 배너라도 L4처럼 포트별 route가 다르면
         # playbook 재사용이 다른 서비스 경로를 섞지 않게 한다(CI flake 방지).
         banner_fp = (
@@ -908,6 +925,11 @@ class AttackerRuntime:
         # TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 일반 정찰보다 먼저 실행한다.
         confirmed = observed_attempts(endpoint.port)
         observed_only = not bool(confirmed)
+        if force_prebanner_probes and not confirmed:
+            self.audit.log(
+                "skip", target=endpoint.key(), reason="l4-prebanner-probe-set-empty",
+            )
+            return captured_any
         if confirmed:
             captured_any = self._deterministic_exploit(
                 endpoint, banner, banner_fp, resp.headers, current_evidence,

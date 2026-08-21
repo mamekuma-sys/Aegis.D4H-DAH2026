@@ -42,3 +42,17 @@ artifact에 남기지 않는다.
 
 회귀 시 이 delta commit을 revert하고 현재 HTTP-only A1 digest로 rollback한다. 이 변경은 공격 runtime과
 shared egress 설계에 영향을 주므로 공격자 owner와 팀장 이경준 검토가 필요하다.
+
+## 2026-08-21 R11 무배너 L4 probe 승인 delta
+
+R11 관측에서 `8410`·`8420`은 HTTP·HTTPS root 및 passive TCP banner에 응답하지 않았지만 두 port의
+L4 트래픽은 존재했다. 따라서 이 두 port에 한해서만 기존 `no-http-https-or-passive-banner` 조기 종료를
+해제한다.
+
+- 관측: 기존 HTTP → HTTPS → passive TCP 순서와 evidence binding을 그대로 유지한다.
+- 계획: 세 관측이 모두 무응답이면 이미 정의된 `observed_attempts(8410|8420)` 목록을 선택한다.
+- 실행: 해당 목록은 평문 HTTP로 복원해 기존 `ATTACK_TARGET` allowlist, Round·endpoint·TTL evidence
+  binding 및 rate limit을 통과시킨다. 이 예외는 다른 port에 적용하지 않는다.
+
+이 delta는 신규 경로나 신규 protocol payload를 추가하지 않고, 이미 있던 L4 시도가 조기 gate 뒤에서
+실제로 실행되게 하는 데만 한정한다.
