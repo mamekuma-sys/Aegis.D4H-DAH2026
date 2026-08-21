@@ -661,7 +661,9 @@ class TestRuntimeResilience(unittest.TestCase):
         try:
             rt.run_cycle()
             first_requests = rt._report.summary()["requests_made"]
-            self.assertEqual(first_requests, 3)  # HTTP, HTTPS, passive TCP
+            # 최후의 공격: 배너가 없어도 스킵하지 않고 범용 prebanner 프로브를 돌린다.
+            # HTTP/HTTPS/passive bootstrap(3) + generic 프로브(14) + recon/deterministic.
+            self.assertGreaterEqual(first_requests, 3)
 
             rt.run_cycle()
             self.assertEqual(rt._report.summary()["requests_made"], first_requests)
@@ -1481,13 +1483,57 @@ class TestUgvObservedDiscovery(unittest.TestCase):
                 self.assertIn(("http", "GET", "/flag"), forced_calls)
                 events = [json.loads(line) for line in audit_lines]
                 self.assertTrue(any(
-                    item["event"] == "l4-prebanner-probes-forced" for item in events
+                    item["event"] == "prebanner-probes-forced" for item in events
                 ))
                 self.assertFalse(any(
                     item["event"] == "skip"
                     and item.get("reason") == "no-http-https-or-passive-banner"
                     for item in events
                 ))
+
+    def test_r12_l4_silent_bootstrap_hits_api_flag_and_diag_traversal(self):
+        # P4-R12: 배너가 없어도 /api/flag·/diag component traversal 로 flag를 잡는다.
+        class SilentL4R12Arena:
+            def __init__(self):
+                self.submits = []
+                self.calls = []
+
+            def request(self, method, url, headers=None, body=None, timeout=6.0):
+                if url.endswith("/submit"):
+                    self.submits.append(json.loads(body))
+                    return HttpResponse(200, json.dumps({"status": "accepted"}))
+                if "/v1/chat/completions" in url:
+                    return HttpResponse(500, "unused")
+                parts = urlsplit(url)
+                self.calls.append((parts.scheme, method, parts.path, body))
+                if parts.scheme == "https":
+                    return HttpResponse(0, "", {})
+                if parts.path == "/":
+                    return HttpResponse(0, "", {})  # silent bootstrap
+                if parts.path == "/api/flag":
+                    return HttpResponse(200, "FLAG{r12_api_flag}", {})
+                if parts.path == "/diag" and body and "../../../../flag" in body:
+                    return HttpResponse(200, "FLAG{r12_diag_component}", {})
+                return HttpResponse(404, "not found", {})
+
+            def read_passive_banner(self, host, port, timeout, max_bytes):
+                return HttpResponse(0, "", {})
+
+        arena = SilentL4R12Arena()
+        cfg = AttackerConfig(
+            targets=("t2.lig.internal",), ports=(8410,),
+            submit_url="http://backend:4100/submit", submit_token="tok-team1",
+            llm_api_key="", concurrency=1,
+        )
+        clk = FakeClock()
+        report = AttackerRuntime(
+            cfg, http=arena, clock=clk, sleep=lambda dt: clk.advance(dt)
+        ).run_once()
+
+        self.assertEqual(report.accepted_count(), 2)
+        flags = {s["flag"] for s in arena.submits}
+        self.assertIn("FLAG{r12_api_flag}", flags)
+        self.assertIn("FLAG{r12_diag_component}", flags)
 
 
 class TestRuntimeInert(unittest.TestCase):

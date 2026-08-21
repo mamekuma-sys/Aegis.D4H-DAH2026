@@ -73,8 +73,10 @@ EVIDENCE_TTL = 90.0
 ROUND_DURATION = 20 * 60.0  # Round 20분 → 제출 재시도 경계
 MAX_DISCOVERY_TEXT = 4096
 MAX_DISCOVERY_BODY = 512
-# P4 R11에서 8410/8420은 bootstrap HTTP·HTTPS·passive banner가 모두 무응답이어도
-# 별도 L4 트래픽이 관측됐다. 이 두 port만 기존 observed_attempts까지 진행한다.
+# 최후의 공격 — "무조건 찾는다". 배너가 없어도(HTTP/HTTPS/passive 전부 무응답)
+# 어떤 포트든 결정론 프로브를 돌린다. P4-R12에서 team6/team12처럼 배너를 숨긴
+# hardened 타깃이 8080/8082/9090/9000까지 skip되는 것을 막는다. observed_attempts가
+# 있는 포트는 그대로 두고, 없는 포트도 범용 프로브로 route를 강제 노출시킨다.
 FORCED_PREBANNER_PROBE_PORTS = frozenset({8410, 8420})
 
 
@@ -878,20 +880,14 @@ class AttackerRuntime:
                     path="PASSIVE_TCP_BANNER", reason="passive-tcp-banner",
                 )
                 return True
-            if endpoint.port not in FORCED_PREBANNER_PROBE_PORTS:
-                self.audit.log(
-                    "skip", target=endpoint.key(),
-                    reason="no-http-https-or-passive-banner",
-                )
-                return False
-
-            # adaptive 관측의 마지막 endpoint는 HTTPS다. R11의 기존 L4 GET/GraphQL
-            # 시도는 평문 HTTP이므로 scheme만 복원하고 host·port evidence는 유지한다.
+            # 최후의 공격 — 배너가 없어도 어떤 포트든 스킵하지 않고 결정론 프로브를 돌린다.
+            # adaptive 관측의 마지막 endpoint는 HTTPS다. 기존 GET/GraphQL 시도는 평문
+            # HTTP이므로 scheme만 복원하고 host·port evidence는 유지한다.
             endpoint = endpoint.with_scheme("http")
             current_evidence = tcp_obs.evidence_ref
             force_prebanner_probes = True
             self.audit.log(
-                "l4-prebanner-probes-forced",
+                "prebanner-probes-forced",
                 target=endpoint.key(),
                 scheme="http",
                 reason="no-http-https-or-passive-banner",
@@ -922,14 +918,20 @@ class AttackerRuntime:
 
         attempted_keys = set()
 
-        # TEAM1 PCAP에서 성공이 확인된 L1~L3 형태를 일반 정찰보다 먼저 실행한다.
+        # TEAM1 PCAP에서 성공이 확인된 L1~L4 형태를 일반 정찰보다 먼저 실행한다.
         confirmed = observed_attempts(endpoint.port)
         observed_only = not bool(confirmed)
         if force_prebanner_probes and not confirmed:
-            self.audit.log(
-                "skip", target=endpoint.key(), reason="l4-prebanner-probe-set-empty",
-            )
-            return captured_any
+            # 배너가 없고 이 포트의 observed 형태도 없으면, 범용 읽기 전용 프로브로
+            # route를 강제 노출시킨 뒤 이어서 결정론 공격한다(스킵하지 않는다).
+            confirmed = [
+                Attempt(VulnClass.OTHER, "GET", path, reason="prebanner:generic")
+                for path in (
+                    "/", "/flag", "/api/flag", "/admin", "/admin/flag",
+                    "/status", "/api/status", "/config", "/api/config",
+                    "/debug", "/secret", "/health", "/metrics", "/swagger.json",
+                )
+            ]
         if confirmed:
             captured_any = self._deterministic_exploit(
                 endpoint, banner, banner_fp, resp.headers, current_evidence,
